@@ -62,18 +62,32 @@ class RuntimeEngine:
         self._mode = mode
         self._worker_count = worker_count
         self._environment = self._build_environment()
+        self._is_started = False
 
     async def start(self) -> None:
         """Start runtime environment execution."""
         await self._environment.start()
+        self._is_started = True
 
     async def stop(self) -> None:
         """Stop runtime environment execution immediately."""
         await self._environment.stop()
+        self._is_started = False
 
     async def stop_when_idle(self) -> None:
         """Drain pending work and stop runtime execution."""
         await self._environment.stop_when_idle()
+        self._is_started = False
+
+    @property
+    def is_running(self) -> bool:
+        """Return True when runtime was started and not stopped yet."""
+        return self._is_started
+
+    @property
+    def mode(self) -> RuntimeMode:
+        """Return runtime execution topology mode."""
+        return self._mode
 
     def register_factory(
         self,

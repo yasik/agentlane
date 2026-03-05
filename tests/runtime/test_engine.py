@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from agentlane.agents import on_message
 from agentlane.messaging import (
     AgentId,
@@ -10,7 +12,12 @@ from agentlane.messaging import (
     SubscriptionKind,
     TopicId,
 )
-from agentlane.runtime import RuntimeEngine
+from agentlane.runtime import (
+    RuntimeEngine,
+    RuntimeMode,
+    distributed_runtime,
+    single_threaded_runtime,
+)
 
 
 class CounterAgent:
@@ -266,5 +273,129 @@ def test_different_agent_ids_can_process_concurrently() -> None:
         assert two_outcome.status == DeliveryStatus.DELIVERED
         assert one_outcome.response_payload == "one"
         assert two_outcome.response_payload == "two"
+
+    asyncio.run(scenario())
+
+
+def test_single_threaded_runtime_context_starts_and_drains_on_exit() -> None:
+    async def scenario() -> None:
+        runtime = RuntimeEngine()
+        runtime.register_factory("counter", CounterAgent)
+
+        assert runtime.is_running is False
+        async with single_threaded_runtime(runtime) as context:
+            assert context is runtime
+            assert runtime.is_running is True
+            first = await runtime.send_message("one", recipient="counter", key="k")
+            second = await runtime.send_message("two", recipient="counter", key="k")
+            assert first.status == DeliveryStatus.DELIVERED
+            assert second.status == DeliveryStatus.DELIVERED
+            assert second.response_payload == {"count": 2}
+
+        assert runtime.is_running is False
+
+    asyncio.run(scenario())
+
+
+def test_single_threaded_runtime_context_preserves_prestarted_runtime() -> None:
+    async def scenario() -> None:
+        runtime = RuntimeEngine()
+        await runtime.start()
+
+        assert runtime.is_running is True
+        async with single_threaded_runtime(runtime):
+            assert runtime.is_running is True
+
+        # Context manager must not teardown a runtime it did not start.
+        assert runtime.is_running is True
+        await runtime.stop()
+        assert runtime.is_running is False
+
+    asyncio.run(scenario())
+
+
+def test_single_threaded_runtime_context_rejects_wrong_mode() -> None:
+    async def scenario() -> None:
+        runtime = RuntimeEngine(mode=RuntimeMode.DISTRIBUTED)
+        with pytest.raises(ValueError):
+            async with single_threaded_runtime(runtime):
+                return
+
+    asyncio.run(scenario())
+
+
+def test_single_threaded_runtime_context_stops_immediately_on_exception() -> None:
+    async def scenario() -> None:
+        runtime = RuntimeEngine()
+        first_started = asyncio.Event()
+
+        class BlockingAgent:
+            @on_message
+            async def handle(self, payload: str, context: MessageContext) -> object:
+                _ = payload
+                first_started.set()
+                await context.cancellation_token.wait_cancelled()
+                await asyncio.Event().wait()
+                return None
+
+        recipient = AgentId.from_values("scope-blocking", "k")
+        runtime.register_factory("scope-blocking", BlockingAgent)
+
+        first_send: asyncio.Task[object] | None = None
+        second_send: asyncio.Task[object] | None = None
+        try:
+            async with single_threaded_runtime(runtime):
+                first_send = asyncio.create_task(
+                    runtime.send_message("first", recipient=recipient)
+                )
+                await asyncio.wait_for(first_started.wait(), timeout=1.0)
+                second_send = asyncio.create_task(
+                    runtime.send_message("second", recipient=recipient)
+                )
+                await asyncio.sleep(0.01)
+                raise RuntimeError("fail scope")
+        except RuntimeError:
+            pass
+
+        if first_send is None or second_send is None:
+            raise AssertionError("Test setup failed to create both send tasks.")
+
+        first_outcome = await first_send
+        second_outcome = await second_send
+        assert first_outcome.status == DeliveryStatus.CANCELED
+        assert second_outcome.status == DeliveryStatus.CANCELED
+        assert runtime.is_running is False
+
+    asyncio.run(scenario())
+
+
+def test_single_threaded_runtime_context_builds_default_runtime_when_none() -> None:
+    async def scenario() -> None:
+        scoped_runtime: RuntimeEngine | None = None
+        async with single_threaded_runtime() as runtime:
+            scoped_runtime = runtime
+            assert isinstance(runtime, RuntimeEngine)
+            assert runtime.mode == RuntimeMode.SINGLE_THREADED
+            assert runtime.is_running is True
+
+        if scoped_runtime is None:
+            raise AssertionError("Expected runtime to be yielded by context manager.")
+        assert scoped_runtime.is_running is False
+
+    asyncio.run(scenario())
+
+
+def test_distributed_runtime_context_builds_default_runtime_when_none() -> None:
+    async def scenario() -> None:
+        scoped_runtime: RuntimeEngine | None = None
+        async with distributed_runtime() as runtime:
+            scoped_runtime = runtime
+            assert isinstance(runtime, RuntimeEngine)
+            assert runtime.mode == RuntimeMode.DISTRIBUTED
+            assert runtime.is_running is True
+
+        if scoped_runtime is None:
+            raise AssertionError("Expected runtime to be yielded by context manager.")
+        assert scoped_runtime.is_running is False
 
     asyncio.run(scenario())
