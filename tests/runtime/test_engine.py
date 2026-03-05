@@ -218,3 +218,53 @@ def test_multiple_on_message_handlers_route_by_payload_type() -> None:
         assert int_outcome.response_payload == "int:123"
 
     asyncio.run(scenario())
+
+
+def test_different_agent_ids_can_process_concurrently() -> None:
+    async def scenario() -> None:
+        runtime = RuntimeEngine(worker_count=2)
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        release = asyncio.Event()
+
+        class ParallelAgent:
+            @on_message
+            async def handle(self, payload: str, context: MessageContext) -> object:
+                _ = context
+                if payload == "one":
+                    first_started.set()
+                if payload == "two":
+                    second_started.set()
+                await release.wait()
+                return payload
+
+        runtime.register_factory("parallel", ParallelAgent)
+
+        one_task = asyncio.create_task(
+            runtime.send_message(
+                "one",
+                recipient=AgentId.from_values("parallel", "one"),
+            )
+        )
+        two_task = asyncio.create_task(
+            runtime.send_message(
+                "two",
+                recipient=AgentId.from_values("parallel", "two"),
+            )
+        )
+
+        await asyncio.wait_for(
+            asyncio.gather(first_started.wait(), second_started.wait()),
+            timeout=1.0,
+        )
+        release.set()
+
+        one_outcome, two_outcome = await asyncio.gather(one_task, two_task)
+        await runtime.stop_when_idle()
+
+        assert one_outcome.status == DeliveryStatus.DELIVERED
+        assert two_outcome.status == DeliveryStatus.DELIVERED
+        assert one_outcome.response_payload == "one"
+        assert two_outcome.response_payload == "two"
+
+    asyncio.run(scenario())

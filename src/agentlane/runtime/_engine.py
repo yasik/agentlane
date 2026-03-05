@@ -49,13 +49,18 @@ class RuntimeEngine:
         routing: RoutingEngine | None = None,
         registry: AgentRegistry | None = None,
         scheduler: PerAgentMailboxScheduler | None = None,
+        worker_count: int = 10,
     ) -> None:
         """Create a runtime engine with default in-process components."""
+        if worker_count <= 0:
+            raise ValueError("worker_count must be greater than zero.")
+
         self._routing = routing or RoutingEngine()
         self._registry = registry or AgentRegistry()
         self._scheduler = scheduler or PerAgentMailboxScheduler()
         self._dispatcher = Dispatcher(registry=self._registry)
         self._mode = mode
+        self._worker_count = worker_count
         self._environment = self._build_environment()
 
     async def start(self) -> None:
@@ -193,6 +198,7 @@ class RuntimeEngine:
             return SingleThreadedEnvironment(
                 scheduler=self._scheduler,
                 dispatcher=self._dispatcher,
+                worker_count=self._worker_count,
             )
         if self._mode == RuntimeMode.DISTRIBUTED:
             return DistributedEnvironment()
