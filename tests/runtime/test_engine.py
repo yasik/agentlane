@@ -50,9 +50,7 @@ class MultiHandlerAgent:
         return f"pong:{payload.value}"
 
     @on_message
-    async def handle_int(
-        self, payload: int, context: MessageContext
-    ) -> object:
+    async def handle_int(self, payload: int, context: MessageContext) -> object:
         _ = context
         return f"int:{payload}"
 
@@ -170,9 +168,7 @@ def test_stop_cancels_inflight_and_queued_deliveries() -> None:
 
         class BlockingAgent:
             @on_message
-            async def handle(
-                self, payload: str, context: MessageContext
-            ) -> object:
+            async def handle(self, payload: str, context: MessageContext) -> object:
                 _ = payload
                 first_started.set()
                 await context.cancellation_token.wait_cancelled()
@@ -182,7 +178,9 @@ def test_stop_cancels_inflight_and_queued_deliveries() -> None:
         recipient = AgentId.from_values("blocking", "k")
         runtime.register_factory("blocking", BlockingAgent)
 
-        first_send = asyncio.create_task(runtime.send_message("first", recipient=recipient))
+        first_send = asyncio.create_task(
+            runtime.send_message("first", recipient=recipient)
+        )
         await asyncio.wait_for(first_started.wait(), timeout=1.0)
         second_send = asyncio.create_task(
             runtime.send_message("second", recipient=recipient)

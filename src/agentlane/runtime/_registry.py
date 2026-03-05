@@ -1,13 +1,16 @@
 """Agent factory and instance registry."""
 
 import inspect
+from asyncio import Future, get_running_loop
 from collections.abc import Awaitable, Callable
+from threading import RLock
 
 from agentlane.agents import Agent
 from agentlane.messaging import AgentId, AgentKey, AgentType
 
 AgentInstance = Agent
 AgentFactory = Callable[[], AgentInstance | Awaitable[AgentInstance]]
+"""An agent factory is a zero-arg callable that returns or awaits an agent instance."""
 
 
 class AgentRegistry:
@@ -15,39 +18,77 @@ class AgentRegistry:
 
     def __init__(self) -> None:
         """Initialize empty registry state."""
+        self._lock = RLock()
         self._factories: dict[AgentType, AgentFactory] = {}
         self._instances: dict[AgentId, AgentInstance] = {}
+        self._creation_futures: dict[AgentId, Future[AgentInstance]] = {}
 
     def register_factory(self, agent_type: AgentType, factory: AgentFactory) -> None:
         """Register a factory for a logical agent type."""
-        self._factories[agent_type] = factory
+        with self._lock:
+            self._factories[agent_type] = factory
 
     def register_instance(self, agent_id: AgentId, instance: AgentInstance) -> None:
         """Register a concrete instance for an agent id."""
-        self._instances[agent_id] = instance
+        with self._lock:
+            self._instances[agent_id] = instance
 
     def has_instance(self, agent_id: AgentId) -> bool:
         """Return whether an instance is active for the id."""
-        return agent_id in self._instances
+        with self._lock:
+            return agent_id in self._instances
 
     async def get_or_create(self, agent_id: AgentId) -> AgentInstance:
         """Return an existing instance or lazily create one from factory."""
-        if agent_id in self._instances:
-            return self._instances[agent_id]
+        with self._lock:
+            existing_instance = self._instances.get(agent_id)
+            if existing_instance is not None:
+                return existing_instance
 
-        if agent_id.type not in self._factories:
-            raise LookupError(
-                f"No factory registered for agent type '{agent_id.type.value}'."
-            )
+            factory = self._factories.get(agent_id.type)
+            if factory is None:
+                raise LookupError(
+                    f"No factory registered for agent type '{agent_id.type.value}'."
+                )
 
-        instance_or_awaitable = self._factories[agent_id.type]()
-        if inspect.isawaitable(instance_or_awaitable):
-            instance = await instance_or_awaitable
-        else:
-            instance = instance_or_awaitable
+            # If another caller is already creating this agent, we join that
+            # in-flight creation instead of running the factory twice.
+            creation_future = self._creation_futures.get(agent_id)
+            if creation_future is None:
+                creation_future = get_running_loop().create_future()
+                self._creation_futures[agent_id] = creation_future
+                # This caller owns creation and must complete the shared future.
+                should_create = True
+            else:
+                # Another caller owns creation; wait for its outcome.
+                should_create = False
 
-        self._instances[agent_id] = instance
-        return instance
+        if not should_create:
+            return await creation_future
+
+        try:
+            # Run factory outside lock to avoid blocking unrelated registry operations.
+            instance_or_awaitable = factory()
+            if inspect.isawaitable(instance_or_awaitable):
+                created_instance = await instance_or_awaitable
+            else:
+                created_instance = instance_or_awaitable
+        except Exception as exc:
+            with self._lock:
+                # Publish the same exception to all waiters and clear in-flight state.
+                pending_future = self._creation_futures.pop(agent_id, None)
+                if pending_future is not None and not pending_future.done():
+                    pending_future.set_exception(exc)
+            raise
+
+        with self._lock:
+            self._instances[agent_id] = created_instance
+            # Wake up all joiners with the single created instance.
+            pending_future = self._creation_futures.pop(agent_id, None)
+            if pending_future is not None and not pending_future.done():
+                pending_future.set_result(created_instance)
+
+        return created_instance
 
     def resolve_agent_id(
         self, agent_type: AgentType, key: AgentKey | None = None
@@ -56,9 +97,10 @@ class AgentRegistry:
         if key is not None:
             return AgentId(type=agent_type, key=key)
 
-        candidates = [
-            agent_id for agent_id in self._instances if agent_id.type == agent_type
-        ]
+        with self._lock:
+            candidates = [
+                agent_id for agent_id in self._instances if agent_id.type == agent_type
+            ]
         if len(candidates) == 1:
             return candidates[0]
         if len(candidates) == 0:

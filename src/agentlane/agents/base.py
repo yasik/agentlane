@@ -10,7 +10,10 @@ _ON_MESSAGE_ATTR = "__agentlane_on_message__"
 type MessageHandler = Callable[[object, MessageContext], Awaitable[object]]
 """Resolved runtime handler signature after binding `self`."""
 
-def on_message[HandlerT: Callable[..., Awaitable[object]]](handler: HandlerT) -> HandlerT:
+
+def on_message[HandlerT: Callable[..., Awaitable[object]]](
+    handler: HandlerT,
+) -> HandlerT:
     """Mark a method as the runtime message handler entrypoint."""
     setattr(handler, _ON_MESSAGE_ATTR, True)
     return handler

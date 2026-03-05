@@ -168,6 +168,7 @@ def _select_single_matching_handler(
 
     return matching_handlers[0]
 
+
 def _validate_on_message_handler(
     agent: Agent,
     handler: Callable[..., Awaitable[object]],
@@ -199,6 +200,7 @@ def _validate_on_message_handler(
     return cast(Callable[[object, MessageContext], Awaitable[object]], handler), cast(
         type[object], payload_parameter.annotation
     )
+
 
 def _payload_type_matches_exact(payload: object, payload_type: object) -> bool:
     """Return whether handler payload annotation exactly matches runtime payload type."""
