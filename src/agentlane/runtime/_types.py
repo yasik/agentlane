@@ -1,17 +1,9 @@
 """Runtime-internal data models."""
 
-import enum
 from asyncio import Future
 from dataclasses import dataclass, field
 
 from agentlane.messaging import AgentId, CancellationToken, MessageEnvelope
-
-
-class RuntimeMode(enum.StrEnum):
-    """Execution topology selector used by the runtime facade."""
-
-    SINGLE_THREADED = "single_threaded"
-    DISTRIBUTED = "distributed"
 
 
 @dataclass(slots=True)

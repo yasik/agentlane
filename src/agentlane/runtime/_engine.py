@@ -1,5 +1,6 @@
-"""Runtime engine implementing v1 messaging/runtime contracts."""
+"""Runtime engine implementations for different execution environments."""
 
+import abc
 import asyncio
 from time import time
 from typing import cast
@@ -23,15 +24,15 @@ from agentlane.messaging import (
 )
 
 from ._dispatcher import Dispatcher
-from ._distributed_env import DistributedEnvironment
-from ._environment import RuntimeEnvironment
 from ._registry import AgentFactory, AgentRegistry
 from ._scheduler import (
     PerAgentMailboxScheduler,
     SchedulerRejectedError,
 )
-from ._single_threaded_env import SingleThreadedEnvironment
-from ._types import DeliveryTask, RuntimeMode
+from ._types import DeliveryTask
+
+_IN_FLIGHT_CANCELED = "Runtime shutdown canceled an in-flight delivery."
+_QUEUED_CANCELED = "Runtime shutdown canceled a queued delivery."
 
 
 def utc_now_ms() -> int:
@@ -39,55 +40,74 @@ def utc_now_ms() -> int:
     return int(time() * 1000)
 
 
-class RuntimeEngine:
-    """High-level API that wires routing, registry, scheduling, and execution environment."""
+class RuntimeEngine(abc.ABC):
+    """Base runtime engine that owns shared routing/registry/message orchestration."""
 
     def __init__(
         self,
         *,
-        mode: RuntimeMode = RuntimeMode.SINGLE_THREADED,
         routing: RoutingEngine | None = None,
         registry: AgentRegistry | None = None,
         scheduler: PerAgentMailboxScheduler | None = None,
-        worker_count: int = 10,
     ) -> None:
-        """Create a runtime engine with default in-process components."""
-        if worker_count <= 0:
-            raise ValueError("worker_count must be greater than zero.")
-
+        """Create runtime components shared across runtime implementations."""
         self._routing = routing or RoutingEngine()
         self._registry = registry or AgentRegistry()
         self._scheduler = scheduler or PerAgentMailboxScheduler()
         self._dispatcher = Dispatcher(registry=self._registry)
-        self._mode = mode
-        self._worker_count = worker_count
-        self._environment = self._build_environment()
         self._is_started = False
 
     async def start(self) -> None:
-        """Start runtime environment execution."""
-        await self._environment.start()
+        """Start runtime execution if not already running."""
+        if self._is_started:
+            return
+
+        # Mark started before creating worker tasks so they observe running state.
         self._is_started = True
+        try:
+            await self._start_runtime()
+        except BaseException:
+            self._is_started = False
+            raise
 
     async def stop(self) -> None:
-        """Stop runtime environment execution immediately."""
-        await self._environment.stop()
-        self._is_started = False
+        """Stop runtime immediately if it is running."""
+        if not self._is_started:
+            return
+        try:
+            await self._stop_runtime()
+        finally:
+            self._is_started = False
 
     async def stop_when_idle(self) -> None:
-        """Drain pending work and stop runtime execution."""
-        await self._environment.stop_when_idle()
-        self._is_started = False
+        """Drain pending work and stop runtime if it is running."""
+        if not self._is_started:
+            return
+        try:
+            await self._stop_when_idle_runtime()
+        finally:
+            self._is_started = False
 
     @property
     def is_running(self) -> bool:
         """Return True when runtime was started and not stopped yet."""
         return self._is_started
 
-    @property
-    def mode(self) -> RuntimeMode:
-        """Return runtime execution topology mode."""
-        return self._mode
+    @abc.abstractmethod
+    async def _start_runtime(self) -> None:
+        """Start runtime-specific execution resources."""
+
+    @abc.abstractmethod
+    async def _stop_runtime(self) -> None:
+        """Stop runtime-specific execution resources immediately."""
+
+    @abc.abstractmethod
+    async def _stop_when_idle_runtime(self) -> None:
+        """Drain pending work and then stop runtime-specific resources."""
+
+    @abc.abstractmethod
+    async def _submit(self, task: DeliveryTask) -> None:
+        """Submit one resolved delivery task to runtime-specific execution path."""
 
     def register_factory(
         self,
@@ -151,7 +171,7 @@ class RuntimeEngine:
             response_future=future,
         )
         try:
-            await self._environment.submit(task)
+            await self._submit(task)
         except SchedulerRejectedError as exc:
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.POLICY_REJECTED,
@@ -197,7 +217,7 @@ class RuntimeEngine:
                 recipient=recipient,
                 response_future=None,
             )
-            await self._environment.submit(task)
+            await self._submit(task)
 
         return PublishAck(
             message_id=base_envelope.message_id,
@@ -205,18 +225,6 @@ class RuntimeEngine:
             enqueued_recipient_count=len(recipients),
             enqueued_at_ms=utc_now_ms(),
         )
-
-    def _build_environment(self) -> RuntimeEnvironment:
-        """Build runtime environment for the configured mode."""
-        if self._mode == RuntimeMode.SINGLE_THREADED:
-            return SingleThreadedEnvironment(
-                scheduler=self._scheduler,
-                dispatcher=self._dispatcher,
-                worker_count=self._worker_count,
-            )
-        if self._mode == RuntimeMode.DISTRIBUTED:
-            return DistributedEnvironment()
-        raise ValueError(f"Unsupported runtime mode: {self._mode}")
 
     @staticmethod
     def _coerce_agent_type(agent_type: AgentType | str) -> AgentType:
@@ -246,4 +254,128 @@ class RuntimeEngine:
             content_type="application/python-object",
             format=PayloadFormat.JSON,
             data=message,
+        )
+
+
+class SingleThreadedRuntimeEngine(RuntimeEngine):
+    """In-process runtime with worker pool execution and mailbox-ordered dispatch."""
+
+    def __init__(
+        self,
+        *,
+        routing: RoutingEngine | None = None,
+        registry: AgentRegistry | None = None,
+        scheduler: PerAgentMailboxScheduler | None = None,
+        worker_count: int = 10,
+    ) -> None:
+        """Create a single-threaded runtime with configurable worker count."""
+        if worker_count <= 0:
+            raise ValueError("worker_count must be greater than zero.")
+
+        self._worker_count = worker_count
+        # Worker pool executes tasks concurrently across distinct recipients.
+        self._worker_pool: set[asyncio.Task[None]] = set()
+        # Tracks current dispatch per worker so shutdown can cancel in-flight tasks.
+        self._inflight_by_worker: dict[asyncio.Task[None], DeliveryTask] = {}
+
+        super().__init__(routing=routing, registry=registry, scheduler=scheduler)
+
+    async def _start_runtime(self) -> None:
+        """Start in-process worker pool."""
+        # Workers are detached; lifecycle is controlled by start/stop methods.
+        for _ in range(self._worker_count):
+            worker_task = asyncio.create_task(self._run_worker())
+            self._worker_pool.add(worker_task)
+
+    async def _stop_runtime(self) -> None:
+        """Stop immediately and cancel both in-flight and queued deliveries."""
+        # Ask currently running handlers to cooperate via context cancellation token.
+        for inflight_task in self._inflight_by_worker.values():
+            inflight_task.cancellation_token.cancel()
+
+        if self._worker_pool:
+            # Forcefully stop worker loops; in-flight tasks become CANCELED outcomes.
+            for worker_task in self._worker_pool:
+                worker_task.cancel()
+            await asyncio.gather(*self._worker_pool, return_exceptions=True)
+            self._worker_pool.clear()
+            self._inflight_by_worker.clear()
+
+        # Any task not yet dispatched is canceled eagerly during shutdown.
+        queued_tasks = await self._scheduler.drain()
+        for task in queued_tasks:
+            self._cancel_task(task=task, message=_QUEUED_CANCELED)
+
+    async def _stop_when_idle_runtime(self) -> None:
+        """Wait for scheduled work to finish, then stop immediately."""
+        await self._scheduler.wait_idle()
+        await self._stop_runtime()
+
+    async def _submit(self, task: DeliveryTask) -> None:
+        """Queue one task through scheduler for worker dispatch."""
+        await self._scheduler.enqueue(task)
+
+    async def _run_worker(self) -> None:
+        """Worker loop processing tasks one-by-one for multiple recipients."""
+        while self.is_running:
+            task = await self._scheduler.pop_next()
+            worker_task = asyncio.current_task()
+            if worker_task is not None:
+                # Mark inflight before dispatch so stop() can target active work.
+                self._inflight_by_worker[worker_task] = task
+            try:
+                outcome = await self._dispatcher.dispatch(task)
+                # RPC path: complete awaiting caller with terminal delivery outcome.
+                if task.response_future is not None and not task.response_future.done():
+                    task.response_future.set_result(outcome)
+            except asyncio.CancelledError:
+                # Worker cancellation during dispatch maps to a canceled delivery outcome.
+                self._cancel_task(task=task, message=_IN_FLIGHT_CANCELED)
+                raise
+            finally:
+                if worker_task is not None:
+                    self._inflight_by_worker.pop(worker_task, None)
+                # Every popped task must decrement pending count exactly once.
+                await self._scheduler.mark_done(task.recipient)
+
+    def _cancel_task(self, task: DeliveryTask, message: str) -> None:
+        """Request cancellation and resolve pending response future if present."""
+        # Token cancellation lets cooperative handlers terminate quickly.
+        task.cancellation_token.cancel()
+        if task.response_future is None or task.response_future.done():
+            return
+
+        # Normalize cancellation into DeliveryOutcome so callers get a terminal result.
+        task.response_future.set_result(
+            DeliveryOutcome.failed(
+                status=DeliveryStatus.CANCELED,
+                message_id=task.envelope.message_id,
+                correlation_id=task.envelope.correlation_id,
+                message=message,
+                retryable=True,
+            )
+        )
+
+
+class DistributedRuntimeEngine(RuntimeEngine):
+    """Distributed runtime placeholder that keeps lifecycle API but rejects submit."""
+
+    async def _start_runtime(self) -> None:
+        """Start distributed runtime resources."""
+        return
+
+    async def _stop_runtime(self) -> None:
+        """Stop distributed runtime resources."""
+        return
+
+    async def _stop_when_idle_runtime(self) -> None:
+        """Drain distributed runtime work."""
+        return
+
+    async def _submit(self, task: DeliveryTask) -> None:
+        """Reject task submission until distributed transport/placement exists."""
+        _ = task
+        raise NotImplementedError(
+            "DistributedRuntimeEngine is not implemented yet. "
+            "Use SingleThreadedRuntimeEngine for v1 execution."
         )

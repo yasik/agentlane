@@ -13,8 +13,9 @@ from agentlane.messaging import (
     TopicId,
 )
 from agentlane.runtime import (
+    DistributedRuntimeEngine,
     RuntimeEngine,
-    RuntimeMode,
+    SingleThreadedRuntimeEngine,
     distributed_runtime,
     single_threaded_runtime,
 )
@@ -64,7 +65,7 @@ class MultiHandlerAgent:
 
 def test_runtime_reuses_registered_instance_by_agent_id() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         agent_id = AgentId.from_values("counter", "stateful")
         agent = CounterAgent()
         runtime.register_instance(agent_id, agent)
@@ -84,7 +85,7 @@ def test_runtime_reuses_registered_instance_by_agent_id() -> None:
 
 def test_runtime_creates_isolated_instances_for_unique_keys() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         runtime.register_factory("counter", CounterAgent)
 
         one = await runtime.send_message("first", recipient="counter", key="k1")
@@ -102,7 +103,7 @@ def test_runtime_creates_isolated_instances_for_unique_keys() -> None:
 
 def test_runtime_rejects_ambiguous_keyless_target() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         runtime.register_instance(AgentId.from_values("worker", "a"), CounterAgent())
         runtime.register_instance(AgentId.from_values("worker", "b"), CounterAgent())
 
@@ -117,7 +118,7 @@ def test_runtime_rejects_ambiguous_keyless_target() -> None:
 
 def test_publish_returns_enqueue_ack_only() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         received: list[object] = []
 
         class Listener:
@@ -150,7 +151,7 @@ def test_publish_returns_enqueue_ack_only() -> None:
 
 def test_per_agent_ordering_for_stateful_handler() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         runtime.register_factory("ordered", CounterAgent)
         recipient = AgentId.from_values("ordered", "k")
 
@@ -170,7 +171,7 @@ def test_per_agent_ordering_for_stateful_handler() -> None:
 
 def test_stop_cancels_inflight_and_queued_deliveries() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         first_started = asyncio.Event()
 
         class BlockingAgent:
@@ -207,7 +208,7 @@ def test_stop_cancels_inflight_and_queued_deliveries() -> None:
 
 def test_multiple_on_message_handlers_route_by_payload_type() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         recipient = AgentId.from_values("multi-handler", "k")
         runtime.register_factory("multi-handler", MultiHandlerAgent)
 
@@ -229,7 +230,7 @@ def test_multiple_on_message_handlers_route_by_payload_type() -> None:
 
 def test_different_agent_ids_can_process_concurrently() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine(worker_count=2)
+        runtime = SingleThreadedRuntimeEngine(worker_count=2)
         first_started = asyncio.Event()
         second_started = asyncio.Event()
         release = asyncio.Event()
@@ -279,7 +280,7 @@ def test_different_agent_ids_can_process_concurrently() -> None:
 
 def test_single_threaded_runtime_context_starts_and_drains_on_exit() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         runtime.register_factory("counter", CounterAgent)
 
         assert runtime.is_running is False
@@ -299,7 +300,7 @@ def test_single_threaded_runtime_context_starts_and_drains_on_exit() -> None:
 
 def test_single_threaded_runtime_context_preserves_prestarted_runtime() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         await runtime.start()
 
         assert runtime.is_running is True
@@ -314,9 +315,9 @@ def test_single_threaded_runtime_context_preserves_prestarted_runtime() -> None:
     asyncio.run(scenario())
 
 
-def test_single_threaded_runtime_context_rejects_wrong_mode() -> None:
+def test_single_threaded_runtime_context_rejects_wrong_runtime_type() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine(mode=RuntimeMode.DISTRIBUTED)
+        runtime = DistributedRuntimeEngine()
         with pytest.raises(ValueError):
             async with single_threaded_runtime(runtime):
                 return
@@ -326,7 +327,7 @@ def test_single_threaded_runtime_context_rejects_wrong_mode() -> None:
 
 def test_single_threaded_runtime_context_stops_immediately_on_exception() -> None:
     async def scenario() -> None:
-        runtime = RuntimeEngine()
+        runtime = SingleThreadedRuntimeEngine()
         first_started = asyncio.Event()
 
         class BlockingAgent:
@@ -374,8 +375,7 @@ def test_single_threaded_runtime_context_builds_default_runtime_when_none() -> N
         scoped_runtime: RuntimeEngine | None = None
         async with single_threaded_runtime() as runtime:
             scoped_runtime = runtime
-            assert isinstance(runtime, RuntimeEngine)
-            assert runtime.mode == RuntimeMode.SINGLE_THREADED
+            assert isinstance(runtime, SingleThreadedRuntimeEngine)
             assert runtime.is_running is True
 
         if scoped_runtime is None:
@@ -390,8 +390,7 @@ def test_distributed_runtime_context_builds_default_runtime_when_none() -> None:
         scoped_runtime: RuntimeEngine | None = None
         async with distributed_runtime() as runtime:
             scoped_runtime = runtime
-            assert isinstance(runtime, RuntimeEngine)
-            assert runtime.mode == RuntimeMode.DISTRIBUTED
+            assert isinstance(runtime, DistributedRuntimeEngine)
             assert runtime.is_running is True
 
         if scoped_runtime is None:

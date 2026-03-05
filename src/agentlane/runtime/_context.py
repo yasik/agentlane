@@ -3,15 +3,19 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from ._engine import RuntimeEngine
-from ._types import RuntimeMode
+from ._engine import (
+    DistributedRuntimeEngine,
+    RuntimeEngine,
+    SingleThreadedRuntimeEngine,
+)
 
 
 @asynccontextmanager
 async def runtime_scope(
     runtime: RuntimeEngine | None = None,
     *,
-    expected_mode: RuntimeMode | None = None,
+    expected_type: type[RuntimeEngine] | None = None,
+    runtime_factory: type[RuntimeEngine] = SingleThreadedRuntimeEngine,
 ) -> AsyncIterator[RuntimeEngine]:
     """Scope runtime lifecycle to an async context block.
 
@@ -19,33 +23,31 @@ async def runtime_scope(
     On normal exit it drains pending work (`stop_when_idle`). On exceptional
     exit it cancels work immediately (`stop`).
 
-    If `expected_mode` is provided, the scope validates that the runtime
-    mode matches and raises `ValueError` otherwise.
+    If `expected_type` is provided, the scope validates that the runtime
+    implementation type matches and raises `ValueError` otherwise.
 
     If `runtime` is `None`, a new `RuntimeEngine` is created with
-    reasonable defaults. When `expected_mode` is provided, it is used as
-    the mode for the created runtime.
+    reasonable defaults via `runtime_factory`.
 
     The context manager yields the `RuntimeEngine` instance itself.
 
     Example:
         ```python
-        from agentlane.runtime import RuntimeEngine, runtime_scope, RuntimeMode
+        from agentlane.runtime import SingleThreadedRuntimeEngine, runtime_scope
 
         async with runtime_scope(
-            expected_mode=RuntimeMode.SINGLE_THREADED
+            expected_type=SingleThreadedRuntimeEngine
         ) as runtime:
-            outcome = await runtime.send_message("ping", recipient="worker", key="k")
+            assert isinstance(runtime, SingleThreadedRuntimeEngine)
         ```
     """
     if runtime is None:
-        runtime = RuntimeEngine(
-            mode=expected_mode or RuntimeMode.SINGLE_THREADED,
-        )
+        runtime = runtime_factory()
 
-    if expected_mode is not None and runtime.mode != expected_mode:
+    if expected_type is not None and not isinstance(runtime, expected_type):
         raise ValueError(
-            f"Runtime mode mismatch. Expected '{expected_mode}', got '{runtime.mode}'."
+            "Runtime type mismatch. "
+            f"Expected '{expected_type.__name__}', got '{type(runtime).__name__}'."
         )
 
     was_running = runtime.is_running
@@ -98,7 +100,8 @@ async def single_threaded_runtime(
     """
     async with runtime_scope(
         runtime,
-        expected_mode=RuntimeMode.SINGLE_THREADED,
+        expected_type=SingleThreadedRuntimeEngine,
+        runtime_factory=SingleThreadedRuntimeEngine,
     ) as scoped_runtime:
         yield scoped_runtime
 
@@ -109,22 +112,22 @@ async def distributed_runtime(
 ) -> AsyncIterator[RuntimeEngine]:
     """Scope a distributed runtime lifecycle to one async context block.
 
-    Use this for workflows that should run against a runtime configured with
-    `RuntimeMode.DISTRIBUTED`. The context manager validates the mode before
-    yielding.
+    Use this for workflows that should run against a distributed runtime
+    implementation. The context manager validates runtime type before yielding.
 
     Example:
         ```python
-        from agentlane.runtime import RuntimeMode, distributed_runtime
+        from agentlane.runtime import DistributedRuntimeEngine, distributed_runtime
 
         async with distributed_runtime() as runtime:
             # Configure distributed runtime-scoped resources here.
             # Message delivery is added when distributed submit is implemented.
-            assert runtime.mode == RuntimeMode.DISTRIBUTED
+            assert isinstance(runtime, DistributedRuntimeEngine)
         ```
     """
     async with runtime_scope(
         runtime,
-        expected_mode=RuntimeMode.DISTRIBUTED,
+        expected_type=DistributedRuntimeEngine,
+        runtime_factory=DistributedRuntimeEngine,
     ) as scoped_runtime:
         yield scoped_runtime

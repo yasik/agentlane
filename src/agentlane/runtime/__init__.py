@@ -5,20 +5,24 @@ from ._context import (
     runtime_scope,
     single_threaded_runtime,
 )
-from ._engine import RuntimeEngine
+from ._engine import (
+    DistributedRuntimeEngine,
+    RuntimeEngine,
+    SingleThreadedRuntimeEngine,
+)
 from ._registry import AgentRegistry
 from ._scheduler import (
     PerAgentMailboxScheduler,
     SchedulerRejectedError,
 )
-from ._types import RuntimeMode
 
 __all__ = [
     "AgentRegistry",
+    "DistributedRuntimeEngine",
     "distributed_runtime",
     "PerAgentMailboxScheduler",
     "RuntimeEngine",
-    "RuntimeMode",
+    "SingleThreadedRuntimeEngine",
     "runtime_scope",
     "SchedulerRejectedError",
     "single_threaded_runtime",
