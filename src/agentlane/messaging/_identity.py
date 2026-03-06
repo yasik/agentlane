@@ -114,3 +114,20 @@ class CorrelationId:
     def new(cls) -> Self:
         """Create a new correlation identifier."""
         return cls(value=str(uuid4()))
+
+
+@dataclass(frozen=True, slots=True)
+class IdempotencyKey:
+    """Deduplication key for at-least-once delivery paths."""
+
+    value: str
+    """Caller-provided key used to deduplicate retried deliveries."""
+
+    def __post_init__(self) -> None:
+        if not self.value:
+            raise ValueError("IdempotencyKey value must be non-empty.")
+
+    @classmethod
+    def new(cls) -> Self:
+        """Create a new idempotency key."""
+        return cls(value=str(uuid4()))

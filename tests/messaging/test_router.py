@@ -4,6 +4,7 @@ from agentlane.messaging import (
     AgentId,
     AgentType,
     DeliveryMode,
+    IdempotencyKey,
     MessageEnvelope,
     Payload,
     PayloadFormat,
@@ -115,3 +116,32 @@ def test_topic_helpers_build_route_key_alias() -> None:
 
     from_topics = Topics.id(type_value="jobs", route_key="tenant-1")
     assert from_topics == topic
+
+
+def test_message_envelope_uses_typed_idempotency_key() -> None:
+    key = IdempotencyKey.new()
+    rpc_envelope = MessageEnvelope.new_rpc_request(
+        sender=None,
+        recipient=AgentId.from_values("worker", "tenant-1"),
+        payload=Payload(
+            schema_name="str",
+            content_type="application/python-object",
+            format=PayloadFormat.JSON,
+            data="hello",
+        ),
+        idempotency_key=key,
+    )
+    publish_envelope = MessageEnvelope.new_publish_event(
+        sender=None,
+        topic=TopicId.from_values(type_value="jobs", route_key="tenant-1"),
+        payload=Payload(
+            schema_name="str",
+            content_type="application/python-object",
+            format=PayloadFormat.JSON,
+            data="hello",
+        ),
+        idempotency_key=key,
+    )
+
+    assert rpc_envelope.idempotency_key == key
+    assert publish_envelope.idempotency_key == key

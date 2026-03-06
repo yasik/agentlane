@@ -1,7 +1,7 @@
 """Delivery outcomes and error primitives."""
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from time import time
 from typing import Self
 
@@ -53,9 +53,6 @@ class DeliveryError:
 
     retryable: bool
     """True if delivery may be retried safely."""
-
-    details: dict[str, str] = field(default_factory=dict)
-    """Structured extra metadata for debugging and triage."""
 
 
 @dataclass(slots=True)
@@ -113,7 +110,6 @@ class DeliveryOutcome:
         correlation_id: CorrelationId | None,
         message: str,
         retryable: bool,
-        details: dict[str, str] | None = None,
         started_at_ms: int | None = None,
     ) -> Self:
         """Create a failed delivery outcome."""
@@ -127,7 +123,6 @@ class DeliveryOutcome:
                 code=status,
                 message=message,
                 retryable=retryable,
-                details=details or {},
             ),
             started_at_ms=started,
             finished_at_ms=utc_now_ms(),

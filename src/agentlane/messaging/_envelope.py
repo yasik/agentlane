@@ -1,11 +1,17 @@
 """Envelope and payload models."""
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from time import time
 from typing import Self
 
-from ._identity import AgentId, CorrelationId, MessageId, TopicId
+from ._identity import (
+    AgentId,
+    CorrelationId,
+    IdempotencyKey,
+    MessageId,
+    TopicId,
+)
 
 
 def utc_now_ms() -> int:
@@ -80,8 +86,8 @@ class MessageEnvelope:
     trace_id: str | None = None
     """Optional tracing identifier."""
 
-    attributes: dict[str, str] = field(default_factory=dict)
-    """Extension attributes (idempotency key, metadata, etc.)."""
+    idempotency_key: IdempotencyKey | None = None
+    """Optional deduplication key for retry-safe delivery paths."""
 
     @classmethod
     def new_rpc_request(
@@ -93,7 +99,7 @@ class MessageEnvelope:
         correlation_id: CorrelationId | None = None,
         deadline_ms: int | None = None,
         trace_id: str | None = None,
-        attributes: dict[str, str] | None = None,
+        idempotency_key: IdempotencyKey | None = None,
     ) -> Self:
         """Create a normalized RPC request envelope."""
         return cls(
@@ -107,7 +113,7 @@ class MessageEnvelope:
             created_at_ms=utc_now_ms(),
             deadline_ms=deadline_ms,
             trace_id=trace_id,
-            attributes=attributes or {},
+            idempotency_key=idempotency_key,
         )
 
     @classmethod
@@ -120,7 +126,7 @@ class MessageEnvelope:
         correlation_id: CorrelationId | None = None,
         deadline_ms: int | None = None,
         trace_id: str | None = None,
-        attributes: dict[str, str] | None = None,
+        idempotency_key: IdempotencyKey | None = None,
     ) -> Self:
         """Create a normalized publish event envelope."""
         return cls(
@@ -134,5 +140,5 @@ class MessageEnvelope:
             created_at_ms=utc_now_ms(),
             deadline_ms=deadline_ms,
             trace_id=trace_id,
-            attributes=attributes or {},
+            idempotency_key=idempotency_key,
         )

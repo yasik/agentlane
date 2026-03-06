@@ -28,6 +28,7 @@ from agentlane.messaging import (
     DeliveryMode,
     DeliveryOutcome,
     DeliveryStatus,
+    IdempotencyKey,
     MessageEnvelope,
     MessageId,
     Payload,
@@ -240,7 +241,7 @@ class RuntimeEngine(abc.ABC):
         sender: AgentId | None = None,
         key: str | None = None,
         correlation_id: CorrelationId | None = None,
-        attributes: dict[str, str] | None = None,
+        idempotency_key: IdempotencyKey | None = None,
     ) -> DeliveryOutcome:
         """Send one direct RPC-style message and await terminal delivery outcome.
 
@@ -272,7 +273,7 @@ class RuntimeEngine(abc.ABC):
             recipient=recipient_id,
             payload=self._payload_for(message),
             correlation_id=correlation,
-            attributes=attributes,
+            idempotency_key=idempotency_key,
         )
         # Caller awaits this future for the terminal delivery result.
         future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
@@ -303,7 +304,7 @@ class RuntimeEngine(abc.ABC):
         *,
         sender: AgentId | None = None,
         correlation_id: CorrelationId | None = None,
-        attributes: dict[str, str] | None = None,
+        idempotency_key: IdempotencyKey | None = None,
     ) -> PublishAck:
         """Publish one event message and return enqueue acknowledgment only.
 
@@ -326,7 +327,7 @@ class RuntimeEngine(abc.ABC):
             topic=topic,
             payload=self._payload_for(message),
             correlation_id=correlation,
-            attributes=attributes,
+            idempotency_key=idempotency_key,
         )
 
         # Routing resolves recipient + delivery mode per matching subscription.
@@ -339,7 +340,7 @@ class RuntimeEngine(abc.ABC):
                 topic=topic,
                 payload=self._payload_for(message),
                 correlation_id=correlation,
-                attributes=attributes,
+                idempotency_key=idempotency_key,
             )
             # Recipient identity may be rewritten for stateless mode.
             task_recipient = self._recipient_for_route(
