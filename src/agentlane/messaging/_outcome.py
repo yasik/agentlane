@@ -17,13 +17,28 @@ class DeliveryStatus(enum.StrEnum):
     """Terminal delivery states."""
 
     DELIVERED = "delivered"
+    """Handler completed successfully and produced a terminal success outcome."""
+
     DROPPED = "dropped"
+    """Message was intentionally discarded by runtime policy."""
+
     UNDELIVERABLE = "undeliverable"
+    """Recipient could not be resolved/created, so dispatch never reached a handler."""
+
     TIMEOUT = "timeout"
+    """Delivery exceeded configured processing deadline before completion."""
+
     CANCELED = "canceled"
+    """Delivery was canceled, typically during runtime shutdown or cooperative cancellation."""
+
     HANDLER_ERROR = "handler_error"
+    """Agent handler resolution or execution raised an exception during dispatch."""
+
     SERIALIZATION_ERROR = "serialization_error"
+    """Payload serialization/deserialization failed before handler execution."""
+
     POLICY_REJECTED = "policy_rejected"
+    """Runtime policy rejected dispatch before execution (e.g., routing/scheduling policy)."""
 
 
 @dataclass(slots=True)
