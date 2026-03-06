@@ -11,6 +11,7 @@ from agentlane.messaging import (
     AgentKey,
     AgentType,
     CorrelationId,
+    DeliveryMode,
     DeliveryOutcome,
     DeliveryStatus,
     MessageEnvelope,
@@ -18,6 +19,7 @@ from agentlane.messaging import (
     Payload,
     PayloadFormat,
     PublishAck,
+    PublishRoute,
     RoutingEngine,
     Subscription,
     TopicId,
@@ -133,6 +135,46 @@ class RuntimeEngine(abc.ABC):
         """Remove a publish subscription by id."""
         self._routing.remove_subscription(subscription_id)
 
+    def subscribe_exact(
+        self,
+        *,
+        topic_type: str,
+        agent_type: AgentType | str,
+        delivery_mode: DeliveryMode = DeliveryMode.STATEFUL,
+    ) -> str:
+        """Create and register a type-exact subscription."""
+        subscription = Subscription.exact(
+            topic_type=topic_type,
+            agent_type=agent_type,
+            delivery_mode=delivery_mode,
+        )
+        self._routing.add_subscription(subscription)
+        return subscription.id
+
+    def subscribe_prefix(
+        self,
+        *,
+        topic_prefix: str,
+        agent_type: AgentType | str,
+        delivery_mode: DeliveryMode = DeliveryMode.STATEFUL,
+    ) -> str:
+        """Create and register a type-prefix subscription."""
+        subscription = Subscription.prefix(
+            topic_prefix=topic_prefix,
+            agent_type=agent_type,
+            delivery_mode=delivery_mode,
+        )
+        self._routing.add_subscription(subscription)
+        return subscription.id
+
+    def unsubscribe(self, subscription_id: str) -> None:
+        """Alias for remove_subscription for explicit public API naming."""
+        self.remove_subscription(subscription_id)
+
+    def list_subscriptions(self) -> tuple[Subscription, ...]:
+        """Return immutable snapshot of registered subscriptions."""
+        return tuple(self._routing.subscriptions)
+
     async def send_message(
         self,
         message: object,
@@ -147,8 +189,10 @@ class RuntimeEngine(abc.ABC):
         await self.start()
         correlation = correlation_id or CorrelationId.new()
         try:
+            # Recipient may be explicit AgentId or type(+optional key) lookup.
             recipient_id = self._resolve_recipient(recipient=recipient, key=key)
         except LookupError as exc:
+            # Unresolvable targets are rejected before enqueue.
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.POLICY_REJECTED,
                 message_id=MessageId.new(),
@@ -157,6 +201,7 @@ class RuntimeEngine(abc.ABC):
                 retryable=False,
             )
 
+        # RPC request envelope carries fixed recipient and shared correlation id.
         envelope = MessageEnvelope.new_rpc_request(
             sender=sender,
             recipient=recipient_id,
@@ -164,6 +209,7 @@ class RuntimeEngine(abc.ABC):
             correlation_id=correlation,
             attributes=attributes,
         )
+        # Caller awaits this future for the terminal delivery result.
         future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
         task = DeliveryTask(
             envelope=envelope,
@@ -171,6 +217,7 @@ class RuntimeEngine(abc.ABC):
             response_future=future,
         )
         try:
+            # Submission may fail due to scheduler/runtime policy rejection.
             await self._submit(task)
         except SchedulerRejectedError as exc:
             return DeliveryOutcome.failed(
@@ -180,6 +227,7 @@ class RuntimeEngine(abc.ABC):
                 message=str(exc),
                 retryable=False,
             )
+        # Dispatcher resolves this future once handler execution completes.
         outcome = await future
         return cast(DeliveryOutcome, outcome)
 
@@ -195,6 +243,8 @@ class RuntimeEngine(abc.ABC):
         """Publish a message and return enqueue acknowledgment only."""
         await self.start()
         correlation = correlation_id or CorrelationId.new()
+        # Base envelope is used for routing and enqueue acknowledgment.
+        # Fan-out deliveries are emitted as separate envelopes per route.
         base_envelope = MessageEnvelope.new_publish_event(
             sender=sender,
             topic=topic,
@@ -203,8 +253,11 @@ class RuntimeEngine(abc.ABC):
             attributes=attributes,
         )
 
-        recipients = self._routing.resolve_publish_recipients(base_envelope)
-        for recipient in recipients:
+        # Routing resolves recipient + delivery mode per matching subscription.
+        routes = self._routing.resolve_publish_routes(base_envelope)
+        for route in routes:
+            # Publish fan-out uses a new envelope per recipient so each delivery
+            # has its own message_id while keeping shared correlation_id.
             recipient_envelope = MessageEnvelope.new_publish_event(
                 sender=sender,
                 topic=topic,
@@ -212,17 +265,24 @@ class RuntimeEngine(abc.ABC):
                 correlation_id=correlation,
                 attributes=attributes,
             )
+            # Recipient identity may be rewritten for stateless mode.
+            task_recipient = self._recipient_for_route(
+                route=route,
+                publish_envelope=base_envelope,
+            )
             task = DeliveryTask(
                 envelope=recipient_envelope,
-                recipient=recipient,
+                recipient=task_recipient,
+                # Publish is fire-and-forget; callers receive PublishAck only.
                 response_future=None,
             )
             await self._submit(task)
 
+        # Publish ack confirms enqueue only, not downstream handler completion.
         return PublishAck(
             message_id=base_envelope.message_id,
             correlation_id=base_envelope.correlation_id,
-            enqueued_recipient_count=len(recipients),
+            enqueued_recipient_count=len(routes),
             enqueued_at_ms=utc_now_ms(),
         )
 
@@ -255,6 +315,24 @@ class RuntimeEngine(abc.ABC):
             format=PayloadFormat.JSON,
             data=message,
         )
+
+    @staticmethod
+    def _recipient_for_route(
+        *,
+        route: PublishRoute,
+        publish_envelope: MessageEnvelope,
+    ) -> AgentId:
+        """Resolve scheduler recipient id from route and delivery mode."""
+        if route.delivery_mode == DeliveryMode.STATEFUL:
+            # Stateful path preserves route-key affinity and instance reuse.
+            return route.recipient
+
+        # Stateless deliveries require unique recipient mailbox keys so
+        # they neither serialize behind nor reuse a stateful recipient id.
+        transient_key = AgentKey(
+            f"stateless:{route.subscription_id}:{publish_envelope.message_id.value}"
+        )
+        return AgentId(type=route.recipient.type, key=transient_key)
 
 
 class SingleThreadedRuntimeEngine(RuntimeEngine):

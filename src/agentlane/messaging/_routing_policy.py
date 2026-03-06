@@ -5,7 +5,11 @@ from typing import Protocol
 
 from ._envelope import MessageEnvelope
 from ._identity import AgentId
-from ._subscription import Subscription
+from ._subscription import (
+    DeliveryMode,
+    PublishRoute,
+    Subscription,
+)
 
 
 class RoutingPolicy(Protocol):
@@ -15,12 +19,12 @@ class RoutingPolicy(Protocol):
         """Resolve exactly one RPC recipient."""
         ...
 
-    def resolve_publish_recipients(
+    def resolve_publish_routes(
         self,
         envelope: MessageEnvelope,
         subscriptions: Sequence[Subscription],
-    ) -> list[AgentId]:
-        """Resolve zero or more publish recipients."""
+    ) -> list[PublishRoute]:
+        """Resolve zero or more publish routes."""
         ...
 
 
@@ -33,32 +37,51 @@ class SourceKeyAffinityRoutingPolicy:
             raise LookupError("RPC recipient is missing.")
         return envelope.recipient
 
-    def resolve_publish_recipients(
+    def resolve_publish_routes(
         self,
         envelope: MessageEnvelope,
         subscriptions: Sequence[Subscription],
-    ) -> list[AgentId]:
-        """Resolve publish recipients deterministically."""
+    ) -> list[PublishRoute]:
+        """Resolve publish routes deterministically."""
         if envelope.topic is None:
             raise LookupError("Publish topic is missing.")
 
-        recipients: dict[tuple[str, str], AgentId] = {}
+        stateful_routes: dict[tuple[str, str], PublishRoute] = {}
+        stateless_routes: dict[tuple[str, str], PublishRoute] = {}
         for subscription in subscriptions:
             # Match subscription against topic, skipping non-matching subscriptions.
-            # The first matching subscription for a given topic.source will win,
-            # ensuring deterministic routing based on source-key affinity.
             if not subscription.is_match(envelope.topic):
                 continue
 
-            # Map topic to recipient agent, skipping duplicate recipients for
-            # multiple matching subscriptions.
             recipient = subscription.map_to_agent(envelope.topic)
-            recipients[(recipient.type.value, recipient.key.value)] = recipient
+            route = PublishRoute(
+                subscription_id=subscription.id,
+                recipient=recipient,
+                delivery_mode=subscription.delivery_mode,
+            )
 
-        # Sort recipients by type and key for deterministic delivery
-        # order across multiple subscriptions.
-        sorted_recipients = sorted(
-            recipients.values(),
-            key=lambda recipient: (recipient.type.value, recipient.key.value),
+            if route.delivery_mode == DeliveryMode.STATEFUL:
+                # Stateful dedup is by concrete recipient id.
+                stateful_routes[(recipient.type.value, recipient.key.value)] = route
+                continue
+
+            # Stateless dedup is by subscription and recipient type so each
+            # matching subscription contributes at most one delivery route.
+            stateless_routes[(subscription.id, recipient.type.value)] = route
+
+        # Stable ordering keeps fan-out deterministic across runs.
+        sorted_stateful = sorted(
+            stateful_routes.values(),
+            key=lambda route: (
+                route.recipient.type.value,
+                route.recipient.key.value,
+            ),
         )
-        return sorted_recipients
+        sorted_stateless = sorted(
+            stateless_routes.values(),
+            key=lambda route: (
+                route.recipient.type.value,
+                route.subscription_id,
+            ),
+        )
+        return [*sorted_stateful, *sorted_stateless]

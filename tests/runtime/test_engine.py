@@ -6,10 +6,9 @@ from agentlane.agents import on_message
 from agentlane.messaging import (
     AgentId,
     AgentType,
+    DeliveryMode,
     DeliveryStatus,
     MessageContext,
-    Subscription,
-    SubscriptionKind,
     TopicId,
 )
 from agentlane.runtime import (
@@ -129,17 +128,14 @@ def test_publish_returns_enqueue_ack_only() -> None:
                 return None
 
         runtime.register_factory(AgentType("listener"), Listener)
-        runtime.add_subscription(
-            Subscription(
-                kind=SubscriptionKind.TYPE_EXACT,
-                agent_type=AgentType("listener"),
-                topic_pattern="alerts",
-            )
+        runtime.subscribe_exact(
+            topic_type="alerts",
+            agent_type=AgentType("listener"),
         )
 
         ack = await runtime.publish_message(
             {"event": "ready"},
-            topic=TopicId(type="alerts", source="session-1"),
+            topic=TopicId.from_values(type_value="alerts", route_key="session-1"),
         )
         await runtime.stop_when_idle()
 
@@ -396,5 +392,101 @@ def test_distributed_runtime_context_builds_default_runtime_when_none() -> None:
         if scoped_runtime is None:
             raise AssertionError("Expected runtime to be yielded by context manager.")
         assert scoped_runtime.is_running is False
+
+    asyncio.run(scenario())
+
+
+def test_runtime_subscription_convenience_api_round_trip() -> None:
+    runtime = SingleThreadedRuntimeEngine()
+
+    subscription_id = runtime.subscribe_exact(
+        topic_type="alerts",
+        agent_type="listener",
+        delivery_mode=DeliveryMode.STATEFUL,
+    )
+    subscriptions = runtime.list_subscriptions()
+    assert len(subscriptions) == 1
+    assert subscriptions[0].id == subscription_id
+    assert subscriptions[0].topic_pattern == "alerts"
+    assert subscriptions[0].delivery_mode == DeliveryMode.STATEFUL
+
+    runtime.unsubscribe(subscription_id)
+    assert runtime.list_subscriptions() == ()
+
+
+def test_publish_stateful_reuses_instance_for_same_route_key() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        observed_counts: list[int] = []
+
+        class StatefulListener:
+            def __init__(self) -> None:
+                self.count = 0
+
+            @on_message
+            async def handle(self, payload: dict, context: MessageContext) -> object:
+                _ = payload
+                _ = context
+                self.count += 1
+                observed_counts.append(self.count)
+                return None
+
+        runtime.register_factory("listener", StatefulListener)
+        runtime.subscribe_exact(
+            topic_type="alerts",
+            agent_type="listener",
+            delivery_mode=DeliveryMode.STATEFUL,
+        )
+
+        await runtime.publish_message(
+            {"event": "one"},
+            topic=TopicId.from_values(type_value="alerts", route_key="session-1"),
+        )
+        await runtime.publish_message(
+            {"event": "two"},
+            topic=TopicId.from_values(type_value="alerts", route_key="session-1"),
+        )
+        await runtime.stop_when_idle()
+
+        assert observed_counts == [1, 2]
+
+    asyncio.run(scenario())
+
+
+def test_publish_stateless_creates_transient_instance_per_delivery() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        observed_counts: list[int] = []
+
+        class StatelessListener:
+            def __init__(self) -> None:
+                self.count = 0
+
+            @on_message
+            async def handle(self, payload: dict, context: MessageContext) -> object:
+                _ = payload
+                _ = context
+                self.count += 1
+                observed_counts.append(self.count)
+                return None
+
+        runtime.register_factory("listener", StatelessListener)
+        runtime.subscribe_exact(
+            topic_type="alerts",
+            agent_type="listener",
+            delivery_mode=DeliveryMode.STATELESS,
+        )
+
+        await runtime.publish_message(
+            {"event": "one"},
+            topic=TopicId.from_values(type_value="alerts", route_key="session-1"),
+        )
+        await runtime.publish_message(
+            {"event": "two"},
+            topic=TopicId.from_values(type_value="alerts", route_key="session-1"),
+        )
+        await runtime.stop_when_idle()
+
+        assert observed_counts == [1, 1]
 
     asyncio.run(scenario())

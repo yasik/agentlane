@@ -9,7 +9,7 @@ from ._routing_policy import (
     RoutingPolicy,
     SourceKeyAffinityRoutingPolicy,
 )
-from ._subscription import Subscription
+from ._subscription import PublishRoute, Subscription
 
 
 class RoutingEngine:
@@ -43,6 +43,10 @@ class RoutingEngine:
         """Resolve a single RPC recipient."""
         return self._policy.resolve_rpc_recipient(envelope)
 
+    def resolve_publish_routes(self, envelope: MessageEnvelope) -> list[PublishRoute]:
+        """Resolve publish routes including delivery-mode metadata."""
+        return self._policy.resolve_publish_routes(envelope, self.subscriptions)
+
     def resolve_publish_recipients(self, envelope: MessageEnvelope) -> list[AgentId]:
-        """Resolve publish recipients."""
-        return self._policy.resolve_publish_recipients(envelope, self.subscriptions)
+        """Resolve publish recipients only (legacy helper)."""
+        return [route.recipient for route in self.resolve_publish_routes(envelope)]

@@ -15,6 +15,7 @@ from ._identity import (
     CorrelationId,
     MessageId,
     TopicId,
+    Topics,
 )
 from ._outcome import (
     DeliveryError,
@@ -27,7 +28,12 @@ from ._routing_policy import (
     RoutingPolicy,
     SourceKeyAffinityRoutingPolicy,
 )
-from ._subscription import Subscription, SubscriptionKind
+from ._subscription import (
+    DeliveryMode,
+    PublishRoute,
+    Subscription,
+    SubscriptionKind,
+)
 
 __all__ = [
     "AgentId",
@@ -35,6 +41,7 @@ __all__ = [
     "AgentType",
     "CancellationToken",
     "CorrelationId",
+    "DeliveryMode",
     "DeliveryError",
     "DeliveryOutcome",
     "DeliveryStatus",
@@ -45,10 +52,12 @@ __all__ = [
     "Payload",
     "PayloadFormat",
     "PublishAck",
+    "PublishRoute",
     "RoutingEngine",
     "RoutingPolicy",
     "SourceKeyAffinityRoutingPolicy",
     "Subscription",
     "SubscriptionKind",
+    "Topics",
     "TopicId",
 ]

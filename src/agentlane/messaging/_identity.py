@@ -70,6 +70,25 @@ class TopicId:
         if not self.source:
             raise ValueError("TopicId source must be non-empty.")
 
+    @classmethod
+    def from_values(cls, type_value: str, route_key: str) -> Self:
+        """Construct a TopicId from type and route key values."""
+        return cls(type=type_value, source=route_key)
+
+    @property
+    def route_key(self) -> str:
+        """Return publisher-provided route key alias for source."""
+        return self.source
+
+
+class Topics:
+    """Convenience constructors for topic identifiers."""
+
+    @staticmethod
+    def id(type_value: str, route_key: str) -> TopicId:
+        """Build a topic id from type and route key values."""
+        return TopicId.from_values(type_value=type_value, route_key=route_key)
+
 
 @dataclass(frozen=True, slots=True)
 class MessageId:
