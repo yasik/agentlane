@@ -1,4 +1,18 @@
-"""Runtime engine implementations for different execution environments."""
+"""Runtime engine implementations for different execution environments.
+
+This module provides:
+
+1. `RuntimeEngine`: a shared orchestration layer for messaging APIs.
+2. `SingleThreadedRuntimeEngine`: in-process execution via scheduler + worker pool.
+3. `DistributedRuntimeEngine`: distributed placeholder with the same public contract.
+
+`RuntimeEngine` wires high-level behavior:
+
+1. Routing (`RoutingEngine`) for publish recipient resolution.
+2. Registry (`AgentRegistry`) for factory/instance lifecycle.
+3. Scheduler (`PerAgentMailboxScheduler`) as execution queue boundary.
+4. Dispatcher (`Dispatcher`) for handler invocation and delivery outcomes.
+"""
 
 import abc
 import asyncio
@@ -43,7 +57,18 @@ def utc_now_ms() -> int:
 
 
 class RuntimeEngine(abc.ABC):
-    """Base runtime engine that owns shared routing/registry/message orchestration."""
+    """Base runtime engine that coordinates messaging APIs and runtime components.
+
+    The base class owns the public contract (`send_message`, `publish_message`,
+    registration, subscriptions) and delegates execution details to subclasses via
+    runtime hooks (`_start_runtime`, `_submit`, `_stop_runtime`).
+
+    Concrete runtimes differ in *where/how* tasks execute, while all share:
+
+    1. Envelope construction and correlation-id handling.
+    2. Routing and recipient resolution semantics.
+    3. Delivery outcome shape and policy rejection behavior.
+    """
 
     def __init__(
         self,
@@ -52,7 +77,13 @@ class RuntimeEngine(abc.ABC):
         registry: AgentRegistry | None = None,
         scheduler: PerAgentMailboxScheduler | None = None,
     ) -> None:
-        """Create runtime components shared across runtime implementations."""
+        """Create shared runtime dependencies and baseline state.
+
+        Args:
+            routing: Publish/RPC routing resolver. Defaults to `RoutingEngine()`.
+            registry: Agent factory/instance registry. Defaults to `AgentRegistry()`.
+            scheduler: Runtime scheduler used by concrete execution paths.
+        """
         self._routing = routing or RoutingEngine()
         self._registry = registry or AgentRegistry()
         self._scheduler = scheduler or PerAgentMailboxScheduler()
@@ -60,7 +91,12 @@ class RuntimeEngine(abc.ABC):
         self._is_started = False
 
     async def start(self) -> None:
-        """Start runtime execution if not already running."""
+        """Start runtime execution if not already running.
+
+        This method is idempotent and is also called implicitly by `send_message`
+        and `publish_message`, so callers can use runtime APIs without a separate
+        explicit startup step.
+        """
         if self._is_started:
             return
 
@@ -73,7 +109,13 @@ class RuntimeEngine(abc.ABC):
             raise
 
     async def stop(self) -> None:
-        """Stop runtime immediately if it is running."""
+        """Stop runtime immediately if it is running.
+
+        Concrete runtimes should treat this as eager shutdown:
+
+        1. Cancel in-flight deliveries when possible.
+        2. Reject or cancel queued deliveries.
+        """
         if not self._is_started:
             return
         try:
@@ -82,7 +124,11 @@ class RuntimeEngine(abc.ABC):
             self._is_started = False
 
     async def stop_when_idle(self) -> None:
-        """Drain pending work and stop runtime if it is running."""
+        """Drain pending work and then stop runtime if it is running.
+
+        This is the graceful shutdown path: queued work is allowed to complete
+        before runtime-specific resources are torn down.
+        """
         if not self._is_started:
             return
         try:
@@ -109,25 +155,33 @@ class RuntimeEngine(abc.ABC):
 
     @abc.abstractmethod
     async def _submit(self, task: DeliveryTask) -> None:
-        """Submit one resolved delivery task to runtime-specific execution path."""
+        """Submit one resolved delivery task to runtime-specific execution path.
+
+        Subclasses implement how tasks are queued/executed, but must preserve
+        delivery semantics expected by the shared messaging APIs.
+        """
 
     def register_factory(
         self,
         agent_type: AgentType | str,
         factory: AgentFactory,
     ) -> AgentType:
-        """Register a lazy agent factory."""
+        """Register a lazy factory for an agent type.
+
+        The returned `AgentType` is normalized and can be reused by callers for
+        subscription setup and direct addressing.
+        """
         resolved_type = self._coerce_agent_type(agent_type)
         self._registry.register_factory(resolved_type, factory)
         return resolved_type
 
     def register_instance(self, agent_id: AgentId, instance: Agent) -> AgentId:
-        """Register an already instantiated agent."""
+        """Register an already instantiated agent instance by `AgentId`."""
         self._registry.register_instance(agent_id, instance)
         return agent_id
 
     def add_subscription(self, subscription: Subscription) -> str:
-        """Add a publish subscription and return its id."""
+        """Add a publish subscription object and return its stable id."""
         self._routing.add_subscription(subscription)
         return subscription.id
 
@@ -142,7 +196,10 @@ class RuntimeEngine(abc.ABC):
         agent_type: AgentType | str,
         delivery_mode: DeliveryMode = DeliveryMode.STATEFUL,
     ) -> str:
-        """Create and register a type-exact subscription."""
+        """Create and register an exact topic subscription.
+
+        This is the preferred API over constructing `Subscription` manually.
+        """
         subscription = Subscription.exact(
             topic_type=topic_type,
             agent_type=agent_type,
@@ -158,7 +215,7 @@ class RuntimeEngine(abc.ABC):
         agent_type: AgentType | str,
         delivery_mode: DeliveryMode = DeliveryMode.STATEFUL,
     ) -> str:
-        """Create and register a type-prefix subscription."""
+        """Create and register a prefix topic subscription."""
         subscription = Subscription.prefix(
             topic_prefix=topic_prefix,
             agent_type=agent_type,
@@ -172,7 +229,7 @@ class RuntimeEngine(abc.ABC):
         self.remove_subscription(subscription_id)
 
     def list_subscriptions(self) -> tuple[Subscription, ...]:
-        """Return immutable snapshot of registered subscriptions."""
+        """Return immutable snapshot of current subscriptions."""
         return tuple(self._routing.subscriptions)
 
     async def send_message(
@@ -185,7 +242,15 @@ class RuntimeEngine(abc.ABC):
         correlation_id: CorrelationId | None = None,
         attributes: dict[str, str] | None = None,
     ) -> DeliveryOutcome:
-        """Send an RPC-style message and await terminal delivery outcome."""
+        """Send one direct RPC-style message and await terminal delivery outcome.
+
+        Flow:
+
+        1. Normalize recipient (`AgentId` or type+key resolution).
+        2. Build one RPC request envelope.
+        3. Submit one delivery task into runtime execution path.
+        4. Await dispatcher-completed future for terminal outcome.
+        """
         await self.start()
         correlation = correlation_id or CorrelationId.new()
         try:
@@ -240,7 +305,18 @@ class RuntimeEngine(abc.ABC):
         correlation_id: CorrelationId | None = None,
         attributes: dict[str, str] | None = None,
     ) -> PublishAck:
-        """Publish a message and return enqueue acknowledgment only."""
+        """Publish one event message and return enqueue acknowledgment only.
+
+        Flow:
+
+        1. Build a base publish envelope for routing and ack identity.
+        2. Resolve publish routes from subscriptions (`stateful`/`stateless`).
+        3. Fan out one delivery task per route.
+        4. Return `PublishAck` once all route tasks are enqueued.
+
+        Note:
+            The returned ack confirms enqueue, not handler completion.
+        """
         await self.start()
         correlation = correlation_id or CorrelationId.new()
         # Base envelope is used for routing and enqueue acknowledgment.
@@ -299,7 +375,11 @@ class RuntimeEngine(abc.ABC):
         recipient: AgentId | AgentType | str,
         key: str | None,
     ) -> AgentId:
-        """Resolve recipient from explicit id or type(+optional key)."""
+        """Resolve recipient from explicit id or type(+optional key).
+
+        Type-only targets delegate to registry resolution policy (for example,
+        default key or ambiguity rejection when multiple active instances exist).
+        """
         if isinstance(recipient, AgentId):
             return recipient
         agent_type = self._coerce_agent_type(recipient)
@@ -308,7 +388,7 @@ class RuntimeEngine(abc.ABC):
 
     @staticmethod
     def _payload_for(message: object) -> Payload:
-        """Wrap an application message into canonical payload shape."""
+        """Wrap an application object into canonical payload container."""
         return Payload(
             schema_name=type(message).__name__,
             content_type="application/python-object",
@@ -322,7 +402,11 @@ class RuntimeEngine(abc.ABC):
         route: PublishRoute,
         publish_envelope: MessageEnvelope,
     ) -> AgentId:
-        """Resolve scheduler recipient id from route and delivery mode."""
+        """Resolve scheduler recipient id from route and delivery mode.
+
+        Stateful mode keeps route affinity key unchanged.
+        Stateless mode derives a unique per-delivery key to avoid instance reuse.
+        """
         if route.delivery_mode == DeliveryMode.STATEFUL:
             # Stateful path preserves route-key affinity and instance reuse.
             return route.recipient
@@ -336,7 +420,11 @@ class RuntimeEngine(abc.ABC):
 
 
 class SingleThreadedRuntimeEngine(RuntimeEngine):
-    """In-process runtime with worker pool execution and mailbox-ordered dispatch."""
+    """In-process runtime with scheduler-backed worker pool execution.
+
+    The scheduler enforces per-recipient serialization, while worker count
+    controls cross-recipient concurrency.
+    """
 
     def __init__(
         self,
@@ -346,7 +434,7 @@ class SingleThreadedRuntimeEngine(RuntimeEngine):
         scheduler: PerAgentMailboxScheduler | None = None,
         worker_count: int = 10,
     ) -> None:
-        """Create a single-threaded runtime with configurable worker count."""
+        """Create single-threaded runtime with configurable worker pool size."""
         if worker_count <= 0:
             raise ValueError("worker_count must be greater than zero.")
 
@@ -359,7 +447,7 @@ class SingleThreadedRuntimeEngine(RuntimeEngine):
         super().__init__(routing=routing, registry=registry, scheduler=scheduler)
 
     async def _start_runtime(self) -> None:
-        """Start in-process worker pool."""
+        """Start detached worker tasks that pull from scheduler."""
         # Workers are detached; lifecycle is controlled by start/stop methods.
         for _ in range(self._worker_count):
             worker_task = asyncio.create_task(self._run_worker())
@@ -385,16 +473,16 @@ class SingleThreadedRuntimeEngine(RuntimeEngine):
             self._cancel_task(task=task, message=_QUEUED_CANCELED)
 
     async def _stop_when_idle_runtime(self) -> None:
-        """Wait for scheduled work to finish, then stop immediately."""
+        """Wait for scheduler idle, then perform eager stop cleanup."""
         await self._scheduler.wait_idle()
         await self._stop_runtime()
 
     async def _submit(self, task: DeliveryTask) -> None:
-        """Queue one task through scheduler for worker dispatch."""
+        """Queue one task into scheduler for eventual worker dispatch."""
         await self._scheduler.enqueue(task)
 
     async def _run_worker(self) -> None:
-        """Worker loop processing tasks one-by-one for multiple recipients."""
+        """Worker loop that repeatedly pops tasks and dispatches handlers."""
         while self.is_running:
             task = await self._scheduler.pop_next()
             worker_task = asyncio.current_task()
@@ -436,7 +524,7 @@ class SingleThreadedRuntimeEngine(RuntimeEngine):
 
 
 class DistributedRuntimeEngine(RuntimeEngine):
-    """Distributed runtime placeholder that keeps lifecycle API but rejects submit."""
+    """Distributed runtime placeholder with shared API but no submit transport yet."""
 
     async def _start_runtime(self) -> None:
         """Start distributed runtime resources."""
