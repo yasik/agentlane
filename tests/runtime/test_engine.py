@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any, cast
 
 import pytest
 
@@ -220,6 +221,201 @@ def test_multiple_on_message_handlers_route_by_payload_type() -> None:
         assert ping_outcome.response_payload == "ping:a"
         assert pong_outcome.response_payload == "pong:b"
         assert int_outcome.response_payload == "int:123"
+
+    asyncio.run(scenario())
+
+
+def test_runtime_fails_when_agent_has_no_on_message_handler() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class NoHandlerAgent:
+            async def handle(self, payload: str, context: MessageContext) -> object:
+                _ = context
+                return payload
+
+        runtime.register_factory("no-handler", NoHandlerAgent)
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("no-handler", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert "does not define an `@on_message` handler" in outcome.error.message
+
+    asyncio.run(scenario())
+
+
+def test_runtime_fails_when_on_message_handler_missing_context() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class MissingContextAgent:
+            @on_message
+            async def handle(self, payload: str) -> object:
+                return payload
+
+        runtime.register_factory("missing-context", MissingContextAgent)
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("missing-context", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert "must have signature `(payload, context)`" in outcome.error.message
+
+    asyncio.run(scenario())
+
+
+def test_runtime_fails_when_on_message_handler_has_wrong_arity() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class WrongArityAgent:
+            @on_message
+            async def handle(
+                self,
+                payload: str,
+                context: MessageContext,
+                extra: int,
+            ) -> object:
+                _ = context
+                _ = extra
+                return payload
+
+        runtime.register_factory("wrong-arity", WrongArityAgent)
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("wrong-arity", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert "must have signature `(payload, context)`" in outcome.error.message
+
+    asyncio.run(scenario())
+
+
+def test_runtime_fails_when_on_message_handler_missing_payload_annotation() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class MissingPayloadAnnotationAgent:
+            @on_message
+            async def handle(self, payload, context: MessageContext) -> object:
+                _ = payload
+                _ = context
+                return None
+
+        runtime.register_factory(
+            "missing-payload-annotation",
+            MissingPayloadAnnotationAgent,
+        )
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("missing-payload-annotation", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert (
+            "must declare an explicit payload type annotation" in outcome.error.message
+        )
+
+    asyncio.run(scenario())
+
+
+def test_runtime_fails_when_on_message_handler_payload_annotation_not_concrete() -> (
+    None
+):
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class NonConcretePayloadTypeAgent:
+            @on_message
+            async def handle(
+                self,
+                payload: str | int,
+                context: MessageContext,
+            ) -> object:
+                _ = payload
+                _ = context
+                return None
+
+        runtime.register_factory(
+            "non-concrete-payload-type", NonConcretePayloadTypeAgent
+        )
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("non-concrete-payload-type", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert "must annotate payload with a concrete type" in outcome.error.message
+
+    asyncio.run(scenario())
+
+
+def test_runtime_fails_when_on_message_handlers_are_ambiguous() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class AmbiguousHandlersAgent:
+            @on_message
+            async def handle_a(self, payload: str, context: MessageContext) -> object:
+                _ = context
+                return payload
+
+            @on_message
+            async def handle_b(self, payload: str, context: MessageContext) -> object:
+                _ = context
+                return payload
+
+        runtime.register_factory("ambiguous-handlers", AmbiguousHandlersAgent)
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("ambiguous-handlers", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert "ambiguous `@on_message` handlers" in outcome.error.message
+        assert "handle_a" in outcome.error.message
+        assert "handle_b" in outcome.error.message
+
+    asyncio.run(scenario())
+
+
+def test_runtime_fails_when_on_message_handler_is_not_async() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class SyncHandlerAgent:
+            def _sync_handle(self, payload: str, context: MessageContext) -> object:
+                _ = context
+                return payload
+
+            handle = on_message(cast(Any, _sync_handle))
+
+        runtime.register_factory("sync-handler", SyncHandlerAgent)
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("sync-handler", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert "must be declared as `async def`" in outcome.error.message
 
     asyncio.run(scenario())
 
