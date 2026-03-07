@@ -68,7 +68,11 @@ _QUEUED_CANCELED = "Runtime shutdown canceled a queued delivery."
 
 
 def utc_now_ms() -> int:
-    """Return current UTC epoch milliseconds."""
+    """Return current UTC epoch milliseconds.
+
+    Returns:
+        int: Current UTC time in epoch milliseconds.
+    """
     return int(time() * 1000)
 
 
@@ -120,6 +124,12 @@ class RuntimeEngine(Engine, abc.ABC):
         This method is idempotent and is also called implicitly by `send_message`
         and `publish_message`, so callers can use runtime APIs without a separate
         explicit startup step.
+
+        Returns:
+            None: Always returns after runtime startup attempt.
+
+        Raises:
+            Exception: Propagates runtime-specific startup failures.
         """
         if self._is_started:
             return
@@ -139,6 +149,9 @@ class RuntimeEngine(Engine, abc.ABC):
 
         1. Cancel in-flight deliveries when possible.
         2. Reject or cancel queued deliveries.
+
+        Returns:
+            None: Always returns after runtime shutdown attempt.
         """
         if not self._is_started:
             return
@@ -152,6 +165,9 @@ class RuntimeEngine(Engine, abc.ABC):
 
         This is the graceful shutdown path: queued work is allowed to complete
         before runtime-specific resources are torn down.
+
+        Returns:
+            None: Always returns after graceful shutdown attempt.
         """
         if not self._is_started:
             return
@@ -162,12 +178,20 @@ class RuntimeEngine(Engine, abc.ABC):
 
     @property
     def is_running(self) -> bool:
-        """Return True when runtime was started and not stopped yet."""
+        """Return True when runtime was started and not stopped yet.
+
+        Returns:
+            bool: Runtime running state.
+        """
         return self._is_started
 
     @property
     def serializer_registry(self) -> SerializerRegistry:
-        """Return transport serializer registry used by this runtime."""
+        """Return transport serializer registry used by this runtime.
+
+        Returns:
+            SerializerRegistry: Runtime-owned serializer registry instance.
+        """
         return self._serializer_registry
 
     @abc.abstractmethod
@@ -203,23 +227,55 @@ class RuntimeEngine(Engine, abc.ABC):
         Factory signature:
 
         1. `factory(engine)` where `engine` is this runtime's restricted engine view.
+
+        Args:
+            agent_type: Logical agent type string or typed wrapper.
+            factory: Sync or async factory receiving this runtime's `Engine` view.
+
+        Returns:
+            AgentType: Normalized registered agent type.
         """
         resolved_type = self._coerce_agent_type(agent_type)
         self._registry.register_factory(resolved_type, factory)
         return resolved_type
 
     def register_instance(self, agent_id: AgentId, instance: Agent) -> AgentId:
-        """Register an already instantiated agent instance by `AgentId`."""
+        """Register an already instantiated agent instance by `AgentId`.
+
+        Args:
+            agent_id: Concrete id to bind and register.
+            instance: Agent instance to register.
+
+        Returns:
+            AgentId: Same registered id for call-site chaining.
+        """
         self._registry.register_instance(agent_id, instance)
         return agent_id
 
     def add_subscription(self, subscription: Subscription) -> str:
-        """Add a publish subscription object and return its stable id."""
+        """Add a publish subscription object and return its stable id.
+
+        Args:
+            subscription: Subscription to add or replace by id.
+
+        Returns:
+            str: Stable subscription id.
+        """
         self._routing.add_subscription(subscription)
         return subscription.id
 
     def remove_subscription(self, subscription_id: str) -> None:
-        """Remove a publish subscription by id."""
+        """Remove a publish subscription by id.
+
+        Args:
+            subscription_id: Stable subscription id to remove.
+
+        Returns:
+            None: Always returns after removal.
+
+        Raises:
+            LookupError: If subscription does not exist.
+        """
         self._routing.remove_subscription(subscription_id)
 
     def subscribe_exact(
@@ -232,6 +288,14 @@ class RuntimeEngine(Engine, abc.ABC):
         """Create and register an exact topic subscription.
 
         This is the preferred API over constructing `Subscription` manually.
+
+        Args:
+            topic_type: Exact topic type to match.
+            agent_type: Agent type receiving matched messages.
+            delivery_mode: Stateful or stateless delivery behavior.
+
+        Returns:
+            str: Stable subscription id.
         """
         subscription = Subscription.exact(
             topic_type=topic_type,
@@ -248,7 +312,16 @@ class RuntimeEngine(Engine, abc.ABC):
         agent_type: AgentType | str,
         delivery_mode: DeliveryMode = DeliveryMode.STATEFUL,
     ) -> str:
-        """Create and register a prefix topic subscription."""
+        """Create and register a prefix topic subscription.
+
+        Args:
+            topic_prefix: Topic prefix matched with `startswith`.
+            agent_type: Agent type receiving matched messages.
+            delivery_mode: Stateful or stateless delivery behavior.
+
+        Returns:
+            str: Stable subscription id.
+        """
         subscription = Subscription.prefix(
             topic_prefix=topic_prefix,
             agent_type=agent_type,
@@ -258,11 +331,22 @@ class RuntimeEngine(Engine, abc.ABC):
         return subscription.id
 
     def unsubscribe(self, subscription_id: str) -> None:
-        """Alias for remove_subscription for explicit public API naming."""
+        """Alias for remove_subscription for explicit public API naming.
+
+        Args:
+            subscription_id: Stable subscription id to remove.
+
+        Returns:
+            None: Always returns after removal.
+        """
         self.remove_subscription(subscription_id)
 
     def list_subscriptions(self) -> tuple[Subscription, ...]:
-        """Return immutable snapshot of current subscriptions."""
+        """Return immutable snapshot of current subscriptions.
+
+        Returns:
+            tuple[Subscription, ...]: Current subscription snapshot.
+        """
         return tuple(self._routing.subscriptions)
 
     def register_serializer(
@@ -275,6 +359,16 @@ class RuntimeEngine(Engine, abc.ABC):
 
         This is an advanced escape hatch. Common dataclass/pydantic/protobuf
         payloads are auto-inferred by default and do not require registration.
+
+        Args:
+            serializer: One serializer or sequence of serializers.
+            replace: Whether to replace an existing key on conflict.
+
+        Returns:
+            None: Always returns after registry updates.
+
+        Raises:
+            SerializerConflictError: If key exists and `replace=False`.
         """
         if isinstance(serializer, MessageSerializer):
             self._serializer_registry.register(serializer, replace=replace)
@@ -287,15 +381,49 @@ class RuntimeEngine(Engine, abc.ABC):
         *,
         replace: bool = False,
     ) -> None:
-        """Register one message type using default serializer inference."""
+        """Register one message type using default serializer inference.
+
+        Args:
+            message_type: Python type to register.
+            replace: Whether to replace an existing serializer key.
+
+        Returns:
+            None: Always returns after successful registration.
+
+        Raises:
+            TypeError: If no default serializer can be inferred for the type.
+            SerializerConflictError: If key exists and `replace=False`.
+        """
         self._serializer_registry.register_type(message_type, replace=replace)
 
     def payload_to_wire_payload(self, payload: Payload) -> WirePayload:
-        """Convert messaging payload into wire payload using runtime registry."""
+        """Convert messaging payload into wire payload using runtime registry.
+
+        Args:
+            payload: Canonical messaging payload.
+
+        Returns:
+            WirePayload: Transport-ready payload bytes and metadata.
+
+        Raises:
+            SerializationError: If payload cannot be encoded consistently.
+            UnknownSerializerError: If no serializer exists for payload key.
+        """
         return payload_to_wire_payload(payload, registry=self._serializer_registry)
 
     def wire_payload_to_payload(self, wire_payload: WirePayload) -> Payload:
-        """Convert wire payload into messaging payload using runtime registry."""
+        """Convert wire payload into messaging payload using runtime registry.
+
+        Args:
+            wire_payload: Transport payload bytes and metadata.
+
+        Returns:
+            Payload: Canonical in-memory payload.
+
+        Raises:
+            SerializationError: If payload cannot be decoded consistently.
+            UnknownSerializerError: If no serializer exists for payload key.
+        """
         return wire_payload_to_payload(wire_payload, registry=self._serializer_registry)
 
     async def send_message(
@@ -316,6 +444,17 @@ class RuntimeEngine(Engine, abc.ABC):
         2. Build one RPC request envelope.
         3. Submit one delivery task into runtime execution path.
         4. Await dispatcher-completed future for terminal outcome.
+
+        Args:
+            message: Application payload to send.
+            recipient: Target agent id or logical agent type.
+            sender: Optional sender id propagated in context.
+            correlation_id: Optional causal chain id.
+            cancellation_token: Optional shared cancellation token.
+            idempotency_key: Optional deduplication key.
+
+        Returns:
+            DeliveryOutcome: Terminal delivery outcome.
         """
         await self.start()
         correlation = correlation_id or CorrelationId.new()
@@ -384,6 +523,20 @@ class RuntimeEngine(Engine, abc.ABC):
 
         Note:
             The returned ack confirms enqueue, not handler completion.
+
+        Args:
+            message: Application payload to publish.
+            topic: Topic id used for subscription routing.
+            sender: Optional sender id propagated in context.
+            correlation_id: Optional causal chain id.
+            cancellation_token: Optional shared cancellation token.
+            idempotency_key: Optional deduplication key.
+
+        Returns:
+            PublishAck: Enqueue acknowledgment across routed recipients.
+
+        Raises:
+            SchedulerRejectedError: If scheduler rejects a routed task enqueue.
         """
         await self.start()
         correlation = correlation_id or CorrelationId.new()

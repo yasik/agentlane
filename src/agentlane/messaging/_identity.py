@@ -47,7 +47,15 @@ class AgentId:
 
     @classmethod
     def from_values(cls, type_value: str, key_value: str) -> Self:
-        """Construct an AgentId from plain string values."""
+        """Construct an AgentId from plain string values.
+
+        Args:
+            type_value: Logical agent type name.
+            key_value: Logical agent instance key.
+
+        Returns:
+            Self: Normalized agent id.
+        """
         return cls(type=AgentType(type_value), key=AgentKey(key_value))
 
     def __str__(self) -> str:
@@ -72,12 +80,24 @@ class TopicId:
 
     @classmethod
     def from_values(cls, type_value: str, route_key: str) -> Self:
-        """Construct a TopicId from type and route key values."""
+        """Construct a TopicId from type and route key values.
+
+        Args:
+            type_value: Topic type used by subscription matching.
+            route_key: Route-key value mapped onto the `source` dimension.
+
+        Returns:
+            Self: Normalized topic id.
+        """
         return cls(type=type_value, source=route_key)
 
     @property
     def route_key(self) -> str:
-        """Return publisher-provided route key alias for source."""
+        """Return publisher-provided route key alias for source.
+
+        Returns:
+            str: Route key value copied from `source`.
+        """
         return self.source
 
 
@@ -86,7 +106,15 @@ class Topics:
 
     @staticmethod
     def id(type_value: str, route_key: str) -> TopicId:
-        """Build a topic id from type and route key values."""
+        """Build a topic id from type and route key values.
+
+        Args:
+            type_value: Topic type used by subscription matching.
+            route_key: Route-key value for source-affinity routing.
+
+        Returns:
+            TopicId: New topic identifier instance.
+        """
         return TopicId.from_values(type_value=type_value, route_key=route_key)
 
 
@@ -99,7 +127,14 @@ class MessageId:
 
     @classmethod
     def new(cls) -> Self:
-        """Create a new message identifier."""
+        """Create a new message identifier.
+
+        Args:
+            cls: MessageId class.
+
+        Returns:
+            Self: Newly generated message id.
+        """
         return cls(value=str(uuid4()))
 
 
@@ -112,7 +147,14 @@ class CorrelationId:
 
     @classmethod
     def new(cls) -> Self:
-        """Create a new correlation identifier."""
+        """Create a new correlation identifier.
+
+        Args:
+            cls: CorrelationId class.
+
+        Returns:
+            Self: Newly generated correlation id.
+        """
         return cls(value=str(uuid4()))
 
 
@@ -129,5 +171,12 @@ class IdempotencyKey:
 
     @classmethod
     def new(cls) -> Self:
-        """Create a new idempotency key."""
+        """Create a new idempotency key.
+
+        Args:
+            cls: IdempotencyKey class.
+
+        Returns:
+            Self: Newly generated idempotency key.
+        """
         return cls(value=str(uuid4()))

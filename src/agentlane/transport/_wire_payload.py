@@ -36,16 +36,39 @@ class PayloadCodecRegistry(Protocol):
         schema_id: SchemaId | str,
         content_type: ContentType | str,
     ) -> WirePayload:
-        """Encode object into wire payload."""
+        """Encode object into wire payload.
+
+        Args:
+            value: Runtime value to encode.
+            schema_id: Schema id key.
+            content_type: Content type key.
+
+        Returns:
+            WirePayload: Encoded wire payload.
+        """
         ...
 
     def decode(self, wire_payload: WirePayload) -> object:
-        """Decode wire payload into object."""
+        """Decode wire payload into object.
+
+        Args:
+            wire_payload: Wire payload bytes and metadata.
+
+        Returns:
+            object: Decoded runtime value.
+        """
         ...
 
 
 def wire_encoding_for_payload_format(payload_format: PayloadFormat) -> WireEncoding:
-    """Map messaging payload format to transport wire encoding."""
+    """Map messaging payload format to transport wire encoding.
+
+    Args:
+        payload_format: Messaging payload format enum value.
+
+    Returns:
+        WireEncoding: Transport wire encoding equivalent.
+    """
     if payload_format == PayloadFormat.JSON:
         return WireEncoding.JSON
     if payload_format == PayloadFormat.PROTOBUF:
@@ -54,7 +77,14 @@ def wire_encoding_for_payload_format(payload_format: PayloadFormat) -> WireEncod
 
 
 def payload_format_for_wire_encoding(encoding: WireEncoding) -> PayloadFormat:
-    """Map transport wire encoding to messaging payload format."""
+    """Map transport wire encoding to messaging payload format.
+
+    Args:
+        encoding: Transport wire encoding enum value.
+
+    Returns:
+        PayloadFormat: Messaging payload format equivalent.
+    """
     if encoding == WireEncoding.JSON:
         return PayloadFormat.JSON
     if encoding == WireEncoding.PROTOBUF:
@@ -71,6 +101,16 @@ def payload_to_wire_payload(
 
     BYTES payloads bypass registry codecs and are passed through directly.
     JSON/PROTOBUF payloads use the registry key `(schema_id, content_type)`.
+
+    Args:
+        payload: Canonical in-memory payload.
+        registry: Serializer registry used for non-bytes payloads.
+
+    Returns:
+        WirePayload: Transport-ready payload representation.
+
+    Raises:
+        SerializationError: If BYTES payload data is invalid or encoding mismatches.
     """
     schema_id = SchemaId(payload.schema_name)
     content_type = ContentType(payload.content_type)
@@ -106,7 +146,15 @@ def wire_payload_to_payload(
     *,
     registry: PayloadCodecRegistry,
 ) -> Payload:
-    """Convert transport wire bytes payload into messaging payload shape."""
+    """Convert transport wire bytes payload into messaging payload shape.
+
+    Args:
+        wire_payload: Transport payload bytes and metadata.
+        registry: Serializer registry used for non-bytes payloads.
+
+    Returns:
+        Payload: Canonical in-memory payload representation.
+    """
     if wire_payload.encoding == WireEncoding.BYTES:
         decoded_data: object = wire_payload.body
     else:

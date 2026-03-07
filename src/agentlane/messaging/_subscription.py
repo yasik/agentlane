@@ -76,7 +76,16 @@ class Subscription:
         agent_type: AgentType | str,
         delivery_mode: DeliveryMode = DeliveryMode.STATEFUL,
     ) -> "Subscription":
-        """Create a subscription that matches one exact topic type."""
+        """Create a subscription that matches one exact topic type.
+
+        Args:
+            topic_type: Topic type string requiring exact equality.
+            agent_type: Recipient agent type (string or typed wrapper).
+            delivery_mode: Delivery lifecycle behavior for matched routes.
+
+        Returns:
+            Subscription: Exact-match subscription instance.
+        """
         normalized_agent_type = (
             agent_type if isinstance(agent_type, AgentType) else AgentType(agent_type)
         )
@@ -95,7 +104,16 @@ class Subscription:
         agent_type: AgentType | str,
         delivery_mode: DeliveryMode = DeliveryMode.STATEFUL,
     ) -> "Subscription":
-        """Create a subscription that matches topic types by prefix."""
+        """Create a subscription that matches topic types by prefix.
+
+        Args:
+            topic_prefix: Prefix used for `topic.type.startswith(...)` matching.
+            agent_type: Recipient agent type (string or typed wrapper).
+            delivery_mode: Delivery lifecycle behavior for matched routes.
+
+        Returns:
+            Subscription: Prefix-match subscription instance.
+        """
         normalized_agent_type = (
             agent_type if isinstance(agent_type, AgentType) else AgentType(agent_type)
         )
@@ -107,7 +125,17 @@ class Subscription:
         )
 
     def is_match(self, topic_id: TopicId) -> bool:
-        """Return whether this subscription matches a topic identifier."""
+        """Return whether this subscription matches a topic identifier.
+
+        Args:
+            topic_id: Topic identifier to evaluate against this subscription.
+
+        Returns:
+            bool: True when subscription matches the topic.
+
+        Raises:
+            ValueError: If subscription kind is unsupported.
+        """
         if self.kind == SubscriptionKind.TYPE_EXACT:
             return topic_id.type == self.topic_pattern
         if self.kind == SubscriptionKind.TYPE_PREFIX:
@@ -118,6 +146,12 @@ class Subscription:
         """Map a matching topic to a recipient using route-key affinity.
 
         The mapped key is `topic_id.source` (publicly treated as `route_key`).
+
+        Args:
+            topic_id: Matching topic id used to derive recipient key.
+
+        Returns:
+            AgentId: Recipient id resolved from subscription + topic route key.
         """
         return AgentId(type=self.agent_type, key=AgentKey(topic_id.source))
 

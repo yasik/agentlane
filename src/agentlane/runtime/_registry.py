@@ -31,23 +31,57 @@ class AgentRegistry:
         """Register a factory for a logical agent type.
 
         Factories must always accept the runtime engine capability.
+
+        Args:
+            agent_type: Logical type mapped to the factory.
+            factory: Sync or async factory that builds an agent bound to engine.
+
+        Returns:
+            None: Always returns after registry update.
         """
         with self._lock:
             self._factories[agent_type] = _normalize_factory(factory)
 
     def register_instance(self, agent_id: AgentId, instance: Agent) -> None:
-        """Register a concrete instance for an agent id."""
+        """Register a concrete instance for an agent id.
+
+        Args:
+            agent_id: Concrete runtime id for this instance.
+            instance: Agent instance to bind and cache.
+
+        Returns:
+            None: Always returns after registry update.
+        """
         bound_instance = _bind_agent_id(agent_id=agent_id, instance=instance)
         with self._lock:
             self._instances[agent_id] = bound_instance
 
     def has_instance(self, agent_id: AgentId) -> bool:
-        """Return whether an instance is active for the id."""
+        """Return whether an instance is active for the id.
+
+        Args:
+            agent_id: Agent id to check in the active instance map.
+
+        Returns:
+            bool: True when an instance is already cached for this id.
+        """
         with self._lock:
             return agent_id in self._instances
 
     async def get_or_create(self, agent_id: AgentId, *, engine: Engine) -> Agent:
-        """Return an existing instance or lazily create one from factory."""
+        """Return an existing instance or lazily create one from factory.
+
+        Args:
+            agent_id: Target agent id to resolve.
+            engine: Runtime engine capability passed into factory.
+
+        Returns:
+            Agent: Existing or newly created bound agent instance.
+
+        Raises:
+            LookupError: If no factory is registered for `agent_id.type`.
+            Exception: Propagates factory creation failures.
+        """
         with self._lock:
             existing_instance = self._instances.get(agent_id)
             if existing_instance is not None:
@@ -100,7 +134,17 @@ class AgentRegistry:
         return bound_instance
 
     def resolve_agent_id(self, agent_type: AgentType) -> AgentId:
-        """Resolve a target id for type-only addressing."""
+        """Resolve a target id for type-only addressing.
+
+        Args:
+            agent_type: Logical agent type requested by caller.
+
+        Returns:
+            AgentId: Resolved concrete id for delivery.
+
+        Raises:
+            LookupError: If multiple active ids exist for the same type.
+        """
         with self._lock:
             candidates = [
                 agent_id for agent_id in self._instances if agent_id.type == agent_type
@@ -117,13 +161,28 @@ class AgentRegistry:
 
 
 def _bind_agent_id(*, agent_id: AgentId, instance: Agent) -> Agent:
-    """Bind runtime-assigned id onto an agent instance and return Agent view."""
+    """Bind runtime-assigned id onto an agent instance and return Agent view.
+
+    Args:
+        agent_id: Runtime-assigned id to bind.
+        instance: Agent instance to bind.
+
+    Returns:
+        Agent: Same instance after binding.
+    """
     instance.bind_agent_id(agent_id)
     return instance
 
 
 def _normalize_factory(factory: AgentFactory) -> _ResolvedAgentFactory:
-    """Wrap sync/async user factory signatures into one async runtime contract."""
+    """Wrap sync/async user factory signatures into one async runtime contract.
+
+    Args:
+        factory: User factory returning `Agent` or `Awaitable[Agent]`.
+
+    Returns:
+        _ResolvedAgentFactory: Async-only wrapper used by registry internals.
+    """
 
     async def normalized(engine: Engine) -> Agent:
         created = factory(engine)

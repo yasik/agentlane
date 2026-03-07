@@ -27,12 +27,24 @@ class Dispatcher:
         registry: AgentRegistry,
         engine: Engine,
     ) -> None:
-        """Create dispatcher with registry and engine dependencies."""
+        """Create dispatcher with registry and engine dependencies.
+
+        Args:
+            registry: Agent registry used for instance lookup/creation.
+            engine: Runtime engine capability passed into created agents.
+        """
         self._registry = registry
         self._engine = engine
 
     async def dispatch(self, task: DeliveryTask) -> DeliveryOutcome:
-        """Dispatch one delivery task and return a structured outcome."""
+        """Dispatch one delivery task and return a structured outcome.
+
+        Args:
+            task: Delivery task containing envelope, recipient, and attempt metadata.
+
+        Returns:
+            DeliveryOutcome: Terminal dispatch outcome for this task.
+        """
         try:
             agent = await self._registry.get_or_create(
                 task.recipient,

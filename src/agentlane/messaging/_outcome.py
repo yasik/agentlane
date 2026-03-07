@@ -9,7 +9,11 @@ from ._identity import CorrelationId, MessageId
 
 
 def utc_now_ms() -> int:
-    """Return current UTC epoch milliseconds."""
+    """Return current UTC epoch milliseconds.
+
+    Returns:
+        int: Current UTC time in epoch milliseconds.
+    """
     return int(time() * 1000)
 
 
@@ -89,7 +93,17 @@ class DeliveryOutcome:
         response_payload: object | None,
         started_at_ms: int | None = None,
     ) -> Self:
-        """Create a successful delivery outcome."""
+        """Create a successful delivery outcome.
+
+        Args:
+            message_id: Envelope message id.
+            correlation_id: Optional correlation id for the causal chain.
+            response_payload: Optional handler response payload.
+            started_at_ms: Optional dispatch start timestamp override.
+
+        Returns:
+            Self: Successful delivery outcome.
+        """
         started = started_at_ms if started_at_ms is not None else utc_now_ms()
         return cls(
             status=DeliveryStatus.DELIVERED,
@@ -112,7 +126,19 @@ class DeliveryOutcome:
         retryable: bool,
         started_at_ms: int | None = None,
     ) -> Self:
-        """Create a failed delivery outcome."""
+        """Create a failed delivery outcome.
+
+        Args:
+            status: Failure status code.
+            message_id: Envelope message id.
+            correlation_id: Optional correlation id for the causal chain.
+            message: Human-readable error detail.
+            retryable: Whether caller can safely retry this delivery.
+            started_at_ms: Optional dispatch start timestamp override.
+
+        Returns:
+            Self: Failed delivery outcome.
+        """
         started = started_at_ms if started_at_ms is not None else utc_now_ms()
         return cls(
             status=status,

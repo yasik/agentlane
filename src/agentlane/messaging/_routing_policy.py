@@ -16,7 +16,17 @@ class RoutingPolicy(Protocol):
     """Routing policy contract."""
 
     def resolve_rpc_recipient(self, envelope: MessageEnvelope) -> AgentId:
-        """Resolve exactly one RPC recipient."""
+        """Resolve exactly one RPC recipient.
+
+        Args:
+            envelope: RPC envelope requiring one recipient.
+
+        Returns:
+            AgentId: Resolved RPC recipient id.
+
+        Raises:
+            LookupError: If recipient cannot be resolved.
+        """
         ...
 
     def resolve_publish_routes(
@@ -24,7 +34,18 @@ class RoutingPolicy(Protocol):
         envelope: MessageEnvelope,
         subscriptions: Sequence[Subscription],
     ) -> list[PublishRoute]:
-        """Resolve zero or more publish routes."""
+        """Resolve zero or more publish routes.
+
+        Args:
+            envelope: Publish envelope requiring fan-out routing.
+            subscriptions: Active subscriptions to match against.
+
+        Returns:
+            list[PublishRoute]: Resolved and deduplicated publish routes.
+
+        Raises:
+            LookupError: If publish routing cannot proceed due to missing topic data.
+        """
         ...
 
 
@@ -32,7 +53,17 @@ class SourceKeyAffinityRoutingPolicy:
     """Compatibility policy preserving topic.source to agent key mapping."""
 
     def resolve_rpc_recipient(self, envelope: MessageEnvelope) -> AgentId:
-        """Resolve RPC recipient from envelope."""
+        """Resolve RPC recipient from envelope.
+
+        Args:
+            envelope: RPC envelope requiring one recipient.
+
+        Returns:
+            AgentId: Recipient from envelope.
+
+        Raises:
+            LookupError: If envelope recipient is missing.
+        """
         if envelope.recipient is None:
             raise LookupError("RPC recipient is missing.")
         return envelope.recipient
@@ -42,7 +73,18 @@ class SourceKeyAffinityRoutingPolicy:
         envelope: MessageEnvelope,
         subscriptions: Sequence[Subscription],
     ) -> list[PublishRoute]:
-        """Resolve publish routes deterministically."""
+        """Resolve publish routes deterministically.
+
+        Args:
+            envelope: Publish envelope used for topic matching.
+            subscriptions: Active subscriptions to evaluate.
+
+        Returns:
+            list[PublishRoute]: Stable ordered publish routes.
+
+        Raises:
+            LookupError: If envelope topic is missing.
+        """
         if envelope.topic is None:
             raise LookupError("Publish topic is missing.")
 

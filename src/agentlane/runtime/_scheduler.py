@@ -16,7 +16,11 @@ class PerAgentMailboxScheduler:
     """Per-agent mailbox scheduler with in-order delivery and fair round-robin dispatch."""
 
     def __init__(self, *, mailbox_capacity: int = 2048) -> None:
-        """Initialize scheduler structures."""
+        """Initialize scheduler structures.
+
+        Args:
+            mailbox_capacity: Max queued tasks allowed per recipient mailbox.
+        """
         # One FIFO mailbox per recipient preserves per-agent ordering.
         self._mailboxes: dict[AgentId, deque[DeliveryTask]] = defaultdict(deque)
         # Round-robin queue of recipients that currently have pending work.
@@ -33,7 +37,17 @@ class PerAgentMailboxScheduler:
         self._mailbox_capacity = mailbox_capacity
 
     async def enqueue(self, task: DeliveryTask) -> None:
-        """Enqueue a delivery task according to mailbox policy."""
+        """Enqueue a delivery task according to mailbox policy.
+
+        Args:
+            task: Delivery task to enqueue.
+
+        Returns:
+            None: Always returns after scheduler state update.
+
+        Raises:
+            SchedulerRejectedError: If recipient mailbox is at capacity.
+        """
         async with self._condition:
             mailbox = self._mailboxes[task.recipient]
             if len(mailbox) >= self._mailbox_capacity:
@@ -58,7 +72,11 @@ class PerAgentMailboxScheduler:
             self._condition.notify_all()
 
     async def pop_next(self) -> DeliveryTask:
-        """Pop the next task to dispatch using fair round-robin across mailboxes."""
+        """Pop the next task to dispatch using fair round-robin across mailboxes.
+
+        Returns:
+            DeliveryTask: Next schedulable task.
+        """
         async with self._condition:
             while not self._ready_queue:
                 await self._condition.wait()
@@ -77,7 +95,14 @@ class PerAgentMailboxScheduler:
             return task
 
     async def mark_done(self, recipient: AgentId) -> None:
-        """Mark one previously enqueued task as completed for a recipient."""
+        """Mark one previously enqueued task as completed for a recipient.
+
+        Args:
+            recipient: Recipient whose currently active task completed.
+
+        Returns:
+            None: Always returns after scheduler accounting updates.
+        """
         async with self._condition:
             self._active_recipients.discard(recipient)
             self._pending_task_count -= 1
@@ -98,13 +123,21 @@ class PerAgentMailboxScheduler:
                 self._condition.notify_all()
 
     async def wait_idle(self) -> None:
-        """Block until all queued tasks are completed."""
+        """Block until all queued tasks are completed.
+
+        Returns:
+            None: Returns only when pending task count reaches zero.
+        """
         async with self._condition:
             while self._pending_task_count > 0:
                 await self._condition.wait()
 
     async def drain(self) -> list[DeliveryTask]:
-        """Remove and return all queued tasks without dispatching them."""
+        """Remove and return all queued tasks without dispatching them.
+
+        Returns:
+            list[DeliveryTask]: Tasks removed from queue and not dispatched.
+        """
         async with self._condition:
             drained: list[DeliveryTask] = []
             for mailbox in self._mailboxes.values():

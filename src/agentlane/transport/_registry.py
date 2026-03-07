@@ -49,7 +49,11 @@ class SerializerRegistry:
     """
 
     def __init__(self, *, auto_register_defaults: bool = True) -> None:
-        """Initialize serializer mappings and runtime behavior flags."""
+        """Initialize serializer mappings and runtime behavior flags.
+
+        Args:
+            auto_register_defaults: Enables default serializer inference on demand.
+        """
         # All mapping mutations/read-modify-writes flow through this lock.
         self._lock = RLock()
         self._serializers: SerializerTable = {}
@@ -61,7 +65,18 @@ class SerializerRegistry:
         *,
         replace: bool = False,
     ) -> None:
-        """Register a serializer for its `(schema_id, content_type)` key."""
+        """Register a serializer for its `(schema_id, content_type)` key.
+
+        Args:
+            serializer: Serializer instance to register.
+            replace: Whether to replace an existing serializer at same key.
+
+        Returns:
+            None: Always returns after successful registration.
+
+        Raises:
+            SerializerConflictError: If key exists and `replace=False`.
+        """
         key = (serializer.schema_id, serializer.content_type)
         with self._lock:
             existing = self._serializers.get(key)
@@ -78,7 +93,15 @@ class SerializerRegistry:
         *,
         replace: bool = False,
     ) -> None:
-        """Register multiple serializers."""
+        """Register multiple serializers.
+
+        Args:
+            serializers: Sequence of serializers to register.
+            replace: Whether to replace existing serializers on key conflict.
+
+        Returns:
+            None: Always returns after processing all serializers.
+        """
         for serializer in serializers:
             self.register(serializer, replace=replace)
 
@@ -90,7 +113,21 @@ class SerializerRegistry:
         content_type: ContentType | str | None = None,
         replace: bool = False,
     ) -> MessageSerializer:
-        """Register one model type using default serializer selection rules."""
+        """Register one model type using default serializer selection rules.
+
+        Args:
+            python_type: Python runtime type to register.
+            schema_id: Optional explicit schema id override.
+            content_type: Optional explicit content type override.
+            replace: Whether to replace existing serializer on conflict.
+
+        Returns:
+            MessageSerializer: Registered serializer instance.
+
+        Raises:
+            TypeError: If no default serializer exists for provided type.
+            SerializerConflictError: If key exists and `replace=False`.
+        """
         resolved_schema_id = (
             coerce_schema_id(schema_id)
             if schema_id is not None
@@ -121,7 +158,18 @@ class SerializerRegistry:
         schema_id: SchemaId | str,
         content_type: ContentType | str,
     ) -> None:
-        """Remove one serializer entry by key."""
+        """Remove one serializer entry by key.
+
+        Args:
+            schema_id: Schema id key to remove.
+            content_type: Content type key to remove.
+
+        Returns:
+            None: Always returns after removal.
+
+        Raises:
+            UnknownSerializerError: If key does not exist.
+        """
         normalized_schema_id = coerce_schema_id(schema_id)
         normalized_content_type = coerce_content_type(content_type)
         with self._lock:
@@ -139,7 +187,15 @@ class SerializerRegistry:
         schema_id: SchemaId | str,
         content_type: ContentType | str,
     ) -> bool:
-        """Return whether a serializer exists for key."""
+        """Return whether a serializer exists for key.
+
+        Args:
+            schema_id: Schema id key to test.
+            content_type: Content type key to test.
+
+        Returns:
+            bool: True when a serializer is registered for the key.
+        """
         normalized_schema_id = coerce_schema_id(schema_id)
         normalized_content_type = coerce_content_type(content_type)
         with self._lock:
@@ -152,7 +208,20 @@ class SerializerRegistry:
         schema_id: SchemaId | str,
         content_type: ContentType | str,
     ) -> WirePayload:
-        """Encode object value into a wire payload."""
+        """Encode object value into a wire payload.
+
+        Args:
+            value: Runtime value to encode.
+            schema_id: Serializer schema id key.
+            content_type: Serializer content type key.
+
+        Returns:
+            WirePayload: Transport payload bytes and metadata.
+
+        Raises:
+            UnknownSerializerError: If serializer key cannot be resolved.
+            SerializerEncodeError: If serializer raises during encode.
+        """
         normalized_schema_id = coerce_schema_id(schema_id)
         normalized_content_type = coerce_content_type(content_type)
         serializer = self._resolve_serializer_for_encode(
@@ -183,7 +252,18 @@ class SerializerRegistry:
         )
 
     def decode(self, wire_payload: WirePayload) -> object:
-        """Decode a wire payload."""
+        """Decode a wire payload.
+
+        Args:
+            wire_payload: Transport payload bytes and metadata.
+
+        Returns:
+            object: Decoded python value.
+
+        Raises:
+            UnknownSerializerError: If serializer key cannot be resolved.
+            SerializerDecodeError: If serializer raises during decode.
+        """
         serializer = self._resolve_serializer_for_decode(
             schema_id=wire_payload.schema_id,
             content_type=wire_payload.content_type,
@@ -205,7 +285,11 @@ class SerializerRegistry:
 
     @property
     def serializers(self) -> tuple[MessageSerializer, ...]:
-        """Return immutable snapshot of registered serializers."""
+        """Return immutable snapshot of registered serializers.
+
+        Returns:
+            tuple[MessageSerializer, ...]: Registered serializer snapshot.
+        """
         with self._lock:
             return tuple(self._serializers.values())
 
@@ -290,29 +374,61 @@ class SerializerRegistry:
 
 
 def create_default_serializer_registry() -> SerializerRegistry:
-    """Create runtime default serializer registry instance."""
+    """Create runtime default serializer registry instance.
+
+    Returns:
+        SerializerRegistry: Registry configured with default auto-inference.
+    """
     return SerializerRegistry(auto_register_defaults=True)
 
 
 def infer_schema_id_for_value(value: object) -> SchemaId:
-    """Infer globally namespaced schema id from payload value."""
+    """Infer globally namespaced schema id from payload value.
+
+    Args:
+        value: Runtime payload value.
+
+    Returns:
+        SchemaId: Globally namespaced schema id.
+    """
     return infer_schema_id_for_type(type(value))
 
 
 def infer_schema_id_for_type(python_type: type[object]) -> SchemaId:
-    """Infer globally namespaced schema id from Python type."""
+    """Infer globally namespaced schema id from Python type.
+
+    Args:
+        python_type: Python runtime type.
+
+    Returns:
+        SchemaId: Globally namespaced schema id.
+    """
     raw_value = f"{python_type.__module__}.{python_type.__qualname__}"
     normalized_value = _normalize_schema_value(raw_value)
     return SchemaId(normalized_value)
 
 
 def infer_content_type_for_value(value: object) -> ContentType:
-    """Infer default content type from payload value."""
+    """Infer default content type from payload value.
+
+    Args:
+        value: Runtime payload value.
+
+    Returns:
+        ContentType: Default content type for payload.
+    """
     return infer_content_type_for_type(type(value))
 
 
 def infer_content_type_for_type(python_type: type[object]) -> ContentType:
-    """Infer default content type from Python type."""
+    """Infer default content type from Python type.
+
+    Args:
+        python_type: Python runtime type.
+
+    Returns:
+        ContentType: Default content type for type.
+    """
     if _is_protobuf_type(python_type):
         return PROTOBUF_CONTENT_TYPE
     if python_type in (bytes, bytearray, memoryview):

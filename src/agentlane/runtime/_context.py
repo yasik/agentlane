@@ -40,6 +40,17 @@ async def runtime_scope(
         ) as runtime:
             assert isinstance(runtime, SingleThreadedRuntimeEngine)
         ```
+
+    Args:
+        runtime: Optional pre-created runtime instance.
+        expected_type: Optional runtime class constraint validated on entry.
+        runtime_factory: Runtime class used when `runtime` is None.
+
+    Returns:
+        AsyncIterator[RuntimeEngine]: Async context yielding a running runtime.
+
+    Raises:
+        ValueError: If `runtime` is provided and does not match `expected_type`.
     """
     if runtime is None:
         runtime = runtime_factory()
@@ -78,7 +89,7 @@ async def single_threaded_runtime(
 
     Example:
         ```python
-        from agentlane.agents import on_message
+        from agentlane.runtime import on_message
         from agentlane.messaging import AgentId, MessageContext
         from agentlane.runtime import single_threaded_runtime
 
@@ -96,6 +107,15 @@ async def single_threaded_runtime(
             )
             assert outcome.status.value == "delivered"
         ```
+
+    Args:
+        runtime: Optional runtime instance to scope. If None, creates one.
+
+    Returns:
+        AsyncIterator[RuntimeEngine]: Async context yielding single-threaded runtime.
+
+    Raises:
+        ValueError: If provided runtime is not `SingleThreadedRuntimeEngine`.
     """
     async with runtime_scope(
         runtime,
@@ -123,6 +143,15 @@ async def distributed_runtime(
             # Message delivery is added when distributed submit is implemented.
             assert isinstance(runtime, DistributedRuntimeEngine)
         ```
+
+    Args:
+        runtime: Optional runtime instance to scope. If None, creates one.
+
+    Returns:
+        AsyncIterator[RuntimeEngine]: Async context yielding distributed runtime.
+
+    Raises:
+        ValueError: If provided runtime is not `DistributedRuntimeEngine`.
     """
     async with runtime_scope(
         runtime,

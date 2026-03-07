@@ -15,7 +15,11 @@ from ._identity import (
 
 
 def utc_now_ms() -> int:
-    """Return current UTC epoch milliseconds."""
+    """Return current UTC epoch milliseconds.
+
+    Returns:
+        int: Current UTC time in epoch milliseconds.
+    """
     return int(time() * 1000)
 
 
@@ -101,7 +105,20 @@ class MessageEnvelope:
         trace_id: str | None = None,
         idempotency_key: IdempotencyKey | None = None,
     ) -> Self:
-        """Create a normalized RPC request envelope."""
+        """Create a normalized RPC request envelope.
+
+        Args:
+            sender: Optional sender identity.
+            recipient: Direct RPC recipient identity.
+            payload: Canonical payload container.
+            correlation_id: Optional causal chain id.
+            deadline_ms: Optional absolute deadline in epoch milliseconds.
+            trace_id: Optional tracing id.
+            idempotency_key: Optional deduplication key.
+
+        Returns:
+            Self: New RPC request envelope instance.
+        """
         return cls(
             message_id=MessageId.new(),
             correlation_id=correlation_id,
@@ -128,7 +145,20 @@ class MessageEnvelope:
         trace_id: str | None = None,
         idempotency_key: IdempotencyKey | None = None,
     ) -> Self:
-        """Create a normalized publish event envelope."""
+        """Create a normalized publish event envelope.
+
+        Args:
+            sender: Optional sender identity.
+            topic: Publish topic identity.
+            payload: Canonical payload container.
+            correlation_id: Optional causal chain id.
+            deadline_ms: Optional absolute deadline in epoch milliseconds.
+            trace_id: Optional tracing id.
+            idempotency_key: Optional deduplication key.
+
+        Returns:
+            Self: New publish event envelope instance.
+        """
         return cls(
             message_id=MessageId.new(),
             correlation_id=correlation_id,
