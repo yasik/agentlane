@@ -27,6 +27,15 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 
+[project.urls]
+Repository = "https://github.com/yasik/agentlane-py"
+
+[tool.mypy]
+strict = true
+disallow_incomplete_defs = false
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+
 [tool.uv.workspace]
 members = ["packages/*"]
 
