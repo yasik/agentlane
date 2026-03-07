@@ -10,6 +10,7 @@ dependencies = [
   "typing-extensions>=4.12.0",
   "agentlane-transport",
   "agentlane-cli",
+  "types-protobuf>=6.32.1.20260221",
 ]
 classifiers = [
     "Typing :: Typed",
@@ -43,6 +44,7 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
+  "mypy",
   "black==26.1.0",
   "isort==7.0.0",
   "pytest>=8.2",
