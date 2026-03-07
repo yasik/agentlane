@@ -1,9 +1,9 @@
 """Agent protocol and message-handler markers used by runtime dispatch."""
 
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
-from agentlane.messaging import MessageContext
+from agentlane.messaging import AgentId, MessageContext
 
 _ON_MESSAGE_ATTR = "__agentlane_on_message__"
 
@@ -29,5 +29,15 @@ def is_on_message_handler(candidate: object) -> bool:
     return bool(getattr(function, _ON_MESSAGE_ATTR, False))
 
 
+@runtime_checkable
 class Agent(Protocol):
-    """Marker protocol for runtime-managed agent instances."""
+    """Protocol for runtime-managed agent instances."""
+
+    @property
+    def id(self) -> AgentId:
+        """Runtime-assigned agent identity for this instance."""
+        ...
+
+    def bind_agent_id(self, agent_id: AgentId) -> None:
+        """Bind runtime-assigned agent identity onto this instance."""
+        ...

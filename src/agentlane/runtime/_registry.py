@@ -1,9 +1,9 @@
 """Agent factory and instance registry."""
 
-import inspect
 from asyncio import Future, get_running_loop
 from collections.abc import Awaitable, Callable
 from threading import RLock
+from typing import cast
 
 from agentlane.messaging import AgentId, AgentKey, AgentType
 
@@ -13,6 +13,9 @@ from ._protocol import Agent
 type AgentFactory = Callable[[Engine], Agent | Awaitable[Agent]]
 """Factory signature for creating one agent bound to an engine."""
 
+type _ResolvedAgentFactory = Callable[[Engine], Awaitable[Agent]]
+"""Internal async-normalized factory signature."""
+
 
 class AgentRegistry:
     """Maps agent types to factories and caches live instances by AgentId."""
@@ -20,7 +23,7 @@ class AgentRegistry:
     def __init__(self) -> None:
         """Initialize empty registry state."""
         self._lock = RLock()
-        self._factories: dict[AgentType, AgentFactory] = {}
+        self._factories: dict[AgentType, _ResolvedAgentFactory] = {}
         self._instances: dict[AgentId, Agent] = {}
         self._creation_futures: dict[AgentId, Future[Agent]] = {}
 
@@ -30,12 +33,13 @@ class AgentRegistry:
         Factories must always accept the runtime engine capability.
         """
         with self._lock:
-            self._factories[agent_type] = factory
+            self._factories[agent_type] = _normalize_factory(factory)
 
     def register_instance(self, agent_id: AgentId, instance: Agent) -> None:
         """Register a concrete instance for an agent id."""
+        bound_instance = _bind_agent_id(agent_id=agent_id, instance=instance)
         with self._lock:
-            self._instances[agent_id] = instance
+            self._instances[agent_id] = bound_instance
 
     def has_instance(self, agent_id: AgentId) -> bool:
         """Return whether an instance is active for the id."""
@@ -72,11 +76,12 @@ class AgentRegistry:
 
         try:
             # Run factory outside lock to avoid blocking unrelated registry operations.
-            instance_or_awaitable = factory(engine)
-            if inspect.isawaitable(instance_or_awaitable):
-                created_instance = await instance_or_awaitable
-            else:
-                created_instance = instance_or_awaitable
+            created_instance = await factory(engine)
+
+            bound_instance = _bind_agent_id(
+                agent_id=agent_id,
+                instance=created_instance,
+            )
         except Exception as exc:
             with self._lock:
                 # Publish the same exception to all waiters and clear in-flight state.
@@ -86,13 +91,13 @@ class AgentRegistry:
             raise exc
 
         with self._lock:
-            self._instances[agent_id] = created_instance
+            self._instances[agent_id] = bound_instance
             # Wake up all joiners with the single created instance.
             pending_future = self._creation_futures.pop(agent_id, None)
             if pending_future is not None and not pending_future.done():
-                pending_future.set_result(created_instance)
+                pending_future.set_result(bound_instance)
 
-        return created_instance
+        return bound_instance
 
     def resolve_agent_id(self, agent_type: AgentType) -> AgentId:
         """Resolve a target id for type-only addressing."""
@@ -109,3 +114,21 @@ class AgentRegistry:
             f"Ambiguous keyless target for agent type '{agent_type.value}'. "
             f"Active keys: {[candidate.key.value for candidate in candidates]}"
         )
+
+
+def _bind_agent_id(*, agent_id: AgentId, instance: Agent) -> Agent:
+    """Bind runtime-assigned id onto an agent instance and return Agent view."""
+    instance.bind_agent_id(agent_id)
+    return instance
+
+
+def _normalize_factory(factory: AgentFactory) -> _ResolvedAgentFactory:
+    """Wrap sync/async user factory signatures into one async runtime contract."""
+
+    async def normalized(engine: Engine) -> Agent:
+        created = factory(engine)
+        if isinstance(created, Awaitable):
+            return await cast(Awaitable[Agent], created)
+        return cast(Agent, created)
+
+    return normalized

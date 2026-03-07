@@ -24,6 +24,18 @@ from agentlane.runtime import (
 
 
 class _EchoAgent:
+    def __init__(self) -> None:
+        self._id: AgentId | None = AgentId.from_values("echo", "e1")
+
+    @property
+    def id(self) -> AgentId:
+        if self._id is None:
+            raise RuntimeError("Agent id was not bound by runtime.")
+        return self._id
+
+    def bind_agent_id(self, agent_id: AgentId) -> None:
+        self._id = agent_id
+
     @on_message
     async def process(self, payload: object, context: MessageContext) -> object:
         _ = context
@@ -116,25 +128,24 @@ class _BaseAgentUnderTest(BaseAgent):
         return None
 
 
-def test_base_agent_forwards_explicit_messaging_metadata() -> None:
+def test_base_agent_uses_bound_id_as_sender() -> None:
     async def scenario() -> None:
         engine = _StubEngine()
         agent = _BaseAgentUnderTest(engine)
-        sender = AgentId.from_values("runner", "r1")
+        agent_id = AgentId.from_values("runner", "r1")
+        agent.bind_agent_id(agent_id)
         correlation_id = CorrelationId.new()
         cancellation_token = CancellationToken()
 
         await agent.send_message(
             "work",
             recipient="worker",
-            sender=sender,
             correlation_id=correlation_id,
             cancellation_token=cancellation_token,
         )
         await agent.publish_message(
             "event",
             topic=TopicId.from_values(type_value="updates", route_key="rk"),
-            sender=sender,
             correlation_id=correlation_id,
             cancellation_token=cancellation_token,
         )
@@ -142,10 +153,10 @@ def test_base_agent_forwards_explicit_messaging_metadata() -> None:
         if engine.last_send is None or engine.last_publish is None:
             raise AssertionError("Expected engine captures for send and publish.")
 
-        assert engine.last_send.sender == sender
+        assert engine.last_send.sender == agent_id
         assert engine.last_send.correlation_id == correlation_id
         assert engine.last_send.cancellation_token is cancellation_token
-        assert engine.last_publish.sender == sender
+        assert engine.last_publish.sender == agent_id
         assert engine.last_publish.correlation_id == correlation_id
         assert engine.last_publish.cancellation_token is cancellation_token
 

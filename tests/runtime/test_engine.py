@@ -24,8 +24,23 @@ from agentlane.runtime import (
 )
 
 
-class CounterAgent:
+class _ProtocolAgentMixin:
     def __init__(self) -> None:
+        self._id: AgentId | None = None
+
+    @property
+    def id(self) -> AgentId:
+        if self._id is None:
+            raise RuntimeError("Agent id was not bound by runtime.")
+        return self._id
+
+    def bind_agent_id(self, agent_id: AgentId) -> None:
+        self._id = agent_id
+
+
+class CounterAgent(_ProtocolAgentMixin):
+    def __init__(self) -> None:
+        super().__init__()
         self.calls: list[object] = []
 
     @on_message
@@ -45,7 +60,7 @@ class PongMessage:
         self.value = value
 
 
-class MultiHandlerAgent:
+class MultiHandlerAgent(_ProtocolAgentMixin):
     @on_message
     async def handle_ping(
         self, payload: PingMessage, context: MessageContext
@@ -72,7 +87,6 @@ class RelayAgent(BaseAgent):
         outcome = await self.send_message(
             payload.upper(),
             recipient=AgentId.from_values("sink", "s1"),
-            sender=context.recipient,
             correlation_id=context.correlation_id,
         )
         if outcome.status != DeliveryStatus.DELIVERED:
@@ -86,7 +100,6 @@ class PublisherAgent(BaseAgent):
         await self.publish_message(
             {"event": payload},
             topic=TopicId.from_values(type_value="updates", route_key="rk"),
-            sender=context.recipient,
             correlation_id=context.correlation_id,
         )
         return "published"
@@ -156,7 +169,7 @@ def test_publish_returns_enqueue_ack_only() -> None:
         runtime = SingleThreadedRuntimeEngine()
         received: list[object] = []
 
-        class Listener:
+        class Listener(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload: dict, context: MessageContext) -> object:
                 _ = context
@@ -188,7 +201,7 @@ def test_base_agent_can_send_message_with_runtime_capability() -> None:
         observed_senders: list[AgentId | None] = []
         observed_correlations: list[CorrelationId | None] = []
 
-        class SinkAgent:
+        class SinkAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload: str, context: MessageContext) -> object:
                 observed_senders.append(context.sender)
@@ -222,7 +235,7 @@ def test_base_agent_can_publish_message_with_runtime_capability() -> None:
         observed_senders: list[AgentId | None] = []
         observed_correlations: list[CorrelationId | None] = []
 
-        class ListenerAgent:
+        class ListenerAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload: dict, context: MessageContext) -> object:
                 received.append(payload)
@@ -276,7 +289,7 @@ def test_stop_cancels_inflight_and_queued_deliveries() -> None:
         runtime = SingleThreadedRuntimeEngine()
         first_started = asyncio.Event()
 
-        class BlockingAgent:
+        class BlockingAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload: str, context: MessageContext) -> object:
                 _ = payload
@@ -334,7 +347,7 @@ def test_runtime_fails_when_agent_has_no_on_message_handler() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
 
-        class NoHandlerAgent:
+        class NoHandlerAgent(_ProtocolAgentMixin):
             async def handle(self, payload: str, context: MessageContext) -> object:
                 _ = context
                 return payload
@@ -357,7 +370,7 @@ def test_runtime_fails_when_on_message_handler_missing_context() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
 
-        class MissingContextAgent:
+        class MissingContextAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload: str) -> object:
                 return payload
@@ -382,7 +395,7 @@ def test_runtime_fails_when_on_message_handler_has_wrong_arity() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
 
-        class WrongArityAgent:
+        class WrongArityAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(
                 self,
@@ -412,7 +425,7 @@ def test_runtime_fails_when_on_message_handler_missing_payload_annotation() -> N
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
 
-        class MissingPayloadAnnotationAgent:
+        class MissingPayloadAnnotationAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload, context: MessageContext) -> object:
                 _ = payload
@@ -444,7 +457,7 @@ def test_runtime_fails_when_on_message_handler_payload_annotation_not_concrete()
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
 
-        class NonConcretePayloadTypeAgent:
+        class NonConcretePayloadTypeAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(
                 self,
@@ -476,7 +489,7 @@ def test_runtime_fails_when_on_message_handlers_are_ambiguous() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
 
-        class AmbiguousHandlersAgent:
+        class AmbiguousHandlersAgent(_ProtocolAgentMixin):
             @on_message
             async def handle_a(self, payload: str, context: MessageContext) -> object:
                 _ = context
@@ -509,7 +522,7 @@ def test_runtime_fails_when_on_message_handler_is_not_async() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
 
-        class SyncHandlerAgent:
+        class SyncHandlerAgent(_ProtocolAgentMixin):
             def _sync_handle(self, payload: str, context: MessageContext) -> object:
                 _ = context
                 return payload
@@ -537,7 +550,7 @@ def test_different_agent_ids_can_process_concurrently() -> None:
         second_started = asyncio.Event()
         release = asyncio.Event()
 
-        class ParallelAgent:
+        class ParallelAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload: str, context: MessageContext) -> object:
                 _ = context
@@ -638,7 +651,7 @@ def test_single_threaded_runtime_context_stops_immediately_on_exception() -> Non
         runtime = SingleThreadedRuntimeEngine()
         first_started = asyncio.Event()
 
-        class BlockingAgent:
+        class BlockingAgent(_ProtocolAgentMixin):
             @on_message
             async def handle(self, payload: str, context: MessageContext) -> object:
                 _ = payload
@@ -731,8 +744,9 @@ def test_publish_stateful_reuses_instance_for_same_route_key() -> None:
         runtime = SingleThreadedRuntimeEngine()
         observed_counts: list[int] = []
 
-        class StatefulListener:
+        class StatefulListener(_ProtocolAgentMixin):
             def __init__(self) -> None:
+                super().__init__()
                 self.count = 0
 
             @on_message
@@ -770,8 +784,9 @@ def test_publish_stateless_creates_transient_instance_per_delivery() -> None:
         runtime = SingleThreadedRuntimeEngine()
         observed_counts: list[int] = []
 
-        class StatelessListener:
+        class StatelessListener(_ProtocolAgentMixin):
             def __init__(self) -> None:
+                super().__init__()
                 self.count = 0
 
             @on_message
