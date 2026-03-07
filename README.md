@@ -1,13 +1,11 @@
 # AgentLane
 
-<p align="center">
 AgentLane is an event-based runtime and messaging framework for AI agents.
 
 It is intentionally unopinionated: AgentLane does not dictate how you build
 agent intelligence. You can plug in OpenAI Agents SDK, Claude-based agents, or
 your own LLM loops and provider clients. AgentLane provides the rails those
 agents run on and communicate through.
-</p>
 
 ![agentlane](https://ossfiles-6842.s3.us-west-2.amazonaws.com/agentlane-gh-banner-1280x640.png)
 
