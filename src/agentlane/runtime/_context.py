@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from ._engine import (
+from ._runtime import (
     DistributedRuntimeEngine,
     RuntimeEngine,
     SingleThreadedRuntimeEngine,

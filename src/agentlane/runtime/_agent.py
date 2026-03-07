@@ -10,7 +10,6 @@ from agentlane.messaging import (
     PublishAck,
     TopicId,
 )
-
 from ._engine import Engine
 
 
