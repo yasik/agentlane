@@ -3,11 +3,13 @@ from typing import Any, cast
 
 import pytest
 
-from agentlane.agents import on_message
+from agentlane.agents import BaseAgent, on_message
 from agentlane.messaging import (
     AgentId,
     AgentType,
+    CorrelationId,
     DeliveryMode,
+    DeliveryOutcome,
     DeliveryStatus,
     MessageContext,
     TopicId,
@@ -63,6 +65,32 @@ class MultiHandlerAgent:
         return f"int:{payload}"
 
 
+class RelayAgent(BaseAgent):
+    @on_message
+    async def handle(self, payload: str, context: MessageContext) -> object:
+        outcome = await self.send_message(
+            payload.upper(),
+            recipient=AgentId.from_values("sink", "s1"),
+            sender=context.recipient,
+            correlation_id=context.correlation_id,
+        )
+        if outcome.status != DeliveryStatus.DELIVERED:
+            return outcome.status.value
+        return cast(object, outcome.response_payload)
+
+
+class PublisherAgent(BaseAgent):
+    @on_message
+    async def handle(self, payload: str, context: MessageContext) -> object:
+        await self.publish_message(
+            {"event": payload},
+            topic=TopicId.from_values(type_value="updates", route_key="rk"),
+            sender=context.recipient,
+            correlation_id=context.correlation_id,
+        )
+        return "published"
+
+
 def test_runtime_reuses_registered_instance_by_agent_id() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
@@ -86,11 +114,17 @@ def test_runtime_reuses_registered_instance_by_agent_id() -> None:
 def test_runtime_creates_isolated_instances_for_unique_keys() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
-        runtime.register_factory("counter", CounterAgent)
+        runtime.register_factory("counter", lambda _engine: CounterAgent())
 
-        one = await runtime.send_message("first", recipient="counter", key="k1")
-        two = await runtime.send_message("second", recipient="counter", key="k1")
-        three = await runtime.send_message("third", recipient="counter", key="k2")
+        one = await runtime.send_message(
+            "first", recipient=AgentId.from_values("counter", "k1")
+        )
+        two = await runtime.send_message(
+            "second", recipient=AgentId.from_values("counter", "k1")
+        )
+        three = await runtime.send_message(
+            "third", recipient=AgentId.from_values("counter", "k2")
+        )
 
         await runtime.stop_when_idle()
 
@@ -128,7 +162,7 @@ def test_publish_returns_enqueue_ack_only() -> None:
                 received.append(payload)
                 return None
 
-        runtime.register_factory(AgentType("listener"), Listener)
+        runtime.register_factory(AgentType("listener"), lambda _engine: Listener())
         runtime.subscribe_exact(
             topic_type="alerts",
             agent_type=AgentType("listener"),
@@ -146,10 +180,80 @@ def test_publish_returns_enqueue_ack_only() -> None:
     asyncio.run(scenario())
 
 
+def test_base_agent_can_send_message_with_runtime_capability() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        relay_id = AgentId.from_values("relay", "r1")
+        observed_senders: list[AgentId | None] = []
+        observed_correlations: list[CorrelationId | None] = []
+
+        class SinkAgent:
+            @on_message
+            async def handle(self, payload: str, context: MessageContext) -> object:
+                observed_senders.append(context.sender)
+                observed_correlations.append(context.correlation_id)
+                return f"sink:{payload}"
+
+        runtime.register_factory("relay", RelayAgent)
+        runtime.register_factory("sink", lambda _engine: SinkAgent())
+
+        correlation_id = CorrelationId.new()
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=relay_id,
+            correlation_id=correlation_id,
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.DELIVERED
+        assert outcome.response_payload == "sink:PING"
+        assert observed_senders == [relay_id]
+        assert observed_correlations == [correlation_id]
+
+    asyncio.run(scenario())
+
+
+def test_base_agent_can_publish_message_with_runtime_capability() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        publisher_id = AgentId.from_values("publisher", "p1")
+        received: list[dict[str, object]] = []
+        observed_senders: list[AgentId | None] = []
+        observed_correlations: list[CorrelationId | None] = []
+
+        class ListenerAgent:
+            @on_message
+            async def handle(self, payload: dict, context: MessageContext) -> object:
+                received.append(payload)
+                observed_senders.append(context.sender)
+                observed_correlations.append(context.correlation_id)
+                return None
+
+        runtime.register_factory("publisher", PublisherAgent)
+        runtime.register_factory("listener", lambda _engine: ListenerAgent())
+        runtime.subscribe_exact(topic_type="updates", agent_type="listener")
+
+        correlation_id = CorrelationId.new()
+        outcome = await runtime.send_message(
+            "ready",
+            recipient=publisher_id,
+            correlation_id=correlation_id,
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.DELIVERED
+        assert outcome.response_payload == "published"
+        assert received == [{"event": "ready"}]
+        assert observed_senders == [publisher_id]
+        assert observed_correlations == [correlation_id]
+
+    asyncio.run(scenario())
+
+
 def test_per_agent_ordering_for_stateful_handler() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
-        runtime.register_factory("ordered", CounterAgent)
+        runtime.register_factory("ordered", lambda _engine: CounterAgent())
         recipient = AgentId.from_values("ordered", "k")
 
         first, second, third = await asyncio.gather(
@@ -175,13 +279,13 @@ def test_stop_cancels_inflight_and_queued_deliveries() -> None:
             @on_message
             async def handle(self, payload: str, context: MessageContext) -> object:
                 _ = payload
+                _ = context
                 first_started.set()
-                await context.cancellation_token.wait_cancelled()
                 await asyncio.Event().wait()
                 return None
 
         recipient = AgentId.from_values("blocking", "k")
-        runtime.register_factory("blocking", BlockingAgent)
+        runtime.register_factory("blocking", lambda _engine: BlockingAgent())
 
         first_send = asyncio.create_task(
             runtime.send_message("first", recipient=recipient)
@@ -207,7 +311,7 @@ def test_multiple_on_message_handlers_route_by_payload_type() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         recipient = AgentId.from_values("multi-handler", "k")
-        runtime.register_factory("multi-handler", MultiHandlerAgent)
+        runtime.register_factory("multi-handler", lambda _engine: MultiHandlerAgent())
 
         ping_outcome = await runtime.send_message(PingMessage("a"), recipient=recipient)
         pong_outcome = await runtime.send_message(PongMessage("b"), recipient=recipient)
@@ -234,7 +338,7 @@ def test_runtime_fails_when_agent_has_no_on_message_handler() -> None:
                 _ = context
                 return payload
 
-        runtime.register_factory("no-handler", NoHandlerAgent)
+        runtime.register_factory("no-handler", lambda _engine: NoHandlerAgent())
         outcome = await runtime.send_message(
             "ping",
             recipient=AgentId.from_values("no-handler", "k"),
@@ -257,7 +361,9 @@ def test_runtime_fails_when_on_message_handler_missing_context() -> None:
             async def handle(self, payload: str) -> object:
                 return payload
 
-        runtime.register_factory("missing-context", MissingContextAgent)
+        runtime.register_factory(
+            "missing-context", lambda _engine: MissingContextAgent()
+        )
         outcome = await runtime.send_message(
             "ping",
             recipient=AgentId.from_values("missing-context", "k"),
@@ -287,7 +393,7 @@ def test_runtime_fails_when_on_message_handler_has_wrong_arity() -> None:
                 _ = extra
                 return payload
 
-        runtime.register_factory("wrong-arity", WrongArityAgent)
+        runtime.register_factory("wrong-arity", lambda _engine: WrongArityAgent())
         outcome = await runtime.send_message(
             "ping",
             recipient=AgentId.from_values("wrong-arity", "k"),
@@ -314,7 +420,7 @@ def test_runtime_fails_when_on_message_handler_missing_payload_annotation() -> N
 
         runtime.register_factory(
             "missing-payload-annotation",
-            MissingPayloadAnnotationAgent,
+            lambda _engine: MissingPayloadAnnotationAgent(),
         )
         outcome = await runtime.send_message(
             "ping",
@@ -349,7 +455,8 @@ def test_runtime_fails_when_on_message_handler_payload_annotation_not_concrete()
                 return None
 
         runtime.register_factory(
-            "non-concrete-payload-type", NonConcretePayloadTypeAgent
+            "non-concrete-payload-type",
+            lambda _engine: NonConcretePayloadTypeAgent(),
         )
         outcome = await runtime.send_message(
             "ping",
@@ -379,7 +486,9 @@ def test_runtime_fails_when_on_message_handlers_are_ambiguous() -> None:
                 _ = context
                 return payload
 
-        runtime.register_factory("ambiguous-handlers", AmbiguousHandlersAgent)
+        runtime.register_factory(
+            "ambiguous-handlers", lambda _engine: AmbiguousHandlersAgent()
+        )
         outcome = await runtime.send_message(
             "ping",
             recipient=AgentId.from_values("ambiguous-handlers", "k"),
@@ -406,7 +515,7 @@ def test_runtime_fails_when_on_message_handler_is_not_async() -> None:
 
             handle = on_message(cast(Any, _sync_handle))
 
-        runtime.register_factory("sync-handler", SyncHandlerAgent)
+        runtime.register_factory("sync-handler", lambda _engine: SyncHandlerAgent())
         outcome = await runtime.send_message(
             "ping",
             recipient=AgentId.from_values("sync-handler", "k"),
@@ -438,7 +547,7 @@ def test_different_agent_ids_can_process_concurrently() -> None:
                 await release.wait()
                 return payload
 
-        runtime.register_factory("parallel", ParallelAgent)
+        runtime.register_factory("parallel", lambda _engine: ParallelAgent())
 
         one_task = asyncio.create_task(
             runtime.send_message(
@@ -473,14 +582,20 @@ def test_different_agent_ids_can_process_concurrently() -> None:
 def test_single_threaded_runtime_context_starts_and_drains_on_exit() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
-        runtime.register_factory("counter", CounterAgent)
+        runtime.register_factory("counter", lambda _engine: CounterAgent())
 
         assert runtime.is_running is False
         async with single_threaded_runtime(runtime) as context:
             assert context is runtime
             assert runtime.is_running is True
-            first = await runtime.send_message("one", recipient="counter", key="k")
-            second = await runtime.send_message("two", recipient="counter", key="k")
+            first = await runtime.send_message(
+                "one",
+                recipient=AgentId.from_values("counter", "k"),
+            )
+            second = await runtime.send_message(
+                "two",
+                recipient=AgentId.from_values("counter", "k"),
+            )
             assert first.status == DeliveryStatus.DELIVERED
             assert second.status == DeliveryStatus.DELIVERED
             assert second.response_payload == {"count": 2}
@@ -526,16 +641,16 @@ def test_single_threaded_runtime_context_stops_immediately_on_exception() -> Non
             @on_message
             async def handle(self, payload: str, context: MessageContext) -> object:
                 _ = payload
+                _ = context
                 first_started.set()
-                await context.cancellation_token.wait_cancelled()
                 await asyncio.Event().wait()
                 return None
 
         recipient = AgentId.from_values("scope-blocking", "k")
-        runtime.register_factory("scope-blocking", BlockingAgent)
+        runtime.register_factory("scope-blocking", lambda _engine: BlockingAgent())
 
-        first_send: asyncio.Task[object] | None = None
-        second_send: asyncio.Task[object] | None = None
+        first_send: asyncio.Task[DeliveryOutcome] | None = None
+        second_send: asyncio.Task[DeliveryOutcome] | None = None
         try:
             async with single_threaded_runtime(runtime):
                 first_send = asyncio.create_task(
@@ -627,7 +742,7 @@ def test_publish_stateful_reuses_instance_for_same_route_key() -> None:
                 observed_counts.append(self.count)
                 return None
 
-        runtime.register_factory("listener", StatefulListener)
+        runtime.register_factory("listener", lambda _engine: StatefulListener())
         runtime.subscribe_exact(
             topic_type="alerts",
             agent_type="listener",
@@ -666,7 +781,7 @@ def test_publish_stateless_creates_transient_instance_per_delivery() -> None:
                 observed_counts.append(self.count)
                 return None
 
-        runtime.register_factory("listener", StatelessListener)
+        runtime.register_factory("listener", lambda _engine: StatelessListener())
         runtime.subscribe_exact(
             topic_type="alerts",
             agent_type="listener",

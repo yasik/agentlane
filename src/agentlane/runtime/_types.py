@@ -20,7 +20,7 @@ class DeliveryTask:
     """One-based delivery attempt counter."""
 
     cancellation_token: CancellationToken = field(default_factory=CancellationToken)
-    """Cooperative cancellation token shared with MessageContext."""
+    """Cooperative cancellation token controlled by runtime delivery lifecycle."""
 
     response_future: Future[object] | None = None
     """Optional future completed with the terminal delivery outcome."""

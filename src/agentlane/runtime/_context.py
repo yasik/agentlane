@@ -79,7 +79,7 @@ async def single_threaded_runtime(
     Example:
         ```python
         from agentlane.agents import on_message
-        from agentlane.messaging import MessageContext
+        from agentlane.messaging import AgentId, MessageContext
         from agentlane.runtime import single_threaded_runtime
 
         class WorkerAgent:
@@ -89,11 +89,10 @@ async def single_threaded_runtime(
                 return {"echo": payload}
 
         async with single_threaded_runtime() as runtime:
-            runtime.register_factory("worker", WorkerAgent)
+            runtime.register_factory("worker", lambda _engine: WorkerAgent())
             outcome = await runtime.send_message(
                 {"task": "ping"},
-                recipient="worker",
-                key="session-1",
+                recipient=AgentId.from_values("worker", "session-1"),
             )
             assert outcome.status.value == "delivered"
         ```

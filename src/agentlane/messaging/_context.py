@@ -2,13 +2,15 @@
 
 from dataclasses import dataclass
 
-from ._cancellation import CancellationToken
 from ._identity import AgentId, CorrelationId, MessageId, TopicId
 
 
 @dataclass(slots=True)
 class MessageContext:
     """Normalized context for a message handler invocation."""
+
+    recipient: AgentId
+    """Current handler recipient identity (the executing agent id)."""
 
     sender: AgentId | None
     """Optional sender identity."""
@@ -24,9 +26,6 @@ class MessageContext:
 
     correlation_id: CorrelationId | None
     """Correlation chain id."""
-
-    cancellation_token: CancellationToken
-    """Cooperative cancellation token triggered on runtime shutdown."""
 
     attempt: int
     """Delivery attempt number (1-based)."""

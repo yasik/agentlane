@@ -14,20 +14,30 @@ from agentlane.messaging import (
 )
 
 from ._registry import AgentRegistry
+from ._shared import Engine
 from ._types import DeliveryTask
 
 
 class Dispatcher:
     """Resolves an agent instance, invokes its handler, and returns DeliveryOutcome."""
 
-    def __init__(self, *, registry: AgentRegistry) -> None:
-        """Create dispatcher with a registry dependency."""
+    def __init__(
+        self,
+        *,
+        registry: AgentRegistry,
+        engine: Engine,
+    ) -> None:
+        """Create dispatcher with registry and engine dependencies."""
         self._registry = registry
+        self._engine = engine
 
     async def dispatch(self, task: DeliveryTask) -> DeliveryOutcome:
         """Dispatch one delivery task and return a structured outcome."""
         try:
-            agent = await self._registry.get_or_create(task.recipient)
+            agent = await self._registry.get_or_create(
+                task.recipient,
+                engine=self._engine,
+            )
         except LookupError as exc:
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.UNDELIVERABLE,
@@ -38,12 +48,12 @@ class Dispatcher:
             )
 
         context = MessageContext(
+            recipient=task.recipient,
             sender=task.envelope.sender,
             topic=task.envelope.topic,
             is_rpc=task.envelope.kind == MessageKind.RPC_REQUEST,
             message_id=task.envelope.message_id,
             correlation_id=task.envelope.correlation_id,
-            cancellation_token=task.cancellation_token,
             attempt=task.attempt,
         )
 

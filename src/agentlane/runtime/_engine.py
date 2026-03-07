@@ -27,6 +27,7 @@ from agentlane.messaging import (
     AgentId,
     AgentKey,
     AgentType,
+    CancellationToken,
     CorrelationId,
     DeliveryMode,
     DeliveryOutcome,
@@ -59,6 +60,7 @@ from ._scheduler import (
     PerAgentMailboxScheduler,
     SchedulerRejectedError,
 )
+from ._shared import Engine
 from ._types import DeliveryTask
 
 _IN_FLIGHT_CANCELED = "Runtime shutdown canceled an in-flight delivery."
@@ -70,7 +72,7 @@ def utc_now_ms() -> int:
     return int(time() * 1000)
 
 
-class RuntimeEngine(abc.ABC):
+class RuntimeEngine(Engine, abc.ABC):
     """Base runtime engine that coordinates messaging APIs and runtime components.
 
     The base class owns the public contract (`send_message`, `publish_message`,
@@ -106,7 +108,10 @@ class RuntimeEngine(abc.ABC):
         self._serializer_registry = (
             serializer_registry or create_default_serializer_registry()
         )
-        self._dispatcher = Dispatcher(registry=self._registry)
+        self._dispatcher = Dispatcher(
+            registry=self._registry,
+            engine=self,
+        )
         self._is_started = False
 
     async def start(self) -> None:
@@ -194,6 +199,10 @@ class RuntimeEngine(abc.ABC):
 
         The returned `AgentType` is normalized and can be reused by callers for
         subscription setup and direct addressing.
+
+        Factory signature:
+
+        1. `factory(engine)` where `engine` is this runtime's restricted engine view.
         """
         resolved_type = self._coerce_agent_type(agent_type)
         self._registry.register_factory(resolved_type, factory)
@@ -295,15 +304,15 @@ class RuntimeEngine(abc.ABC):
         recipient: AgentId | AgentType | str,
         *,
         sender: AgentId | None = None,
-        key: str | None = None,
         correlation_id: CorrelationId | None = None,
+        cancellation_token: CancellationToken | None = None,
         idempotency_key: IdempotencyKey | None = None,
     ) -> DeliveryOutcome:
         """Send one direct RPC-style message and await terminal delivery outcome.
 
         Flow:
 
-        1. Normalize recipient (`AgentId` or type+key resolution).
+        1. Normalize recipient (`AgentId` or type resolution).
         2. Build one RPC request envelope.
         3. Submit one delivery task into runtime execution path.
         4. Await dispatcher-completed future for terminal outcome.
@@ -311,8 +320,8 @@ class RuntimeEngine(abc.ABC):
         await self.start()
         correlation = correlation_id or CorrelationId.new()
         try:
-            # Recipient may be explicit AgentId or type(+optional key) lookup.
-            recipient_id = self._resolve_recipient(recipient=recipient, key=key)
+            # Recipient may be explicit AgentId or type lookup.
+            recipient_id = self._resolve_recipient(recipient=recipient)
         except LookupError as exc:
             # Unresolvable targets are rejected before enqueue.
             return DeliveryOutcome.failed(
@@ -336,6 +345,7 @@ class RuntimeEngine(abc.ABC):
         task = DeliveryTask(
             envelope=envelope,
             recipient=recipient_id,
+            cancellation_token=cancellation_token or CancellationToken(),
             response_future=future,
         )
         try:
@@ -360,6 +370,7 @@ class RuntimeEngine(abc.ABC):
         *,
         sender: AgentId | None = None,
         correlation_id: CorrelationId | None = None,
+        cancellation_token: CancellationToken | None = None,
         idempotency_key: IdempotencyKey | None = None,
     ) -> PublishAck:
         """Publish one event message and return enqueue acknowledgment only.
@@ -388,6 +399,7 @@ class RuntimeEngine(abc.ABC):
 
         # Routing resolves recipient + delivery mode per matching subscription.
         routes = self._routing.resolve_publish_routes(base_envelope)
+        publish_cancellation_token = cancellation_token or CancellationToken()
         for route in routes:
             # Publish fan-out uses a new envelope per recipient so each delivery
             # has its own message_id while keeping shared correlation_id.
@@ -406,6 +418,7 @@ class RuntimeEngine(abc.ABC):
             task = DeliveryTask(
                 envelope=recipient_envelope,
                 recipient=task_recipient,
+                cancellation_token=publish_cancellation_token,
                 # Publish is fire-and-forget; callers receive PublishAck only.
                 response_future=None,
             )
@@ -430,18 +443,17 @@ class RuntimeEngine(abc.ABC):
         self,
         *,
         recipient: AgentId | AgentType | str,
-        key: str | None,
     ) -> AgentId:
-        """Resolve recipient from explicit id or type(+optional key).
+        """Resolve recipient from explicit id or type.
 
         Type-only targets delegate to registry resolution policy (for example,
-        default key or ambiguity rejection when multiple active instances exist).
+        default instance resolution or ambiguity rejection when multiple active
+        instances exist).
         """
         if isinstance(recipient, AgentId):
             return recipient
         agent_type = self._coerce_agent_type(recipient)
-        agent_key = AgentKey(key) if key is not None else None
-        return self._registry.resolve_agent_id(agent_type, agent_key)
+        return self._registry.resolve_agent_id(agent_type)
 
     @staticmethod
     def _payload_for(message: object) -> Payload:

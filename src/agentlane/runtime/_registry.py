@@ -8,9 +8,10 @@ from threading import RLock
 from agentlane.agents import Agent
 from agentlane.messaging import AgentId, AgentKey, AgentType
 
-AgentInstance = Agent
-AgentFactory = Callable[[], AgentInstance | Awaitable[AgentInstance]]
-"""An agent factory is a zero-arg callable that returns or awaits an agent instance."""
+from ._shared import Engine
+
+type AgentFactory = Callable[[Engine], Agent | Awaitable[Agent]]
+"""Factory signature for creating one agent bound to an engine."""
 
 
 class AgentRegistry:
@@ -20,15 +21,18 @@ class AgentRegistry:
         """Initialize empty registry state."""
         self._lock = RLock()
         self._factories: dict[AgentType, AgentFactory] = {}
-        self._instances: dict[AgentId, AgentInstance] = {}
-        self._creation_futures: dict[AgentId, Future[AgentInstance]] = {}
+        self._instances: dict[AgentId, Agent] = {}
+        self._creation_futures: dict[AgentId, Future[Agent]] = {}
 
     def register_factory(self, agent_type: AgentType, factory: AgentFactory) -> None:
-        """Register a factory for a logical agent type."""
+        """Register a factory for a logical agent type.
+
+        Factories must always accept the runtime engine capability.
+        """
         with self._lock:
             self._factories[agent_type] = factory
 
-    def register_instance(self, agent_id: AgentId, instance: AgentInstance) -> None:
+    def register_instance(self, agent_id: AgentId, instance: Agent) -> None:
         """Register a concrete instance for an agent id."""
         with self._lock:
             self._instances[agent_id] = instance
@@ -38,7 +42,7 @@ class AgentRegistry:
         with self._lock:
             return agent_id in self._instances
 
-    async def get_or_create(self, agent_id: AgentId) -> AgentInstance:
+    async def get_or_create(self, agent_id: AgentId, *, engine: Engine) -> Agent:
         """Return an existing instance or lazily create one from factory."""
         with self._lock:
             existing_instance = self._instances.get(agent_id)
@@ -68,7 +72,7 @@ class AgentRegistry:
 
         try:
             # Run factory outside lock to avoid blocking unrelated registry operations.
-            instance_or_awaitable = factory()
+            instance_or_awaitable = factory(engine)
             if inspect.isawaitable(instance_or_awaitable):
                 created_instance = await instance_or_awaitable
             else:
@@ -90,13 +94,8 @@ class AgentRegistry:
 
         return created_instance
 
-    def resolve_agent_id(
-        self, agent_type: AgentType, key: AgentKey | None = None
-    ) -> AgentId:
-        """Resolve a target id for type-only or explicit-key addressing."""
-        if key is not None:
-            return AgentId(type=agent_type, key=key)
-
+    def resolve_agent_id(self, agent_type: AgentType) -> AgentId:
+        """Resolve a target id for type-only addressing."""
         with self._lock:
             candidates = [
                 agent_id for agent_id in self._instances if agent_id.type == agent_type
