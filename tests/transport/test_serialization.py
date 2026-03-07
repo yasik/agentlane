@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 from threading import Thread
+from typing import Any, cast
 
 import pytest
-from google.protobuf.wrappers_pb2 import StringValue
+from google.protobuf import wrappers_pb2
+from google.protobuf.message import Message as ProtobufMessage
 from pydantic import BaseModel
 
 from agentlane.messaging import Payload, PayloadFormat
@@ -23,6 +25,16 @@ from agentlane.transport import (
     payload_to_wire_payload,
     wire_payload_to_payload,
 )
+
+StringValue = cast(type[ProtobufMessage], wrappers_pb2.__dict__["StringValue"])
+"""Wrapper protobuf message type used for transport serializer tests."""
+
+
+def _new_string_value(value: str) -> ProtobufMessage:
+    """Create `StringValue` message without relying on typed constructor kwargs."""
+    message = StringValue()
+    cast(Any, message).value = value
+    return message
 
 
 @dataclass(slots=True)
@@ -158,7 +170,7 @@ def test_registry_encodes_and_decodes_protobuf_models() -> None:
     registry.register(serializer)
 
     wire_payload = registry.encode(
-        StringValue(value="compile"),
+        _new_string_value("compile"),
         schema_id=schema_id,
         content_type="application/x-protobuf",
     )
@@ -167,7 +179,7 @@ def test_registry_encodes_and_decodes_protobuf_models() -> None:
     assert wire_payload.schema_id == schema_id
     assert wire_payload.encoding == WireEncoding.PROTOBUF
     assert isinstance(decoded, StringValue)
-    assert decoded.value == "compile"
+    assert cast(Any, decoded).value == "compile"
 
 
 def test_registry_fails_fast_for_unknown_serializer_keys_when_auto_disabled() -> None:
@@ -207,7 +219,7 @@ def test_registry_decode_protobuf_requires_explicit_serializer() -> None:
         schema_id=SchemaId("agentlane.workflow.protobuf.string_value.v1"),
         content_type=ContentType("application/x-protobuf"),
         encoding=WireEncoding.PROTOBUF,
-        body=StringValue(value="compile").SerializeToString(),
+        body=_new_string_value("compile").SerializeToString(),
     )
 
     with pytest.raises(UnknownSerializerError):
@@ -268,6 +280,33 @@ def test_boundary_conversion_roundtrip_for_raw_bytes() -> None:
     assert wire_payload.encoding == WireEncoding.BYTES
     assert restored_payload.format == PayloadFormat.BYTES
     assert restored_payload.data == b"binary"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"task": "compile", "attempt": 1, "ok": True},
+        ["plan", {"step": "execute"}, 3],
+    ],
+    ids=["dict", "list"],
+)
+def test_boundary_conversion_roundtrip_for_generic_json_values_on_wire(
+    value: object,
+) -> None:
+    registry = SerializerRegistry()
+    payload = Payload(
+        schema_name="agentlane.transport.generic.json.v1",
+        content_type="application/json",
+        format=PayloadFormat.JSON,
+        data=value,
+    )
+
+    wire_payload = payload_to_wire_payload(payload, registry=registry)
+    restored_payload = wire_payload_to_payload(wire_payload, registry=registry)
+
+    assert wire_payload.encoding == WireEncoding.JSON
+    assert restored_payload.format == PayloadFormat.JSON
+    assert restored_payload.data == value
 
 
 def test_runtime_owns_default_serializer_registry() -> None:
