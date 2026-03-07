@@ -5,8 +5,7 @@ AgentLane runnable demos are grouped by category.
 ## Categories
 
 1. [`throughput/`](./throughput/) for high-load messaging demonstrations.
-2. [`workflows/`](./workflows/) for orchestration patterns (planned).
-3. [`runtime/`](./runtime/) for lifecycle/scheduling behavior demos (planned).
+3. [`runtime/`](./runtime/) for lifecycle/scheduling behavior demos.
 
 ## Quick Start
 
