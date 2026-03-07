@@ -5,10 +5,10 @@ from asyncio import Future, get_running_loop
 from collections.abc import Awaitable, Callable
 from threading import RLock
 
-from agentlane.agents import Agent
 from agentlane.messaging import AgentId, AgentKey, AgentType
 
-from ._shared import Engine
+from ._engine import Engine
+from ._protocol import Agent
 
 type AgentFactory = Callable[[Engine], Agent | Awaitable[Agent]]
 """Factory signature for creating one agent bound to an engine."""
@@ -83,7 +83,7 @@ class AgentRegistry:
                 pending_future = self._creation_futures.pop(agent_id, None)
                 if pending_future is not None and not pending_future.done():
                     pending_future.set_exception(exc)
-            raise
+            raise exc
 
         with self._lock:
             self._instances[agent_id] = created_instance

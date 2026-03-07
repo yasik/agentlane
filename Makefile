@@ -11,12 +11,14 @@ sync-upgrade:
 	uv sync --all-extras
 
 format:
-	uv run ruff format src packages tests
+	uv run isort src packages tests
+	uv run black src packages tests
 
 lint: lint-python lint-static
 
 lint-python:
-	uv run ruff format --check src packages tests
+	uv run isort --check-only src packages tests
+	uv run black --check src packages tests
 	uv run ruff check src packages tests
 	uv run pyright
 

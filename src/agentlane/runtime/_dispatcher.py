@@ -5,7 +5,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import cast
 
-from agentlane.agents import Agent, is_on_message_handler
 from agentlane.messaging import (
     DeliveryOutcome,
     DeliveryStatus,
@@ -13,8 +12,9 @@ from agentlane.messaging import (
     MessageKind,
 )
 
+from ._engine import Engine
+from ._protocol import Agent, is_on_message_handler
 from ._registry import AgentRegistry
-from ._shared import Engine
 from ._types import DeliveryTask
 
 

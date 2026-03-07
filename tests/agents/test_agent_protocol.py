@@ -2,7 +2,6 @@ import asyncio
 from dataclasses import dataclass
 from typing import cast
 
-from agentlane.agents import Agent, BaseAgent, is_on_message_handler, on_message
 from agentlane.messaging import (
     AgentId,
     AgentType,
@@ -15,7 +14,13 @@ from agentlane.messaging import (
     PublishAck,
     TopicId,
 )
-from agentlane.runtime import Engine
+from agentlane.runtime import (
+    Agent,
+    BaseAgent,
+    Engine,
+    is_on_message_handler,
+    on_message,
+)
 
 
 class _EchoAgent:

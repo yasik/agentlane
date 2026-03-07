@@ -1,6 +1,6 @@
 # Generic, formatter-friendly config.
 [lint]
-select = ["B", "D3", "E", "F", "I", "S", "UP"]
+select = ["B", "D3", "E", "F", "S", "UP"]
 
 # Keep behavior aligned with prior setup.
 ignore = [

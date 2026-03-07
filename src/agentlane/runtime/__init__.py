@@ -1,14 +1,33 @@
 """Runtime primitives and engine exports."""
 
-from typing import Any
-
-from ._shared import Engine
+from ._agent import BaseAgent
+from ._context import (
+    distributed_runtime,
+    runtime_scope,
+    single_threaded_runtime,
+)
+from ._engine import Engine
+from ._protocol import Agent, is_on_message_handler, on_message
+from ._registry import AgentRegistry
+from ._runtime import (
+    DistributedRuntimeEngine,
+    RuntimeEngine,
+    SingleThreadedRuntimeEngine,
+)
+from ._scheduler import (
+    PerAgentMailboxScheduler,
+    SchedulerRejectedError,
+)
 
 __all__ = [
     "AgentRegistry",
+    "Agent",
+    "BaseAgent",
     "Engine",
     "DistributedRuntimeEngine",
     "distributed_runtime",
+    "is_on_message_handler",
+    "on_message",
     "PerAgentMailboxScheduler",
     "RuntimeEngine",
     "SingleThreadedRuntimeEngine",
@@ -16,52 +35,3 @@ __all__ = [
     "SchedulerRejectedError",
     "single_threaded_runtime",
 ]
-
-
-def __getattr__(name: str) -> Any:
-    if name in ("distributed_runtime", "runtime_scope", "single_threaded_runtime"):
-        from ._context import (
-            distributed_runtime,
-            runtime_scope,
-            single_threaded_runtime,
-        )
-
-        mapping = {
-            "distributed_runtime": distributed_runtime,
-            "runtime_scope": runtime_scope,
-            "single_threaded_runtime": single_threaded_runtime,
-        }
-        return mapping[name]
-
-    if name in ("DistributedRuntimeEngine", "RuntimeEngine", "SingleThreadedRuntimeEngine"):
-        from ._engine import (
-            DistributedRuntimeEngine,
-            RuntimeEngine,
-            SingleThreadedRuntimeEngine,
-        )
-
-        mapping = {
-            "DistributedRuntimeEngine": DistributedRuntimeEngine,
-            "RuntimeEngine": RuntimeEngine,
-            "SingleThreadedRuntimeEngine": SingleThreadedRuntimeEngine,
-        }
-        return mapping[name]
-
-    if name == "AgentRegistry":
-        from ._registry import AgentRegistry
-
-        return AgentRegistry
-
-    if name in ("PerAgentMailboxScheduler", "SchedulerRejectedError"):
-        from ._scheduler import (
-            PerAgentMailboxScheduler,
-            SchedulerRejectedError,
-        )
-
-        mapping = {
-            "PerAgentMailboxScheduler": PerAgentMailboxScheduler,
-            "SchedulerRejectedError": SchedulerRejectedError,
-        }
-        return mapping[name]
-
-    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

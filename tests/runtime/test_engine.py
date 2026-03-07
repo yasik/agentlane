@@ -3,7 +3,6 @@ from typing import Any, cast
 
 import pytest
 
-from agentlane.agents import BaseAgent, on_message
 from agentlane.messaging import (
     AgentId,
     AgentType,
@@ -15,10 +14,12 @@ from agentlane.messaging import (
     TopicId,
 )
 from agentlane.runtime import (
+    BaseAgent,
     DistributedRuntimeEngine,
     RuntimeEngine,
     SingleThreadedRuntimeEngine,
     distributed_runtime,
+    on_message,
     single_threaded_runtime,
 )
 
@@ -76,7 +77,7 @@ class RelayAgent(BaseAgent):
         )
         if outcome.status != DeliveryStatus.DELIVERED:
             return outcome.status.value
-        return cast(object, outcome.response_payload)
+        return outcome.response_payload
 
 
 class PublisherAgent(BaseAgent):
