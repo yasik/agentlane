@@ -16,8 +16,11 @@ This module provides:
 
 import abc
 import asyncio
+from collections.abc import Sequence
 from time import time
 from typing import cast
+
+from google.protobuf.message import Message as ProtobufMessage
 
 from agentlane.agents import Agent
 from agentlane.messaging import (
@@ -38,6 +41,16 @@ from agentlane.messaging import (
     RoutingEngine,
     Subscription,
     TopicId,
+)
+from agentlane.transport import (
+    MessageSerializer,
+    SerializerRegistry,
+    WirePayload,
+    create_default_serializer_registry,
+    infer_content_type_for_value,
+    infer_schema_id_for_value,
+    payload_to_wire_payload,
+    wire_payload_to_payload,
 )
 
 from ._dispatcher import Dispatcher
@@ -77,6 +90,7 @@ class RuntimeEngine(abc.ABC):
         routing: RoutingEngine | None = None,
         registry: AgentRegistry | None = None,
         scheduler: PerAgentMailboxScheduler | None = None,
+        serializer_registry: SerializerRegistry | None = None,
     ) -> None:
         """Create shared runtime dependencies and baseline state.
 
@@ -84,10 +98,14 @@ class RuntimeEngine(abc.ABC):
             routing: Publish/RPC routing resolver. Defaults to `RoutingEngine()`.
             registry: Agent factory/instance registry. Defaults to `AgentRegistry()`.
             scheduler: Runtime scheduler used by concrete execution paths.
+            serializer_registry: Transport serializer registry used for wire boundaries.
         """
         self._routing = routing or RoutingEngine()
         self._registry = registry or AgentRegistry()
         self._scheduler = scheduler or PerAgentMailboxScheduler()
+        self._serializer_registry = (
+            serializer_registry or create_default_serializer_registry()
+        )
         self._dispatcher = Dispatcher(registry=self._registry)
         self._is_started = False
 
@@ -141,6 +159,11 @@ class RuntimeEngine(abc.ABC):
     def is_running(self) -> bool:
         """Return True when runtime was started and not stopped yet."""
         return self._is_started
+
+    @property
+    def serializer_registry(self) -> SerializerRegistry:
+        """Return transport serializer registry used by this runtime."""
+        return self._serializer_registry
 
     @abc.abstractmethod
     async def _start_runtime(self) -> None:
@@ -232,6 +255,39 @@ class RuntimeEngine(abc.ABC):
     def list_subscriptions(self) -> tuple[Subscription, ...]:
         """Return immutable snapshot of current subscriptions."""
         return tuple(self._routing.subscriptions)
+
+    def register_serializer(
+        self,
+        serializer: MessageSerializer | Sequence[MessageSerializer],
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Register one or more transport serializers on runtime-owned registry.
+
+        This is an advanced escape hatch. Common dataclass/pydantic/protobuf
+        payloads are auto-inferred by default and do not require registration.
+        """
+        if isinstance(serializer, MessageSerializer):
+            self._serializer_registry.register(serializer, replace=replace)
+            return
+        self._serializer_registry.register_many(serializer, replace=replace)
+
+    def register_message_type(
+        self,
+        message_type: type[object],
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Register one message type using default serializer inference."""
+        self._serializer_registry.register_type(message_type, replace=replace)
+
+    def payload_to_wire_payload(self, payload: Payload) -> WirePayload:
+        """Convert messaging payload into wire payload using runtime registry."""
+        return payload_to_wire_payload(payload, registry=self._serializer_registry)
+
+    def wire_payload_to_payload(self, wire_payload: WirePayload) -> Payload:
+        """Convert wire payload into messaging payload using runtime registry."""
+        return wire_payload_to_payload(wire_payload, registry=self._serializer_registry)
 
     async def send_message(
         self,
@@ -390,11 +446,21 @@ class RuntimeEngine(abc.ABC):
     @staticmethod
     def _payload_for(message: object) -> Payload:
         """Wrap an application object into canonical payload container."""
+        payload_data = message
+        payload_format = PayloadFormat.JSON
+        if isinstance(message, (bytes, bytearray, memoryview)):
+            payload_data = bytes(message)
+            payload_format = PayloadFormat.BYTES
+        elif isinstance(message, ProtobufMessage):
+            payload_format = PayloadFormat.PROTOBUF
+
+        schema_id = infer_schema_id_for_value(message)
+        content_type = infer_content_type_for_value(message)
         return Payload(
-            schema_name=type(message).__name__,
-            content_type="application/python-object",
-            format=PayloadFormat.JSON,
-            data=message,
+            schema_name=schema_id.value,
+            content_type=content_type.value,
+            format=payload_format,
+            data=payload_data,
         )
 
     @staticmethod
@@ -433,6 +499,7 @@ class SingleThreadedRuntimeEngine(RuntimeEngine):
         routing: RoutingEngine | None = None,
         registry: AgentRegistry | None = None,
         scheduler: PerAgentMailboxScheduler | None = None,
+        serializer_registry: SerializerRegistry | None = None,
         worker_count: int = 10,
     ) -> None:
         """Create single-threaded runtime with configurable worker pool size."""
@@ -445,7 +512,12 @@ class SingleThreadedRuntimeEngine(RuntimeEngine):
         # Tracks current dispatch per worker so shutdown can cancel in-flight tasks.
         self._inflight_by_worker: dict[asyncio.Task[None], DeliveryTask] = {}
 
-        super().__init__(routing=routing, registry=registry, scheduler=scheduler)
+        super().__init__(
+            routing=routing,
+            registry=registry,
+            scheduler=scheduler,
+            serializer_registry=serializer_registry,
+        )
 
     async def _start_runtime(self) -> None:
         """Start detached worker tasks that pull from scheduler."""
