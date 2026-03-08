@@ -12,7 +12,7 @@ It was initially inspired by Microsoft's [autogen](https://github.com/microsoft/
 ![agentlane](https://ossfiles-6842.s3.us-west-2.amazonaws.com/agentlane-gh-banner-1280x640.png)
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-CC--BY--4.0-lightgrey?style=flat-square" alt="License: CC BY 4.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://img.shields.io/badge/python-3.12-blue?style=flat-square"><img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square" alt="Python 3.12"></a>
 </p>
 
