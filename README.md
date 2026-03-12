@@ -157,6 +157,12 @@ uv run python examples/throughput/high_throughput_messaging/main.py
 
 # Multi-agent workflow demo
 uv run python examples/runtime/multi_agent_workflow/main.py
+
+# Distributed publish fan-out / fan-in demo
+uv run python examples/runtime/distributed_publish_fan_in/main.py
+
+# Distributed direct scatter / gather demo
+uv run python examples/runtime/distributed_scatter_gather/main.py
 ```
 
 ## Documentation Map
@@ -164,10 +170,11 @@ uv run python examples/runtime/multi_agent_workflow/main.py
 1. [Documentation Index](./docs/README.md)
 2. [Runtime: Engine and Execution](./docs/runtime/engine-and-execution.md)
 3. [Runtime: Distributed Host/Worker Architecture](./docs/runtime/distributed-runtime-architecture.md)
-4. [Messaging: Routing and Delivery](./docs/messaging/routing-and-delivery.md)
-5. [Agent Handler Patterns](./docs/agents/handler-patterns.md)
-6. [Transport Serialization](./docs/transport/serialization.md)
-7. [Examples Index](./examples/README.md)
+4. [Runtime: Distributed Runtime Usage](./docs/runtime/distributed-runtime-usage.md)
+5. [Messaging: Routing and Delivery](./docs/messaging/routing-and-delivery.md)
+6. [Agent Handler Patterns](./docs/agents/handler-patterns.md)
+7. [Transport Serialization](./docs/transport/serialization.md)
+8. [Examples Index](./examples/README.md)
 
 ## Local Development
 

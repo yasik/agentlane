@@ -5,7 +5,7 @@ AgentLane runnable demos are grouped by category.
 ## Categories
 
 1. [`throughput/`](./throughput/) for high-load messaging demonstrations.
-3. [`runtime/`](./runtime/) for lifecycle/scheduling behavior demos.
+2. [`runtime/`](./runtime/) for lifecycle, scheduling, and distributed runtime demos.
 
 ## Quick Start
 
@@ -19,4 +19,16 @@ Run the runtime multi-agent workflow demo:
 
 ```bash
 uv run python examples/runtime/multi_agent_workflow/main.py
+```
+
+Run the distributed publish fan-out / fan-in demo:
+
+```bash
+uv run python examples/runtime/distributed_publish_fan_in/main.py
+```
+
+Run the distributed scatter / gather demo:
+
+```bash
+uv run python examples/runtime/distributed_scatter_gather/main.py
 ```

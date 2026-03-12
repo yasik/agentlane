@@ -201,5 +201,16 @@ These are current implementation facts, not future promises:
    the process boundary yet.
 4. `PublishAck` means enqueue only, never downstream handler completion.
 
+## Runnable Examples
+
+See these runnable distributed runtime demos:
+
+1. [distributed_publish_fan_in](../../examples/runtime/distributed_publish_fan_in/README.md):
+   explicit host/workers with publish fan-out and one stateful aggregator agent
+   for fan-in.
+2. [distributed_scatter_gather](../../examples/runtime/distributed_scatter_gather/README.md):
+   explicit host/workers with one coordinator agent aggregating multiple direct
+   RPC responses.
+
 For design background and tradeoffs, see
 [Runtime: Distributed Host/Worker Architecture](./distributed-runtime-architecture.md).
