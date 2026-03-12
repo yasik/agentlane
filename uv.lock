@@ -11,7 +11,7 @@ members = [
 
 [[package]]
 name = "agentlane"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "agentlane-cli" },
@@ -62,7 +62,7 @@ dev = [
 
 [[package]]
 name = "agentlane-cli"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/cli" }
 dependencies = [
     { name = "rich" },
@@ -73,7 +73,7 @@ requires-dist = [{ name = "rich", specifier = ">=13.0.0" }]
 
 [[package]]
 name = "agentlane-transport"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/transport" }
 dependencies = [
     { name = "protobuf" },

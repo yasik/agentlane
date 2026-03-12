@@ -1,6 +1,6 @@
 [project]
 name = "agentlane-transport"
-version = "0.1.0"
+version = "0.2.0"
 description = "Transport adapters for AgentLane runtimes"
 requires-python = ">=3.12"
 dependencies = [
