@@ -9,15 +9,13 @@ from ._context import (
 from ._engine import Engine
 from ._protocol import Agent, is_on_message_handler, on_message
 from ._registry import AgentRegistry
-from ._runtime import (
-    DistributedRuntimeEngine,
-    RuntimeEngine,
-    SingleThreadedRuntimeEngine,
-)
+from ._runtime import RuntimeEngine, SingleThreadedRuntimeEngine
 from ._scheduler import (
     PerAgentMailboxScheduler,
     SchedulerRejectedError,
 )
+from ._worker_runtime import DistributedRuntimeEngine, WorkerAgentRuntime
+from ._worker_runtime_host import WorkerAgentRuntimeHost
 
 __all__ = [
     "AgentRegistry",
@@ -34,4 +32,6 @@ __all__ = [
     "runtime_scope",
     "SchedulerRejectedError",
     "single_threaded_runtime",
+    "WorkerAgentRuntime",
+    "WorkerAgentRuntimeHost",
 ]

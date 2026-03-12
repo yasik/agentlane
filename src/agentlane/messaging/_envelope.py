@@ -2,8 +2,9 @@
 
 import enum
 from dataclasses import dataclass
-from time import time
 from typing import Self
+
+from agentlane.util import utc_now_ms
 
 from ._identity import (
     AgentId,
@@ -12,15 +13,6 @@ from ._identity import (
     MessageId,
     TopicId,
 )
-
-
-def utc_now_ms() -> int:
-    """Return current UTC epoch milliseconds.
-
-    Returns:
-        int: Current UTC time in epoch milliseconds.
-    """
-    return int(time() * 1000)
 
 
 class PayloadFormat(enum.StrEnum):

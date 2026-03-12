@@ -5,9 +5,12 @@ This document explains how AgentLane runtime executes message deliveries, includ
 ## TL;DR
 
 1. `RuntimeEngine` is the orchestration entrypoint (`send_message`, `publish_message`).
-2. `SingleThreadedRuntimeEngine` is the current production path in v1.
-3. Scheduling guarantees in-order execution per `AgentId`.
-4. Concurrency happens across different `AgentId` values, bounded by worker count.
+2. `SingleThreadedRuntimeEngine` is the simplest in-process implementation.
+3. `DistributedRuntimeEngine` is implemented in core v1 as a managed host plus one primary worker.
+4. Scheduling guarantees in-order execution per `AgentId`.
+5. Concurrency happens across different `AgentId` values; in distributed mode,
+   the effective bound is per worker runtime rather than one global
+   `worker_count`.
 
 ## Runtime Components
 
@@ -50,7 +53,8 @@ Practical implication:
 
 1. two parallel sends to same `AgentId` are serialized,
 2. two sends to different `AgentId` values can run in parallel,
-3. increase `worker_count` to raise cross-recipient concurrency.
+3. increase `worker_count` to raise cross-recipient concurrency on one runtime;
+   distributed setups scale further by adding workers.
 
 ## Delivery APIs
 
@@ -89,9 +93,19 @@ These helpers start runtime on entry and stop/stop-when-idle on exit depending o
 
 ## Distributed Mode Status
 
-`DistributedRuntimeEngine` exists as a contract placeholder in v1 and currently rejects `_submit(...)` with `NotImplementedError`.
+`DistributedRuntimeEngine` is implemented as the distributed entrypoint in core v1.
 
-This keeps API compatibility while transport + placement implementations are introduced incrementally.
+Current shape:
+
+1. `DistributedRuntimeEngine` manages a zero-config host plus one primary worker.
+2. `WorkerAgentRuntimeHost` is the explicit host service for multi-worker topologies.
+3. `WorkerAgentRuntime` is the explicit worker runtime that executes application agents and connects to the host over gRPC.
+4. Once the host chooses a destination worker, execution falls back to the same local scheduler/dispatcher path used by the in-process runtime.
+
+See:
+
+1. [Runtime: Distributed Runtime Usage](./distributed-runtime-usage.md) for practical examples.
+2. [Runtime: Distributed Host/Worker Architecture](./distributed-runtime-architecture.md) for design and lifecycle details.
 
 ## Minimal Example
 

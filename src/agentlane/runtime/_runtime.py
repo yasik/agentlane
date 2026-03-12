@@ -4,7 +4,6 @@ This module provides:
 
 1. `RuntimeEngine`: a shared orchestration layer for messaging APIs.
 2. `SingleThreadedRuntimeEngine`: in-process execution via scheduler + worker pool.
-3. `DistributedRuntimeEngine`: distributed placeholder with the same public contract.
 
 `RuntimeEngine` wires high-level behavior:
 
@@ -17,14 +16,10 @@ This module provides:
 import abc
 import asyncio
 from collections.abc import Sequence
-from time import time
 from typing import cast
-
-from google.protobuf.message import Message as ProtobufMessage
 
 from agentlane.messaging import (
     AgentId,
-    AgentKey,
     AgentType,
     CancellationToken,
     CorrelationId,
@@ -35,9 +30,7 @@ from agentlane.messaging import (
     MessageEnvelope,
     MessageId,
     Payload,
-    PayloadFormat,
     PublishAck,
-    PublishRoute,
     RoutingEngine,
     Subscription,
     TopicId,
@@ -47,14 +40,14 @@ from agentlane.transport import (
     SerializerRegistry,
     WirePayload,
     create_default_serializer_registry,
-    infer_content_type_for_value,
-    infer_schema_id_for_value,
     payload_to_wire_payload,
     wire_payload_to_payload,
 )
+from agentlane.util import utc_now_ms
 
 from ._dispatcher import Dispatcher
 from ._engine import Engine
+from ._message_helpers import payload_from_value, recipient_for_publish_route
 from ._protocol import Agent
 from ._registry import AgentFactory, AgentRegistry
 from ._scheduler import (
@@ -65,15 +58,6 @@ from ._types import DeliveryTask
 
 _IN_FLIGHT_CANCELED = "Runtime shutdown canceled an in-flight delivery."
 _QUEUED_CANCELED = "Runtime shutdown canceled a queued delivery."
-
-
-def utc_now_ms() -> int:
-    """Return current UTC epoch milliseconds.
-
-    Returns:
-        int: Current UTC time in epoch milliseconds.
-    """
-    return int(time() * 1000)
 
 
 class RuntimeEngine(Engine, abc.ABC):
@@ -475,32 +459,15 @@ class RuntimeEngine(Engine, abc.ABC):
         envelope = MessageEnvelope.new_rpc_request(
             sender=sender,
             recipient=recipient_id,
-            payload=self._payload_for(message),
+            payload=payload_from_value(message),
             correlation_id=correlation,
             idempotency_key=idempotency_key,
         )
-        # Caller awaits this future for the terminal delivery result.
-        future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
-        task = DeliveryTask(
+        return await self._submit_rpc_task(
             envelope=envelope,
             recipient=recipient_id,
             cancellation_token=cancellation_token or CancellationToken(),
-            response_future=future,
         )
-        try:
-            # Submission may fail due to scheduler/runtime policy rejection.
-            await self._submit(task)
-        except SchedulerRejectedError as exc:
-            return DeliveryOutcome.failed(
-                status=DeliveryStatus.POLICY_REJECTED,
-                message_id=envelope.message_id,
-                correlation_id=envelope.correlation_id,
-                message=str(exc),
-                retryable=False,
-            )
-        # Dispatcher resolves this future once handler execution completes.
-        outcome = await future
-        return cast(DeliveryOutcome, outcome)
 
     async def publish_message(
         self,
@@ -545,7 +512,7 @@ class RuntimeEngine(Engine, abc.ABC):
         base_envelope = MessageEnvelope.new_publish_event(
             sender=sender,
             topic=topic,
-            payload=self._payload_for(message),
+            payload=payload_from_value(message),
             correlation_id=correlation,
             idempotency_key=idempotency_key,
         )
@@ -559,12 +526,12 @@ class RuntimeEngine(Engine, abc.ABC):
             recipient_envelope = MessageEnvelope.new_publish_event(
                 sender=sender,
                 topic=topic,
-                payload=self._payload_for(message),
+                payload=payload_from_value(message),
                 correlation_id=correlation,
                 idempotency_key=idempotency_key,
             )
             # Recipient identity may be rewritten for stateless mode.
-            task_recipient = self._recipient_for_route(
+            task_recipient = recipient_for_publish_route(
                 route=route,
                 publish_envelope=base_envelope,
             )
@@ -575,7 +542,11 @@ class RuntimeEngine(Engine, abc.ABC):
                 # Publish is fire-and-forget; callers receive PublishAck only.
                 response_future=None,
             )
-            await self._submit(task)
+            await self._submit_publish_task(
+                envelope=task.envelope,
+                recipient=task.recipient,
+                cancellation_token=task.cancellation_token,
+            )
 
         # Publish ack confirms enqueue only, not downstream handler completion.
         return PublishAck(
@@ -608,47 +579,51 @@ class RuntimeEngine(Engine, abc.ABC):
         agent_type = self._coerce_agent_type(recipient)
         return self._registry.resolve_agent_id(agent_type)
 
-    @staticmethod
-    def _payload_for(message: object) -> Payload:
-        """Wrap an application object into canonical payload container."""
-        payload_data = message
-        payload_format = PayloadFormat.JSON
-        if isinstance(message, (bytes, bytearray, memoryview)):
-            payload_data = bytes(message)
-            payload_format = PayloadFormat.BYTES
-        elif isinstance(message, ProtobufMessage):
-            payload_format = PayloadFormat.PROTOBUF
-
-        schema_id = infer_schema_id_for_value(message)
-        content_type = infer_content_type_for_value(message)
-        return Payload(
-            schema_name=schema_id.value,
-            content_type=content_type.value,
-            format=payload_format,
-            data=payload_data,
-        )
-
-    @staticmethod
-    def _recipient_for_route(
+    async def _submit_rpc_task(
+        self,
         *,
-        route: PublishRoute,
-        publish_envelope: MessageEnvelope,
-    ) -> AgentId:
-        """Resolve scheduler recipient id from route and delivery mode.
-
-        Stateful mode keeps route affinity key unchanged.
-        Stateless mode derives a unique per-delivery key to avoid instance reuse.
-        """
-        if route.delivery_mode == DeliveryMode.STATEFUL:
-            # Stateful path preserves route-key affinity and instance reuse.
-            return route.recipient
-
-        # Stateless deliveries require unique recipient mailbox keys so
-        # they neither serialize behind nor reuse a stateful recipient id.
-        transient_key = AgentKey(
-            f"stateless:{route.subscription_id}:{publish_envelope.message_id.value}"
+        envelope: MessageEnvelope,
+        recipient: AgentId,
+        cancellation_token: CancellationToken,
+    ) -> DeliveryOutcome:
+        """Submit one already-built RPC delivery task and await its outcome."""
+        await self.start()
+        future: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+        task = DeliveryTask(
+            envelope=envelope,
+            recipient=recipient,
+            cancellation_token=cancellation_token,
+            response_future=future,
         )
-        return AgentId(type=route.recipient.type, key=transient_key)
+        try:
+            await self._submit(task)
+        except SchedulerRejectedError as exc:
+            return DeliveryOutcome.failed(
+                status=DeliveryStatus.POLICY_REJECTED,
+                message_id=envelope.message_id,
+                correlation_id=envelope.correlation_id,
+                message=str(exc),
+                retryable=False,
+            )
+        return cast(DeliveryOutcome, await future)
+
+    async def _submit_publish_task(
+        self,
+        *,
+        envelope: MessageEnvelope,
+        recipient: AgentId,
+        cancellation_token: CancellationToken,
+    ) -> None:
+        """Submit one already-built publish delivery task."""
+        await self.start()
+        await self._submit(
+            DeliveryTask(
+                envelope=envelope,
+                recipient=recipient,
+                cancellation_token=cancellation_token,
+                response_future=None,
+            )
+        )
 
 
 class SingleThreadedRuntimeEngine(RuntimeEngine):
@@ -758,28 +733,4 @@ class SingleThreadedRuntimeEngine(RuntimeEngine):
                 message=message,
                 retryable=True,
             )
-        )
-
-
-class DistributedRuntimeEngine(RuntimeEngine):
-    """Distributed runtime placeholder with shared API but no submit transport yet."""
-
-    async def _start_runtime(self) -> None:
-        """Start distributed runtime resources."""
-        return
-
-    async def _stop_runtime(self) -> None:
-        """Stop distributed runtime resources."""
-        return
-
-    async def _stop_when_idle_runtime(self) -> None:
-        """Drain distributed runtime work."""
-        return
-
-    async def _submit(self, task: DeliveryTask) -> None:
-        """Reject task submission until distributed transport/placement exists."""
-        _ = task
-        raise NotImplementedError(
-            "DistributedRuntimeEngine is not implemented yet. "
-            "Use SingleThreadedRuntimeEngine for v1 execution."
         )

@@ -1,7 +1,7 @@
 """Identity primitives for agents, topics, and messages."""
 
 from dataclasses import dataclass
-from typing import Self
+from typing import Self, cast
 from uuid import uuid4
 
 
@@ -58,6 +58,27 @@ class AgentId:
         """
         return cls(type=AgentType(type_value), key=AgentKey(key_value))
 
+    @classmethod
+    def from_json(cls, data: object) -> Self:
+        """Construct an AgentId from a JSON-safe mapping."""
+        if not isinstance(data, dict):
+            raise TypeError("Expected JSON object for agent id.")
+        mapping = cast(dict[str, object], data)
+        type_value = mapping.get("type")
+        key_value = mapping.get("key")
+        if not isinstance(type_value, str):
+            raise TypeError("Expected string for agent id type.")
+        if not isinstance(key_value, str):
+            raise TypeError("Expected string for agent id key.")
+        return cls.from_values(type_value=type_value, key_value=key_value)
+
+    def to_json(self) -> dict[str, object]:
+        """Return a JSON-safe mapping for this agent id."""
+        return {
+            "type": self.type.value,
+            "key": self.key.value,
+        }
+
     def __str__(self) -> str:
         return f"{self.type.value}:{self.key.value}"
 
@@ -90,6 +111,27 @@ class TopicId:
             Self: Normalized topic id.
         """
         return cls(type=type_value, source=route_key)
+
+    @classmethod
+    def from_json(cls, data: object) -> Self:
+        """Construct a TopicId from a JSON-safe mapping."""
+        if not isinstance(data, dict):
+            raise TypeError("Expected JSON object for topic id.")
+        mapping = cast(dict[str, object], data)
+        type_value = mapping.get("type")
+        source_value = mapping.get("source")
+        if not isinstance(type_value, str):
+            raise TypeError("Expected string for topic id type.")
+        if not isinstance(source_value, str):
+            raise TypeError("Expected string for topic id source.")
+        return cls(type=type_value, source=source_value)
+
+    def to_json(self) -> dict[str, object]:
+        """Return a JSON-safe mapping for this topic id."""
+        return {
+            "type": self.type,
+            "source": self.source,
+        }
 
     @property
     def route_key(self) -> str:

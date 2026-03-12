@@ -3,7 +3,6 @@
 from asyncio import Future, get_running_loop
 from collections.abc import Awaitable, Callable
 from threading import RLock
-from typing import cast
 
 from agentlane.messaging import AgentId, AgentKey, AgentType
 
@@ -187,7 +186,7 @@ def _normalize_factory(factory: AgentFactory) -> _ResolvedAgentFactory:
     async def normalized(engine: Engine) -> Agent:
         created = factory(engine)
         if isinstance(created, Awaitable):
-            return await cast(Awaitable[Agent], created)
-        return cast(Agent, created)
+            return await created
+        return created
 
     return normalized

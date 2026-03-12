@@ -3,11 +3,8 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from ._runtime import (
-    DistributedRuntimeEngine,
-    RuntimeEngine,
-    SingleThreadedRuntimeEngine,
-)
+from ._runtime import RuntimeEngine, SingleThreadedRuntimeEngine
+from ._worker_runtime import DistributedRuntimeEngine
 
 
 @asynccontextmanager
@@ -95,7 +92,11 @@ async def single_threaded_runtime(
 
         class WorkerAgent:
             @on_message
-            async def handle(self, payload: dict, context: MessageContext) -> object:
+            async def handle(
+                self,
+                payload: dict[str, object],
+                context: MessageContext,
+            ) -> object:
                 _ = context
                 return {"echo": payload}
 
@@ -117,6 +118,12 @@ async def single_threaded_runtime(
     Raises:
         ValueError: If provided runtime is not `SingleThreadedRuntimeEngine`.
     """
+    if runtime is not None and isinstance(runtime, DistributedRuntimeEngine):
+        raise ValueError(
+            "Runtime type mismatch. "
+            "Expected 'SingleThreadedRuntimeEngine', got "
+            f"'{type(runtime).__name__}'."
+        )
     async with runtime_scope(
         runtime,
         expected_type=SingleThreadedRuntimeEngine,
@@ -132,16 +139,28 @@ async def distributed_runtime(
     """Scope a distributed runtime lifecycle to one async context block.
 
     Use this for workflows that should run against a distributed runtime
-    implementation. The context manager validates runtime type before yielding.
+    implementation. By default it provisions one zero-config
+    `DistributedRuntimeEngine`, which manages an in-process host plus one primary
+    worker runtime.
 
     Example:
         ```python
-        from agentlane.runtime import DistributedRuntimeEngine, distributed_runtime
+        from agentlane.messaging import AgentId
+        from agentlane.runtime import distributed_runtime, on_message
+
+        class WorkerAgent:
+            @on_message
+            async def handle(self, payload: str, context) -> object:
+                _ = context
+                return {"echo": payload}
 
         async with distributed_runtime() as runtime:
-            # Configure distributed runtime-scoped resources here.
-            # Message delivery is added when distributed submit is implemented.
-            assert isinstance(runtime, DistributedRuntimeEngine)
+            runtime.register_factory("worker", lambda _engine: WorkerAgent())
+            outcome = await runtime.send_message(
+                "ping",
+                recipient=AgentId.from_values("worker", "session-1"),
+            )
+            assert outcome.status.value == "delivered"
         ```
 
     Args:

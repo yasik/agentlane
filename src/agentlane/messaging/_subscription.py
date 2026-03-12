@@ -7,6 +7,7 @@ isolation (`stateless`).
 
 import enum
 from dataclasses import dataclass, field
+from typing import Self, cast
 from uuid import uuid4
 
 from ._identity import AgentId, AgentKey, AgentType, TopicId
@@ -67,6 +68,48 @@ class Subscription:
 
     id: str = field(default_factory=lambda: str(uuid4()))
     """Stable subscription identifier."""
+
+    @classmethod
+    def from_json(cls, data: object) -> Self:
+        """Construct a Subscription from a JSON-safe mapping."""
+        if not isinstance(data, dict):
+            raise TypeError("Expected JSON object for subscription.")
+
+        mapping = cast(dict[str, object], data)
+        subscription_id = mapping.get("id")
+        kind = mapping.get("kind")
+        agent_type = mapping.get("agent_type")
+        topic_pattern = mapping.get("topic_pattern")
+        delivery_mode = mapping.get("delivery_mode")
+
+        if not isinstance(subscription_id, str):
+            raise TypeError("Expected string for subscription id.")
+        if not isinstance(kind, str):
+            raise TypeError("Expected string for subscription kind.")
+        if not isinstance(agent_type, str):
+            raise TypeError("Expected string for subscription agent_type.")
+        if not isinstance(topic_pattern, str):
+            raise TypeError("Expected string for subscription topic_pattern.")
+        if not isinstance(delivery_mode, str):
+            raise TypeError("Expected string for subscription delivery_mode.")
+
+        return cls(
+            id=subscription_id,
+            kind=SubscriptionKind(kind),
+            agent_type=AgentType(agent_type),
+            topic_pattern=topic_pattern,
+            delivery_mode=DeliveryMode(delivery_mode),
+        )
+
+    def to_json(self) -> dict[str, object]:
+        """Return a JSON-safe mapping for this subscription."""
+        return {
+            "id": self.id,
+            "kind": self.kind.value,
+            "agent_type": self.agent_type.value,
+            "topic_pattern": self.topic_pattern,
+            "delivery_mode": self.delivery_mode.value,
+        }
 
     @classmethod
     def exact(

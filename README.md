@@ -24,8 +24,8 @@ It was initially inspired by Microsoft's [autogen](https://github.com/microsoft/
    (dataclass/pydantic/protobuf/JSON-like values).
 3. **Clear runtime guarantees**: per-recipient FIFO ordering, fair scheduling,
    and explicit delivery outcomes.
-4. **Scalability path**: in-process engine available today, distributed runtime
-   contract in place for transport/placement evolution.
+4. **Scalability path**: in-process and distributed host/worker runtimes are
+   both available in core, with room for richer transport and placement later.
 5. **Framework-agnostic agent authoring**: handlers are plain async Python with
    typed payloads and explicit context.
 
@@ -93,8 +93,10 @@ DeliveryOutcome / PublishAck
 Current execution engine:
 
 1. `SingleThreadedRuntimeEngine` is the active runtime path in v1.
-2. `DistributedRuntimeEngine` is currently a contract placeholder and raises
-   `NotImplementedError` on delivery submission.
+2. `DistributedRuntimeEngine` is the zero-config distributed entrypoint. It
+   manages a host plus one primary worker for local use.
+3. `WorkerAgentRuntimeHost` and `WorkerAgentRuntime` provide the explicit
+   low-level host/worker topology for multi-runtime setups.
 
 ## Quickstart
 
@@ -161,10 +163,11 @@ uv run python examples/runtime/multi_agent_workflow/main.py
 
 1. [Documentation Index](./docs/README.md)
 2. [Runtime: Engine and Execution](./docs/runtime/engine-and-execution.md)
-3. [Messaging: Routing and Delivery](./docs/messaging/routing-and-delivery.md)
-4. [Agent Handler Patterns](./docs/agents/handler-patterns.md)
-5. [Transport Serialization](./docs/transport/serialization.md)
-6. [Examples Index](./examples/README.md)
+3. [Runtime: Distributed Host/Worker Architecture](./docs/runtime/distributed-runtime-architecture.md)
+4. [Messaging: Routing and Delivery](./docs/messaging/routing-and-delivery.md)
+5. [Agent Handler Patterns](./docs/agents/handler-patterns.md)
+6. [Transport Serialization](./docs/transport/serialization.md)
+7. [Examples Index](./examples/README.md)
 
 ## Local Development
 

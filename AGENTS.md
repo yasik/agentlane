@@ -26,7 +26,7 @@ Fight entropy. Leave the codebase better than you found it.
 
 ### 3. Self-Improvement Loop
 
-- After ANY correction from the user: update `docs/lessons.md` with the pattern
+- After ANY correction from the user: update `docs/plans/lessons.md` with the pattern
 - Write rules for yourself that prevent the same mistake
 - Ruthlessly iterate on these lessons until mistake rate drops
 - Review lessons at session start for relevant project
@@ -60,7 +60,7 @@ Fight entropy. Leave the codebase better than you found it.
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
 5. **Document Results**: Add review section to `docs/plans/<task_name>.md`
-6. **Capture Lessons**: Update `docs/lessons.md` after corrections
+6. **Capture Lessons**: Update `docs/plans/lessons.md` after corrections
 
 ## Core Principles
 

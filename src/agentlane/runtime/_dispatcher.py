@@ -3,7 +3,8 @@
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import cast
+from types import UnionType
+from typing import Union, cast, get_origin
 
 from agentlane.messaging import (
     DeliveryOutcome,
@@ -240,15 +241,21 @@ def _validate_on_message_handler(
             f"`@on_message` handler on agent '{type(agent).__name__}' must declare "
             "an explicit payload type annotation."
         )
+    resolved_type = payload_parameter.annotation
+    if not isinstance(resolved_type, type):
+        origin = get_origin(payload_parameter.annotation)
+        if origin not in (Union, UnionType):
+            resolved_type = origin
+
     # Restrict to concrete runtime types to keep matching deterministic and cheap.
-    if not isinstance(payload_parameter.annotation, type):
+    if not isinstance(resolved_type, type):
         raise TypeError(
             f"`@on_message` handler on agent '{type(agent).__name__}' must annotate "
             "payload with a concrete type."
         )
     return _HandlerDescriptor(
         method_name=method_name,
-        message_type=cast(type[object], payload_parameter.annotation),
+        message_type=cast(type[object], resolved_type),
         handler=cast(Callable[[object, MessageContext], Awaitable[object]], handler),
     )
 

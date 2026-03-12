@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from typing import Any, cast
 
 import pytest
@@ -16,7 +17,6 @@ from agentlane.messaging import (
 from agentlane.runtime import (
     BaseAgent,
     DistributedRuntimeEngine,
-    RuntimeEngine,
     SingleThreadedRuntimeEngine,
     distributed_runtime,
     on_message,
@@ -171,7 +171,11 @@ def test_publish_returns_enqueue_ack_only() -> None:
 
         class Listener(_ProtocolAgentMixin):
             @on_message
-            async def handle(self, payload: dict, context: MessageContext) -> object:
+            async def handle(
+                self,
+                payload: dict[str, object],
+                context: MessageContext,
+            ) -> object:
                 _ = context
                 received.append(payload)
                 return None
@@ -237,7 +241,11 @@ def test_base_agent_can_publish_message_with_runtime_capability() -> None:
 
         class ListenerAgent(_ProtocolAgentMixin):
             @on_message
-            async def handle(self, payload: dict, context: MessageContext) -> object:
+            async def handle(
+                self,
+                payload: dict[str, object],
+                context: MessageContext,
+            ) -> object:
                 received.append(payload)
                 observed_senders.append(context.sender)
                 observed_correlations.append(context.correlation_id)
@@ -427,10 +435,26 @@ def test_runtime_fails_when_on_message_handler_missing_payload_annotation() -> N
 
         class MissingPayloadAnnotationAgent(_ProtocolAgentMixin):
             @on_message
-            async def handle(self, payload, context: MessageContext) -> object:
+            async def handle(
+                self,
+                payload: object,
+                context: MessageContext,
+            ) -> object:
                 _ = payload
                 _ = context
                 return None
+
+        signature = inspect.signature(MissingPayloadAnnotationAgent.handle)
+        parameters = list(signature.parameters.values())
+        cast(Any, MissingPayloadAnnotationAgent.handle).__signature__ = (
+            signature.replace(
+                parameters=[
+                    parameters[0],
+                    parameters[1].replace(annotation=inspect.Signature.empty),
+                    parameters[2],
+                ]
+            )
+        )
 
         runtime.register_factory(
             "missing-payload-annotation",
@@ -693,30 +717,22 @@ def test_single_threaded_runtime_context_stops_immediately_on_exception() -> Non
 
 def test_single_threaded_runtime_context_builds_default_runtime_when_none() -> None:
     async def scenario() -> None:
-        scoped_runtime: RuntimeEngine | None = None
         async with single_threaded_runtime() as runtime:
-            scoped_runtime = runtime
             assert isinstance(runtime, SingleThreadedRuntimeEngine)
             assert runtime.is_running is True
 
-        if scoped_runtime is None:
-            raise AssertionError("Expected runtime to be yielded by context manager.")
-        assert scoped_runtime.is_running is False
+        assert runtime.is_running is False
 
     asyncio.run(scenario())
 
 
 def test_distributed_runtime_context_builds_default_runtime_when_none() -> None:
     async def scenario() -> None:
-        scoped_runtime: RuntimeEngine | None = None
         async with distributed_runtime() as runtime:
-            scoped_runtime = runtime
             assert isinstance(runtime, DistributedRuntimeEngine)
             assert runtime.is_running is True
 
-        if scoped_runtime is None:
-            raise AssertionError("Expected runtime to be yielded by context manager.")
-        assert scoped_runtime.is_running is False
+        assert runtime.is_running is False
 
     asyncio.run(scenario())
 
@@ -750,7 +766,11 @@ def test_publish_stateful_reuses_instance_for_same_route_key() -> None:
                 self.count = 0
 
             @on_message
-            async def handle(self, payload: dict, context: MessageContext) -> object:
+            async def handle(
+                self,
+                payload: dict[str, object],
+                context: MessageContext,
+            ) -> object:
                 _ = payload
                 _ = context
                 self.count += 1
@@ -790,7 +810,11 @@ def test_publish_stateless_creates_transient_instance_per_delivery() -> None:
                 self.count = 0
 
             @on_message
-            async def handle(self, payload: dict, context: MessageContext) -> object:
+            async def handle(
+                self,
+                payload: dict[str, object],
+                context: MessageContext,
+            ) -> object:
                 _ = payload
                 _ = context
                 self.count += 1
