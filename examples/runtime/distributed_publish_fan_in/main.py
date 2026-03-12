@@ -141,6 +141,8 @@ class IngressAgent(BaseAgent):
             "ingress",
             f"workflow={workflow_id} received prompt='{prompt}'",
         )
+        # Ingress only knows the planner's logical recipient id. The distributed
+        # host resolves which worker currently owns that agent type.
         planner_outcome = await self.send_message(
             {"workflow_id": workflow_id, "prompt": prompt},
             recipient=self._planner_recipient,
@@ -173,6 +175,9 @@ class PlannerAgent(BaseAgent):
             "planner",
             f"workflow={workflow_id} built plan='{plan_text}'",
         )
+        # Publish decouples the planner from specialist placement. Reusing the
+        # workflow id as the topic route key lets downstream agents correlate
+        # every event that belongs to the same workflow.
         ack = await self.publish_message(
             {"workflow_id": workflow_id, "plan": plan_text},
             topic=TopicId.from_values(
@@ -280,9 +285,15 @@ class AggregatorAgent(BaseAgent):
     ) -> object:
         """Collect worker results and resolve workflow completion when ready."""
         _ = context
+        # For stateful topic delivery, the runtime materializes the subscriber
+        # agent id from the topic route key. The aggregator can therefore use
+        # its own id key as the workflow id it is collecting for.
         workflow_id = self.id.key.value
         worker_name = expect_str(payload, "worker_name")
         output = expect_str(payload, "output")
+        # This state lives inside one logical aggregator agent instance, so each
+        # workflow accumulates results independently even when many workflows are
+        # active at the same time.
         self._partial_results[worker_name] = output
         log_line(
             "aggregator",
@@ -371,6 +382,8 @@ def print_final_results(summaries: list[WorkflowSummary]) -> None:
 
 async def run_demo(config: DemoConfig) -> None:
     """Run the distributed publish fan-out / fan-in demo."""
+    # The host is the distributed control plane. Workers connect to it, advertise
+    # their agent types/subscriptions, and send all cross-process traffic through it.
     host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
     tracker = CompletionTracker()
 
@@ -393,6 +406,8 @@ async def run_demo(config: DemoConfig) -> None:
     planner_worker.register_factory(PLANNER_AGENT_TYPE, PlannerAgent)
 
     inventory_worker.register_factory(INVENTORY_AGENT_TYPE, InventoryWorkerAgent)
+    # Stateless subscribers receive one delivery per publish without keeping
+    # per-workflow local state between messages.
     inventory_worker.subscribe_exact(
         topic_type=PLAN_TOPIC_TYPE,
         agent_type=INVENTORY_AGENT_TYPE,
@@ -426,6 +441,8 @@ async def run_demo(config: DemoConfig) -> None:
         pricing_worker,
         aggregator_worker,
     ]
+    # Starting a worker opens its gRPC listener and registers its factories and
+    # subscriptions with the host before the demo starts sending traffic.
     await asyncio.gather(*(worker.start() for worker in workers))
     print_cluster_layout(
         host=host,
@@ -454,6 +471,8 @@ async def run_demo(config: DemoConfig) -> None:
                 )
             )
 
+        # The demo only performs direct RPCs into the ingress worker. Everything
+        # after that point fans out and back in through the distributed runtime.
         ingress_outcomes = await asyncio.gather(
             *(
                 ingress_worker.send_message(

@@ -18,6 +18,43 @@ This demonstrates the other common fan-in pattern: one agent explicitly
 aggregates responses from multiple peer agents rather than aggregating through
 publish events.
 
+## ASCII Flow
+
+```text
+main
+  |
+  | direct RPC recipient=CoordinatorAgent(request_id)
+  v
+[coordinator_worker]
+  CoordinatorAgent
+      |
+      | direct RPCs started concurrently
+      v
+                   [host]
+                /     |      \
+               v      v       v
+[inventory_worker] [pricing_worker] [shipping_worker]
+  InventoryAgent     PricingAgent     ShippingAgent
+               \      |       /
+                \     |      /
+                 v    v     v
+                   [host]
+                     |
+                     | delivered outcomes
+                     v
+            [coordinator_worker]
+              CoordinatorAgent
+                     |
+                     | asyncio.gather(...) merges responses
+                     v
+                    main
+             (AggregatedQuote)
+```
+
+The host is drawn twice to separate outbound request routing from inbound
+response delivery. In the real runtime both paths go through the same host
+service.
+
 ## Run
 
 ```bash

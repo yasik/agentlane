@@ -172,6 +172,8 @@ class CoordinatorAgent(BaseAgent):
             "coordinator",
             f"request={request_id} scattering to inventory, pricing, and shipping",
         )
+        # create_task starts all three RPCs immediately so the specialist
+        # workers can process them in parallel instead of serially.
         inventory_task = asyncio.create_task(
             self.send_message(
                 request_payload,
@@ -347,6 +349,8 @@ def print_quotes(quotes: list[AggregatedQuote]) -> None:
 
 async def run_demo(config: DemoConfig) -> None:
     """Run the distributed scatter / gather demo."""
+    # The host is the single control plane for the cluster. Each worker below
+    # connects back to this address and uses the host for cross-worker routing.
     host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
     await host.start()
     log_line("host", f"started distributed host at {host.address}")
@@ -356,6 +360,8 @@ async def run_demo(config: DemoConfig) -> None:
     pricing_worker = WorkerAgentRuntime(host_address=host.address)
     shipping_worker = WorkerAgentRuntime(host_address=host.address)
 
+    # The coordinator keeps only logical recipient ids. It does not need to know
+    # which worker currently owns each specialist.
     coordinator_worker.register_factory(
         COORDINATOR_AGENT_TYPE,
         lambda engine: CoordinatorAgent(
@@ -375,6 +381,8 @@ async def run_demo(config: DemoConfig) -> None:
         pricing_worker,
         shipping_worker,
     ]
+    # Worker startup registers the available agent types with the host so direct
+    # RPC routing can begin.
     await asyncio.gather(*(worker.start() for worker in workers))
     print_cluster_layout(
         host=host,
@@ -393,6 +401,9 @@ async def run_demo(config: DemoConfig) -> None:
             }
             for index in range(config.request_count)
         ]
+        # Each quote request targets a coordinator agent keyed by request id.
+        # That keeps the logical recipient stable if the coordinator ever needs
+        # per-request state later.
         outcomes = await asyncio.gather(
             *(
                 coordinator_worker.send_message(

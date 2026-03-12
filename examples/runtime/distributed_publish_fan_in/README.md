@@ -17,6 +17,52 @@ Message flow:
 The aggregator demonstrates the key fan-in pattern: one agent instance collects
 multiple result events and produces one merged workflow summary.
 
+## ASCII Flow
+
+```text
+main
+  |
+  | direct RPC recipient=IngressAgent(workflow_id)
+  v
+[ingress_worker]
+  IngressAgent
+      |
+      | direct RPC recipient=PlannerAgent("planner")
+      v
+    [host]
+      |
+      v
+[planner_worker]
+  PlannerAgent
+      |
+      | publish PLAN_TOPIC_TYPE(route_key=workflow_id)
+      v
+    [host]
+    /    \
+   v      v
+[inventory_worker]      [pricing_worker]
+  InventoryWorkerAgent    PricingWorkerAgent
+           \              /
+            \            /
+             v          v
+               [host]
+                 |
+                 | publish RESULT_TOPIC_TYPE(route_key=workflow_id)
+                 v
+        [aggregator_worker]
+          AggregatorAgent(key=workflow_id)
+                 |
+                 | tracker.complete(summary)
+                 v
+          CompletionTracker
+                 |
+                 v
+                main
+```
+
+The host appears more than once in the diagram for readability. In the real
+cluster it is one service, and every cross-worker hop routes through it.
+
 ## Run
 
 ```bash
