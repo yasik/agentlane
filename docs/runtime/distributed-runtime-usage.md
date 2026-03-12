@@ -211,6 +211,9 @@ See these runnable distributed runtime demos:
 2. [distributed_scatter_gather](../../examples/runtime/distributed_scatter_gather/README.md):
    explicit host/workers with one coordinator agent aggregating multiple direct
    RPC responses.
+3. [simple](../../examples/runtime/simple/README.md):
+   stripped-down starter versions of both patterns with plain `print(...)`
+   output and single-file scripts.
 
 For design background and tradeoffs, see
 [Runtime: Distributed Host/Worker Architecture](./distributed-runtime-architecture.md).

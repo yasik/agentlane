@@ -163,6 +163,12 @@ uv run python examples/runtime/distributed_publish_fan_in/main.py
 
 # Distributed direct scatter / gather demo
 uv run python examples/runtime/distributed_scatter_gather/main.py
+
+# Simple distributed publish fan-out / fan-in starter
+uv run python examples/runtime/simple/distributed_publish_fan_in.py
+
+# Simple distributed scatter / gather starter
+uv run python examples/runtime/simple/distributed_scatter_gather.py
 ```
 
 ## Documentation Map

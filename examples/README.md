@@ -32,3 +32,10 @@ Run the distributed scatter / gather demo:
 ```bash
 uv run python examples/runtime/distributed_scatter_gather/main.py
 ```
+
+Run the simple distributed runtime starter examples:
+
+```bash
+uv run python examples/runtime/simple/distributed_publish_fan_in.py
+uv run python examples/runtime/simple/distributed_scatter_gather.py
+```
