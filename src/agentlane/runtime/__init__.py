@@ -1,6 +1,6 @@
 """Runtime primitives and engine exports."""
 
-from ._agent import BaseAgent
+from ._base_agent import BaseAgent
 from ._context import (
     distributed_runtime,
     runtime_scope,
