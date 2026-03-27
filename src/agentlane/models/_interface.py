@@ -1,0 +1,272 @@
+import abc
+import enum
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
+
+import httpx
+from pydantic import BaseModel
+
+from ._output_schema import OutputSchema
+from ._rate_limiter import RateLimiter
+from ._tool import Tool
+
+type MessageDict = dict[str, Any]
+"""Conversation message payload shared across client interfaces."""
+
+
+class ModelTracing(enum.Enum):
+    """The tracing mode for the LLM client."""
+
+    DISABLED = 0
+    """Tracing is disabled entirely."""
+
+    ENABLED = 1
+    """Tracing is enabled, and all data is included."""
+
+    ENABLED_WITHOUT_DATA = 2
+    """Tracing is enabled, but inputs/outputs are not included."""
+
+    def is_disabled(self) -> bool:
+        """Whether tracing is disabled."""
+        return self == ModelTracing.DISABLED
+
+    def include_data(self) -> bool:
+        """Whether tracing includes data."""
+        return self == ModelTracing.ENABLED
+
+
+@dataclass(frozen=True)
+class Config:
+    """Common configuration for the LLM clients.
+
+    This config holds only most common configuration for creating LLM clients for
+    different models classes (i.e. Anthropic, Gemini, OpenAI, etc.). The specific
+    parameters such as temperature, max tokens, etc. should be provided at the time
+    of creation of the client or a request to the LLM.
+
+    Note on ``enforce_structured_output`` behavior:
+    1. If ``True``, the schema should not be included in the prompt. The client
+       will enforce schema-constrained output via the model API (e.g., response
+       format / structured output settings).
+    2. ``True`` may not be compatible with certain model features (e.g., Anthropic
+       extended thinking mode). In such cases, disable those features or set
+       ``enforce_structured_output=False``.
+    3. If ``False``, the schema must be passed in the prompt manually (e.g., as part
+       of the system/user instructions) to guide the model toward the desired
+       structure.
+    """
+
+    api_key: str
+    """API key for the LLM client."""
+
+    model: str
+    """Model for the LLM client."""
+
+    # Optional parameters
+    temperature: float | None = None
+    """Temperature for the LLM client."""
+
+    reasoning_effort: (
+        Literal["none", "minimal", "low", "medium", "high", "default"] | None
+    ) = None
+    """Reasoning effort for the LLM client."""
+
+    max_retries: int = 3
+    """Maximum number of retries for the LLM client."""
+
+    timeout: float | httpx.Timeout = 600
+    """Timeout for the LLM client.
+
+    Can be a float (seconds) or httpx.Timeout for granular control:
+    - httpx.Timeout(600.0, connect=30.0) for 10min read, 30sec connect timeout
+    """
+
+    organization: str | None = None
+    """Organization for the LLM client."""
+
+    base_url: str | None = None
+    """Base URL for the LLM client.
+
+    For standard OpenAI: overrides the default API endpoint.
+    For Azure: the Azure resource endpoint (e.g., ``https://your-resource.openai.azure.com/``).
+    For LiteLLM: forwarded as both ``base_url`` and ``api_base``.
+    """
+
+    default_headers: dict[str, str] | None = None
+    """Default headers for the LLM client."""
+
+    vertex_project_id: str | None = None
+    """Vertex AI project ID."""
+
+    vertex_location: str | None = None
+    """Vertex AI project location."""
+
+    enforce_structured_output: bool = False
+    """Whether to enforce JSON schema on the LLM response. If this is True,
+    the response format should be explicitly set to expect structured deterministic
+    output from the LLM."""
+
+    tracing: ModelTracing = ModelTracing.DISABLED
+    """The tracing mode for the LLM client."""
+
+    schema_validation_retries: int = 3
+    """Number of retries for JSON schema validation failures.
+
+    This is separate from HTTP retries (429, 5xx) and controls how many times
+    the client will retry when the model returns invalid JSON that doesn't
+    match the expected schema. On retry, the client adds guidance to help
+    the model self-correct.
+    """
+
+    rate_limiter: RateLimiter | None = None
+    """Optional rate limiter to enforce usage limits across client instances.
+
+    When provided, the rate limiter is shared across all client instances
+    created from the same factory, enabling global rate limiting per model.
+    """
+
+    prompt_cache_retention: Literal["24h", "in_memory"] | None = None
+    """Prompt cache retention policy for extended caching.
+
+    Set to "24h" to enable extended prompt caching, which keeps cached prefixes
+    active for up to 24 hours. This is only supported on certain models
+    (gpt-5.1, gpt-5, gpt-4.1). When None, uses default in-memory caching
+    (5-10 min retention).
+    """
+
+    def to_trace_settings(self) -> dict[str, Any]:
+        """Convert the configuration to trace settings."""
+        trace_settings: dict[str, Any] = {}
+
+        if self.temperature is not None:
+            trace_settings["temperature"] = self.temperature
+        if self.reasoning_effort is not None:
+            trace_settings["reasoning_effort"] = self.reasoning_effort
+        if self.base_url is not None:
+            trace_settings["base_url"] = self.base_url
+        trace_settings["timeout"] = self.timeout
+        trace_settings["max_retries"] = self.max_retries
+        if self.vertex_project_id is not None:
+            trace_settings["vertex_project_id"] = self.vertex_project_id
+        if self.vertex_location is not None:
+            trace_settings["vertex_location"] = self.vertex_location
+        if self.enforce_structured_output:
+            trace_settings["enforce_structured_output"] = self.enforce_structured_output
+        if self.prompt_cache_retention is not None:
+            trace_settings["prompt_cache_retention"] = self.prompt_cache_retention
+        return trace_settings
+
+
+@dataclass(frozen=True, slots=True)
+class Tools:
+    """Configuration for enabling tool calling on LLM requests."""
+
+    tools: Sequence[Tool[Any, Any]]
+    """Collection of available tools that can be invoked by the model."""
+
+    tool_choice: Literal["auto", "required", "none"] = "auto"
+    """Strategy that controls if and how the model may call tools."""
+
+    parallel_tool_calls: bool = False
+    """Whether the model is allowed to call tools in parallel."""
+
+    tool_call_timeout: float | None = None
+    """Timeout in seconds for individual tool calls.
+
+    When set, each tool call will be wrapped in asyncio.wait_for with this timeout.
+    On timeout, retries up to tool_call_max_retries times, then returns an error
+    message to the LLM allowing it to self-correct or proceed without the tool result.
+    """
+
+    tool_call_max_retries: int = 3
+    """Number of retries after timeout (default: 3 retries = 4 total attempts)."""
+
+    tool_call_limits: Mapping[str, int] | None = None
+    """Per-tool call limits.  Maps tool name to max allowed calls.
+
+    When a tool's call count reaches its limit, the client removes it
+    from the API call so the model cannot invoke it.  When all tools are
+    exhausted, tools are stripped entirely, forcing the model to produce
+    a text response.  This is deterministic — it does not rely on the
+    model reading "limit reached" messages.
+    """
+
+    max_tool_round_trips: int = 10
+    """Global safety limit on LLM → tool → LLM cycles.
+
+    Acts as a last resort to prevent infinite loops when
+    ``tool_call_limits`` is not configured.  When reached, all tools
+    are stripped from the next API call.
+    """
+
+    def as_args(self) -> dict[str, Any]:
+        """Render the configuration into the kwargs expected by LiteLLM."""
+
+        tools_payload: list[dict[str, Any]] = []
+        for tool in self.tools:
+            output_schema = {
+                "type": "function",
+                "function": tool.schema,
+            }
+            tools_payload.append(output_schema)
+
+        return {
+            "tools": tools_payload,
+            "tool_choice": self.tool_choice,
+            "parallel_tool_calls": self.parallel_tool_calls,
+        }
+
+
+class Model[TResponse](abc.ABC):
+    """The base interface for calling an LLM."""
+
+    async def __call__(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, Any] | None = None,
+        schema: type[BaseModel] | OutputSchema[Any] | None = None,
+        tools: Tools | None = None,
+        **kwargs: Any,
+    ) -> TResponse:
+        """Get the response from the LLM."""
+        return await self.get_response(
+            messages,
+            extra_call_args=extra_call_args,
+            schema=schema,
+            tools=tools,
+            **kwargs,
+        )
+
+    @abc.abstractmethod
+    async def get_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, Any] | None = None,
+        schema: type[BaseModel] | OutputSchema[Any] | None = None,
+        tools: Tools | None = None,
+        **kwargs: Any,
+    ) -> TResponse:
+        """Get the response from the LLM."""
+        raise NotImplementedError("get_response method must be implemented")
+
+
+class Factory[TResponse](abc.ABC):
+    """The base interface for creating an LLM client."""
+
+    def __init__(self, default_config: Config):
+        """Initialize the factory."""
+        self._default_config = default_config
+
+    @abc.abstractmethod
+    def get_model_client(
+        self, tracing: ModelTracing = ModelTracing.DISABLED, **kwargs: Any
+    ) -> Model[TResponse]:
+        """Get a client for the LLM.
+
+        Args:
+            tracing: The tracing mode to use for the client.
+            kwargs: Additional keyword arguments to pass to the client. These will override
+                the default configuration.
+        """
+        raise NotImplementedError("get_model_client method must be implemented")

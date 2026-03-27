@@ -5,7 +5,6 @@ from typing import cast
 from agentlane.messaging import (
     AgentId,
     AgentType,
-    CancellationToken,
     CorrelationId,
     DeliveryOutcome,
     IdempotencyKey,
@@ -17,6 +16,7 @@ from agentlane.messaging import (
 from agentlane.runtime import (
     Agent,
     BaseAgent,
+    CancellationToken,
     Engine,
     is_on_message_handler,
     on_message,

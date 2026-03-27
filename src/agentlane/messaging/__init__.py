@@ -1,6 +1,5 @@
 """Messaging primitives for envelopes, routing, and outcomes."""
 
-from ._cancellation import CancellationToken
 from ._context import MessageContext
 from ._envelope import (
     MessageEnvelope,
@@ -40,7 +39,6 @@ __all__ = [
     "AgentId",
     "AgentKey",
     "AgentType",
-    "CancellationToken",
     "CorrelationId",
     "DeliveryMode",
     "DeliveryError",

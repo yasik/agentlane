@@ -14,7 +14,6 @@ from grpc import aio as grpc_aio
 from agentlane.messaging import (
     AgentId,
     AgentType,
-    CancellationToken,
     CorrelationId,
     DeliveryMode,
     DeliveryOutcome,
@@ -28,6 +27,7 @@ from agentlane.messaging import (
 )
 from agentlane.util import utc_now_ms
 
+from ._cancellation import CancellationToken
 from ._distributed_grpc import (
     HostServiceStub,
     JsonObject,

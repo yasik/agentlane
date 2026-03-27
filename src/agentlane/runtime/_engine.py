@@ -5,13 +5,14 @@ import abc
 from agentlane.messaging import (
     AgentId,
     AgentType,
-    CancellationToken,
     CorrelationId,
     DeliveryOutcome,
     IdempotencyKey,
     PublishAck,
     TopicId,
 )
+
+from ._cancellation import CancellationToken
 
 
 class Engine(abc.ABC):

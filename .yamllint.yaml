@@ -1,3 +1,6 @@
+ignore: |
+  .venv/
+
 rules:
   quoted-strings: disable
   empty-values:

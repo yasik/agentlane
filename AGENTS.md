@@ -94,19 +94,7 @@ Fight entropy. Leave the codebase better than you found it.
 
 All python commands should be run via `uv run python ...`
 
-### Lint policy for data files
-
-**IMPORTANT**: Ignore lint issues in markdown (`.md`), JSON (`.json`), YAML (`.yaml`, `.yml`), and other data/documentation files. These files may contain working notes, plans, or generated content that do not need to conform to strict linting rules. **Never delete or modify these files to fix lint issues.** Only Python source code must pass lint checks.
-
 ## Import Conventions
-
-Follow these import patterns consistently:
-
-- **Workspace packages**: `from agentlane_tracing import trace`
-- **Main application**: `from brain.apps.runtime import settings`
-- **Proto files**: `from protos.agentlane.common.patient.v1beta1 import gender_pb2`
-
-### Import Rules
 
 - Use package-root imports for public API usage (e.g., `from agentlane.messaging import AgentId`)
 - Inside the same package, import private modules with relative imports only (e.g., `from ._identity import AgentId`)
@@ -236,11 +224,6 @@ uv run python -c "import agentlane_<package-name>; print('✅ Package installed!
 - Use `TypeAlias` for complex type definitions
 - Never use quoted string annotations for types (e.g., `"SomeType | None"`). Reorder class definitions or isolate shared types to avoid forward-reference hacks.
 
-### Configuration
-
-- Use `pydantic_settings.BaseSettings` for configuration management
-- Use `SecretStr` for sensitive values; access via singleton `get_settings()`
-
 ### Testing
 
 - Name tests: `test_<what>_<condition>_<expected_result>`
@@ -258,11 +241,6 @@ uv run python -c "import agentlane_<package-name>; print('✅ Package installed!
 - Pass `CancellationToken` through async call chains for cancellation support
 - Use `asyncio.gather()` for concurrent operations; implement timeouts for external calls
 
-### Dependency Injection
-
-- Use FastAPI's `Depends` for service dependencies
-- Create factory functions in runtime modules (`_get_*.py`)
-
 ### Error Handling
 
 - Return `None` or empty collections for "not found" cases (don't raise)
@@ -271,16 +249,6 @@ uv run python -c "import agentlane_<package-name>; print('✅ Package installed!
 ### Logging
 
 - Use `structlog` for structured logging; include request IDs for tracing
-
-### API Design
-
-- Define separate `*Request` and `*Response` Pydantic models
-- Include OpenAPI tags and descriptions for all endpoints
-
-### Architecture
-
-- Keep controllers thin; place business logic in services/agents
-- Use builder pattern for complex object construction
 
 ## Modules Structure and Naming Patterns
 
