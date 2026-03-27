@@ -127,7 +127,7 @@ class OutputSchema(OutputSchemaBase[OutT_co]):
                     _WRAPPER_DICT_KEY: output_type,  # type: ignore
                 },
             )
-            self._type_adapter = TypeAdapter(OutputType)  # type: ignore
+            self._type_adapter = TypeAdapter(OutputType)  # type: ignore[assignment,unused-ignore]
             self._output_schema = self._type_adapter.json_schema()
         else:
             self._type_adapter = TypeAdapter(output_type)
@@ -437,3 +437,21 @@ def _find_matching_object(
                 return result
 
     return None
+
+
+def resolve_output_schema(
+    schema: type[BaseModel] | OutputSchema[Any] | None,
+) -> OutputSchema[Any] | None:
+    """Normalize a raw schema input into an OutputSchema instance.
+
+    Args:
+        schema: A Pydantic model class, an existing OutputSchema, or None.
+
+    Returns:
+        An OutputSchema wrapping the type, the same OutputSchema, or None.
+    """
+    if schema is None:
+        return None
+    if isinstance(schema, type):
+        return OutputSchema(schema)
+    return schema

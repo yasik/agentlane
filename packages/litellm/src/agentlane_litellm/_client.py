@@ -24,6 +24,7 @@ from agentlane.models import (
     Tools,
     has_escape_sequence_explosion,
     is_retryable_by_status_code,
+    resolve_output_schema,
     retry_on_errors,
 )
 from agentlane.runtime import CancellationToken
@@ -37,12 +38,9 @@ from .types import (
     Timeout,
 )
 
-# Disable aiohttp transport which leads to aiohttp sessions being created for each call
-# and never being closed properly. This forces litellm to use httpx instead.
-litellm.use_aiohttp_transport = False
-litellm.disable_aiohttp_transport = True
+LOGGER = structlog.get_logger(log_tag="agentlane.litellm.client")
 
-LOGGER = structlog.get_logger(log_tag="litellmx.client")
+_litellm_transport_configured = False
 
 
 def _is_litellm_retryable(exception: BaseException) -> bool:
@@ -80,17 +78,6 @@ a structurally compatible response that can be used interchangeably.
 """
 
 type ResponseFormat = dict[str, Any] | type[BaseModel]
-
-
-def _resolve_output_schema(
-    schema: type[BaseModel] | OutputSchema[Any] | None,
-) -> OutputSchema[Any] | None:
-    """Normalize raw schema input into an OutputSchema instance."""
-    if schema is None:
-        return None
-    if isinstance(schema, type):
-        return OutputSchema(schema)
-    return schema
 
 
 async def _litellm_acompletion(**kwargs: Any) -> ModelResponse:
@@ -157,6 +144,14 @@ class Client(Model[TResponseType]):
             config: The configuration to use for the client
             kwargs: Additional keyword arguments to pass to the client
         """
+        # Disable aiohttp transport which leads to sessions being created for
+        # each call and never closed properly.  Forces litellm to use httpx.
+        global _litellm_transport_configured  # noqa: PLW0603
+        if not _litellm_transport_configured:
+            litellm.use_aiohttp_transport = False
+            litellm.disable_aiohttp_transport = True
+            _litellm_transport_configured = True
+
         if config.temperature is not None and config.reasoning_effort is not None:
             raise ValueError(
                 "Either temperature or reasoning_effort must be provided, not both."
@@ -182,7 +177,7 @@ class Client(Model[TResponseType]):
             "max_retries": 0,
             "num_retries": 0,
             "default_headers": config.default_headers,
-            "api_base": config.api_base,
+            "api_base": config.base_url,
             **kwargs,
         }
         if config.vertex_project_id and config.vertex_location:
@@ -314,7 +309,7 @@ class Client(Model[TResponseType]):
 
                 # Validate structured output if schema is provided
                 if schema is not None:
-                    output_schema = _resolve_output_schema(schema)
+                    output_schema = resolve_output_schema(schema)
                     if output_schema is None:
                         raise ValueError(
                             "schema normalization unexpectedly returned None"
@@ -445,7 +440,8 @@ class Client(Model[TResponseType]):
         if not message:
             return None
 
-        return message.model_dump(mode="json")
+        msg_dict: dict[str, Any] = message.model_dump(mode="json")
+        return msg_dict
 
     def _extract_tool_calls(self, result: ModelResponse) -> list[ToolCall]:
         """Extract tool call objects from an LLM response choice."""
@@ -473,7 +469,7 @@ class Client(Model[TResponseType]):
         if schema is None or not self.get_is_enforce_structured_output():
             return None
 
-        output_schema = _resolve_output_schema(schema)
+        output_schema = resolve_output_schema(schema)
 
         if output_schema is None:
             return None

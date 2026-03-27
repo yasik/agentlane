@@ -5,7 +5,7 @@ from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from ._exceptions import ModelBehaviorError, ModelsException, RunErrorDetails
 from ._interface import Config, Factory, MessageDict, Model, ModelTracing, Tools
 from ._json_repair import parse_json_dict
-from ._output_schema import OutputSchema, SchemaValidationResult
+from ._output_schema import OutputSchema, SchemaValidationResult, resolve_output_schema
 from ._prompts import (
     FilePart,
     ImagePart,
@@ -59,6 +59,7 @@ __all__ = [
     "parse_json_dict",
     "OutputSchema",
     "SchemaValidationResult",
+    "resolve_output_schema",
     "get_content_or_none",
     "get_json_dict_or_none",
     "get_reasoning_content_or_none",

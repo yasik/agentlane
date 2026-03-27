@@ -11,6 +11,7 @@ from agentlane.models import (
     SlidingWindowRateLimiter,
 )
 
+
 def run_async[T](awaitable: Coroutine[Any, Any, T]) -> T:
     """Run an awaitable inside a fresh event loop for sync pytest tests."""
     return asyncio.run(awaitable)
@@ -21,6 +22,7 @@ class TestSlidingWindowRateLimiter:
 
     def test_allows_operations_within_limit(self) -> None:
         """Operations within the rate window should proceed immediately."""
+
         async def exercise() -> float:
             limiter = SlidingWindowRateLimiter(max_operations=5, window_seconds=1.0)
             start = time.monotonic()
@@ -34,6 +36,7 @@ class TestSlidingWindowRateLimiter:
 
     def test_blocks_when_limit_exceeded(self) -> None:
         """Operations beyond the rate limit should wait for the window to slide."""
+
         async def exercise() -> float:
             limiter = SlidingWindowRateLimiter(max_operations=3, window_seconds=0.5)
             for _ in range(3):
@@ -48,6 +51,7 @@ class TestSlidingWindowRateLimiter:
 
     def test_concurrent_acquires(self) -> None:
         """Concurrent acquires should synchronize correctly."""
+
         async def exercise() -> float:
             limiter = SlidingWindowRateLimiter(max_operations=5, window_seconds=1.0)
             tasks = [limiter.acquire() for _ in range(10)]
@@ -65,6 +69,7 @@ class TestConcurrentRequestLimiter:
 
     def test_allows_concurrent_requests_within_limit(self) -> None:
         """Requests within the concurrency limit should proceed."""
+
         async def exercise() -> None:
             limiter = ConcurrentRequestLimiter(max_concurrent=3)
             await limiter.acquire()
@@ -77,6 +82,7 @@ class TestConcurrentRequestLimiter:
 
     def test_blocks_when_concurrent_limit_exceeded(self) -> None:
         """Requests beyond the concurrency limit should block."""
+
         async def exercise() -> bool:
             limiter = ConcurrentRequestLimiter(max_concurrent=2)
             await limiter.acquire()
@@ -101,6 +107,7 @@ class TestConcurrentRequestLimiter:
 
     def test_release_frees_slot(self) -> None:
         """Release should make a blocked slot available again."""
+
         async def exercise() -> float:
             limiter = ConcurrentRequestLimiter(max_concurrent=1)
             await limiter.acquire()
@@ -119,6 +126,7 @@ class TestCompositeRateLimiter:
 
     def test_acquires_from_all_limiters(self) -> None:
         """Composite acquire should honor all child limiters."""
+
         async def exercise() -> bool:
             limiter1 = SlidingWindowRateLimiter(max_operations=2, window_seconds=1.0)
             limiter2 = ConcurrentRequestLimiter(max_concurrent=1)
@@ -144,6 +152,7 @@ class TestCompositeRateLimiter:
 
     def test_empty_limiter_list(self) -> None:
         """An empty composite should allow immediate acquires."""
+
         async def exercise() -> float:
             composite = CompositeRateLimiter([])
             start = time.monotonic()
@@ -156,6 +165,7 @@ class TestCompositeRateLimiter:
 
     def test_enforces_strictest_limit(self) -> None:
         """Composite should effectively enforce the strictest child limiter."""
+
         async def exercise() -> float:
             limiter1 = SlidingWindowRateLimiter(max_operations=10, window_seconds=1.0)
             limiter2 = SlidingWindowRateLimiter(max_operations=3, window_seconds=1.0)
@@ -172,6 +182,7 @@ class TestCompositeRateLimiter:
 
     def test_high_concurrency_no_hang(self) -> None:
         """High concurrency should not deadlock the sliding-window limiter."""
+
         async def exercise() -> float:
             limiter = SlidingWindowRateLimiter(max_operations=5, window_seconds=0.5)
             tasks = [limiter.acquire() for _ in range(50)]
@@ -181,12 +192,10 @@ class TestCompositeRateLimiter:
 
         elapsed = run_async(exercise())
 
-        assert elapsed < 8.0, (
-            f"Test took {elapsed}s, likely hanging due to lock bug"
-        )
-        assert elapsed > 3.5, (
-            f"Test completed too fast ({elapsed}s), rate limiting may be broken"
-        )
+        assert elapsed < 8.0, f"Test took {elapsed}s, likely hanging due to lock bug"
+        assert (
+            elapsed > 3.5
+        ), f"Test completed too fast ({elapsed}s), rate limiting may be broken"
 
 
 class TestRateLimiterContextManager:
@@ -194,6 +203,7 @@ class TestRateLimiterContextManager:
 
     def test_sliding_window_context_manager(self) -> None:
         """SlidingWindowRateLimiter should support async context-manager usage."""
+
         async def exercise() -> None:
             limiter = SlidingWindowRateLimiter(max_operations=2, window_seconds=1.0)
             async with limiter:
@@ -205,10 +215,12 @@ class TestRateLimiterContextManager:
 
     def test_concurrent_limiter_context_manager_releases(self) -> None:
         """ConcurrentRequestLimiter should release on context-manager exit."""
+
         async def exercise() -> bool:
             limiter = ConcurrentRequestLimiter(max_concurrent=1)
             acquired = False
             async with limiter:
+
                 async def try_acquire() -> None:
                     nonlocal acquired
                     async with limiter:
@@ -226,6 +238,7 @@ class TestRateLimiterContextManager:
 
     def test_concurrent_limiter_releases_on_exception(self) -> None:
         """ConcurrentRequestLimiter should release even if the block raises."""
+
         async def exercise() -> float:
             limiter = ConcurrentRequestLimiter(max_concurrent=1)
             try:
@@ -244,6 +257,7 @@ class TestRateLimiterContextManager:
 
     def test_composite_context_manager(self) -> None:
         """CompositeRateLimiter should support nested async context-manager usage."""
+
         async def exercise() -> bool:
             limiter1 = SlidingWindowRateLimiter(max_operations=5, window_seconds=1.0)
             limiter2 = ConcurrentRequestLimiter(max_concurrent=2)
@@ -251,6 +265,7 @@ class TestRateLimiterContextManager:
             acquired = False
             async with composite:
                 async with composite:
+
                     async def try_acquire() -> None:
                         nonlocal acquired
                         async with composite:
@@ -268,6 +283,7 @@ class TestRateLimiterContextManager:
 
     def test_composite_releases_on_exception(self) -> None:
         """CompositeRateLimiter should release child limiters on exception."""
+
         async def exercise() -> float:
             limiter1 = SlidingWindowRateLimiter(max_operations=5, window_seconds=1.0)
             limiter2 = ConcurrentRequestLimiter(max_concurrent=1)
@@ -288,6 +304,7 @@ class TestRateLimiterContextManager:
 
     def test_composite_cleanup_on_partial_failure(self) -> None:
         """CompositeRateLimiter should clean up earlier limiters on enter failure."""
+
         class FailingLimiter:
             async def acquire(self) -> None:
                 """Provide a no-op acquire implementation."""

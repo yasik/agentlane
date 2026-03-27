@@ -122,12 +122,11 @@ def _parse_from_json_str(input_str: str) -> dict[str, Any] | None:
                             # wrapped a plain string (e.g. "[<=3.00]" -> [3.0]).
                             # Legitimate nested JSON arrays produce multi-
                             # element lists or lists containing dicts/lists.
+                            repaired_list: list[Any] = repaired  # type: ignore[assignment]
                             if not (
                                 isinstance(repaired, list)
-                                and len(cast(list[Any], repaired)) == 1
-                                and not isinstance(
-                                    cast(list[Any], repaired)[0], (dict, list)
-                                )
+                                and len(repaired_list) == 1
+                                and not isinstance(repaired_list[0], (dict, list))
                             ):
                                 parsed[key] = repaired
 

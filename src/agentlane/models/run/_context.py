@@ -70,9 +70,10 @@ class DefaultRunContext(RunContext[dict[str, Any]], MutableMapping[str, Any]):
             The new value after incrementing.
         """
         async with self._lock:
-            value = self.context.get(key, default) + 1
-            self.context[key] = value
-            return value
+            current: int = self.context.get(key, default)
+            new_value = current + 1
+            self.context[key] = new_value
+            return new_value
 
     async def set(self, key: str, value: Any) -> None:
         """Atomically set a key's value.
@@ -97,8 +98,9 @@ class DefaultRunContext(RunContext[dict[str, Any]], MutableMapping[str, Any]):
         async with self._lock:
             if key not in self.context:
                 self.context[key] = []
-            self.context[key].append(value)
-            return self.context[key]
+            items: list[Any] = self.context[key]
+            items.append(value)
+            return items
 
     async def extend_list(self, key: str, values: list[Any]) -> list[Any]:
         """Atomically extend a list with multiple values.
@@ -113,8 +115,9 @@ class DefaultRunContext(RunContext[dict[str, Any]], MutableMapping[str, Any]):
         async with self._lock:
             if key not in self.context:
                 self.context[key] = []
-            self.context[key].extend(values)
-            return self.context[key]
+            items: list[Any] = self.context[key]
+            items.extend(values)
+            return items
 
     async def append_if_unique(
         self,

@@ -51,8 +51,6 @@ agentlane = { workspace = true }
 agentlane-braintrust = { workspace = true }
 agentlane-openai = { workspace = true }
 agentlane-litellm = { workspace = true }
-agentlane-transport = { workspace = true }
-agentlane-cli = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentlane"]

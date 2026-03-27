@@ -63,9 +63,6 @@ class Config:
     model: str
     """Model for the LLM client."""
 
-    api_base: str | None = None
-    """API base URL for the LLM client."""
-
     # Optional parameters
     temperature: float | None = None
     """Temperature for the LLM client."""
@@ -89,7 +86,12 @@ class Config:
     """Organization for the LLM client."""
 
     base_url: str | None = None
-    """Base URL for the LLM client."""
+    """Base URL for the LLM client.
+
+    For standard OpenAI: overrides the default API endpoint.
+    For Azure: the Azure resource endpoint (e.g., ``https://your-resource.openai.azure.com/``).
+    For LiteLLM: forwarded as both ``base_url`` and ``api_base``.
+    """
 
     default_headers: dict[str, str] | None = None
     """Default headers for the LLM client."""
@@ -137,23 +139,21 @@ class Config:
         """Convert the configuration to trace settings."""
         trace_settings: dict[str, Any] = {}
 
-        if self.temperature:
+        if self.temperature is not None:
             trace_settings["temperature"] = self.temperature
-        if self.reasoning_effort:
+        if self.reasoning_effort is not None:
             trace_settings["reasoning_effort"] = self.reasoning_effort
-        if self.base_url:
+        if self.base_url is not None:
             trace_settings["base_url"] = self.base_url
-        if self.timeout:
-            trace_settings["timeout"] = self.timeout
-        if self.max_retries:
-            trace_settings["max_retries"] = self.max_retries
-        if self.vertex_project_id:
+        trace_settings["timeout"] = self.timeout
+        trace_settings["max_retries"] = self.max_retries
+        if self.vertex_project_id is not None:
             trace_settings["vertex_project_id"] = self.vertex_project_id
-        if self.vertex_location:
+        if self.vertex_location is not None:
             trace_settings["vertex_location"] = self.vertex_location
         if self.enforce_structured_output:
             trace_settings["enforce_structured_output"] = self.enforce_structured_output
-        if self.prompt_cache_retention:
+        if self.prompt_cache_retention is not None:
             trace_settings["prompt_cache_retention"] = self.prompt_cache_retention
         return trace_settings
 

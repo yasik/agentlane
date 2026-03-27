@@ -3,6 +3,7 @@ from typing import Any
 
 import braintrust
 import structlog
+from braintrust import SpanTypeAttribute  # type: ignore[attr-defined]
 from braintrust.logger import NOOP_SPAN
 
 from agentlane.tracing import (
@@ -20,15 +21,15 @@ from agentlane.tracing import (
 LOGGER = structlog.get_logger(log_tag="tracing.braintrust_processor")
 
 
-def _span_type(span: Span[Any]) -> braintrust.SpanTypeAttribute:
+def _span_type(span: Span[Any]) -> SpanTypeAttribute:
     """Map our span types to Braintrust span types."""
     if span.span_data.type in ["task", "agent", "custom"]:
-        return braintrust.SpanTypeAttribute.TASK
+        return SpanTypeAttribute.TASK
     if span.span_data.type in ["function"]:
-        return braintrust.SpanTypeAttribute.TOOL
+        return SpanTypeAttribute.TOOL
     if span.span_data.type in ["generation"]:
-        return braintrust.SpanTypeAttribute.LLM
-    return braintrust.SpanTypeAttribute.TASK
+        return SpanTypeAttribute.LLM
+    return SpanTypeAttribute.TASK
 
 
 def _span_name(span: Span[Any]) -> str:
@@ -97,7 +98,9 @@ class BraintrustProcessor(TracingProcessor):
                     "api_key and project_id are required when no logger is provided"
                 )
 
-            self._logger = braintrust.init_logger(
+            self._logger: (
+                braintrust.Span | braintrust.Experiment | braintrust.Logger
+            ) = braintrust.init_logger(
                 api_key=api_key,
                 project_id=project_id,
                 set_current=False,
@@ -160,7 +163,7 @@ class BraintrustProcessor(TracingProcessor):
                 **env_tags,
             )
         else:
-            self._spans[trace.trace_id] = self._logger.start_span(
+            self._spans[trace.trace_id] = self._logger.start_span(  # type: ignore[union-attr]
                 name=trace.name,
                 span_attributes={"type": "task", "name": trace.name},
                 span_id=trace.trace_id,
@@ -435,8 +438,8 @@ class BraintrustProcessor(TracingProcessor):
 
     def shutdown(self) -> None:
         """Shutdown the processor and flush any pending data."""
-        self._logger.flush()
+        self._logger.flush()  # type: ignore[union-attr]
 
     def force_flush(self) -> None:
         """Force flush any buffered data to Braintrust."""
-        self._logger.flush()
+        self._logger.flush()  # type: ignore[union-attr]

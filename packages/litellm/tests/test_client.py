@@ -61,7 +61,7 @@ def test_litellm_client_forwards_native_tool_schema(
 ) -> None:
     """Tool metadata should be forwarded using the native AgentLane schema."""
     client = Client(Config(api_key="test-key", model="gpt-4o"))
-    tool = Tool(
+    tool: Tool[EchoArgs, str] = Tool(
         name="echo",
         description="Echo text",
         args_model=EchoArgs,

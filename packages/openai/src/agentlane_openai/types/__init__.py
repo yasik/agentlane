@@ -1,7 +1,7 @@
 """Type aliases for OpenAI Responses API.
 
 We re-export OpenAI types following the same pattern as
-diadiax.agents.models._types to maintain consistency.
+agentlane.models._types to maintain consistency.
 """
 
 # Responses API types (non-streaming)

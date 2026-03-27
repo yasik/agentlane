@@ -29,18 +29,19 @@ class RateLimiter(Protocol):
         rate limit constraints. It never raises an exception.
         """
 
-    async def __aenter__(self) -> Self:  # type: ignore[empty-body]
+    async def __aenter__(self) -> Self:
         """Enter the rate limiter context.
 
         Acquires permission to proceed with an operation.
         """
+        ...
 
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: object | None,
-    ) -> None:  # type: ignore[empty-body]
+    ) -> None:
         """Exit the rate limiter context.
 
         Releases any resources acquired during the operation.
@@ -299,7 +300,6 @@ class CompositeRateLimiter:
             await limiter.__aexit__(exc_type, exc_val, exc_tb)
 
     def record_usage(self, tokens: int) -> None:
-        """Forward usage recording to any child limiters that support it."""
+        """Forward usage recording to all child limiters."""
         for limiter in self._limiters:
-            if hasattr(limiter, "record_usage"):
-                limiter.record_usage(tokens)
+            limiter.record_usage(tokens)

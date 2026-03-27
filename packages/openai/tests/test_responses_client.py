@@ -84,7 +84,7 @@ def test_responses_client_get_response_converts_and_forwards_configuration() -> 
             enforce_structured_output=True,
         )
     )
-    tool = NativeTool(
+    tool: NativeTool[EchoArgs, str] = NativeTool(
         name="echo",
         description="Echo text",
         args_model=EchoArgs,

@@ -18,7 +18,7 @@ import tenacity
 
 T = TypeVar("T")
 
-LOGGER = structlog.get_logger("diadiax.agents.models")
+LOGGER = structlog.get_logger("agentlane.models")
 
 # Default HTTP status codes that should trigger a retry
 DEFAULT_RETRY_STATUS_CODES: list[int] = [429, 500, 502, 503, 504, 529]
@@ -169,8 +169,7 @@ def retry_on_errors(
         print(f"Got response after {result.metrics.attempts} attempts")
         ```
     """
-    if logger is None:
-        logger = LOGGER
+    resolved_logger = logger or LOGGER
 
     if is_retryable is None:
         is_retryable = is_retryable_by_status_code
@@ -203,7 +202,7 @@ def retry_on_errors(
                     metrics_state["wait_time"] += sleep
 
                 if attempt >= max_retries:
-                    logger.error(  # type: ignore[attr-defined]
+                    resolved_logger.error(
                         "max retries exceeded",
                         error=str(exception),
                         error_type=type(exception).__name__,
@@ -212,14 +211,11 @@ def retry_on_errors(
                     )
                 else:
                     # Calculate the wait time that will be used
-                    sleep = (
-                        retry_state.next_action.sleep
-                        if retry_state.next_action
-                        else None
+                    wait_time: float = (
+                        retry_state.next_action.sleep if retry_state.next_action else 0
                     )
-                    wait_time = sleep if sleep is not None else 0
                     if wait_time > 0:
-                        logger.warning(  # type: ignore[attr-defined]
+                        resolved_logger.warning(
                             "retrying llm call due to error",
                             error=str(exception),
                             error_type=type(exception).__name__,

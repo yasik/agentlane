@@ -5,6 +5,7 @@ from typing import Any
 
 import structlog
 
+from ._provider import TraceProvider
 from ._setup import get_trace_provider
 from ._span import Span
 from ._span_data import (
@@ -16,6 +17,12 @@ from ._span_data import (
 from ._trace import Trace
 
 LOGGER = structlog.get_logger(log_tag="tracing.create")
+
+
+def _provider() -> TraceProvider:
+    """Return the typed global trace provider."""
+    provider: TraceProvider = get_trace_provider()
+    return provider
 
 
 def trace(
@@ -43,13 +50,13 @@ def trace(
     Returns:
         The newly created trace object.
     """
-    current_trace = get_trace_provider().get_current_trace()
+    current_trace = _provider().get_current_trace()
     if current_trace:
         LOGGER.warning(
             "Trace already exists. Creating a new trace, but this is probably a mistake."
         )
 
-    return get_trace_provider().create_trace(
+    return _provider().create_trace(
         name=workflow_name,
         trace_id=trace_id,
         group_id=group_id,
@@ -60,12 +67,12 @@ def trace(
 
 def get_current_trace() -> Trace | None:
     """Returns the currently active trace, if present."""
-    return get_trace_provider().get_current_trace()
+    return _provider().get_current_trace()
 
 
 def get_current_span() -> Span[Any] | None:
     """Returns the currently active span, if present."""
-    return get_trace_provider().get_current_span()
+    return _provider().get_current_span()
 
 
 def agent_span(
@@ -93,7 +100,7 @@ def agent_span(
     Returns:
         The newly created agent span.
     """
-    return get_trace_provider().create_span(
+    return _provider().create_span(
         span_data=AgentSpanData(
             name=name, handoffs=handoffs, tools=tools, output_type=output_type
         ),
@@ -126,7 +133,7 @@ def function_span(
     Returns:
         The newly created function span.
     """
-    return get_trace_provider().create_span(
+    return _provider().create_span(
         span_data=FunctionSpanData(name=name, input=inputs, output=output),
         span_id=span_id,
         parent=parent,
@@ -166,7 +173,7 @@ def generation_span(
     Returns:
         The newly created generation span.
     """
-    return get_trace_provider().create_span(
+    return _provider().create_span(
         span_data=GenerationSpanData(
             input=inputs,
             output=output,
@@ -202,7 +209,7 @@ def custom_span(
     Returns:
         The newly created custom span.
     """
-    return get_trace_provider().create_span(
+    return _provider().create_span(
         span_data=CustomSpanData(name=name, data=data or {}),
         span_id=span_id,
         parent=parent,

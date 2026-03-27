@@ -3,7 +3,7 @@
 """OpenAI Responses API client.
 
 This module provides a native OpenAI client using the Responses API that
-conforms to the diadiax.agents.models interfaces. The Responses API offers
+conforms to the agentlane.models interfaces. The Responses API offers
 several advantages over Chat Completions:
 
 1. Unified agentic loop: Model can call multiple tools in one request
@@ -14,7 +14,7 @@ several advantages over Chat Completions:
 
 import asyncio
 from dataclasses import fields, replace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import structlog
 from openai import (
@@ -53,6 +53,7 @@ from agentlane.models import (
     has_escape_sequence_explosion,
     is_retryable_by_status_code,
     parse_content_filter_block,
+    resolve_output_schema,
     retry_on_errors,
 )
 from agentlane.runtime import CancellationToken
@@ -65,7 +66,7 @@ from .types import (
     ResponseReasoningItem,
 )
 
-LOGGER = structlog.get_logger(log_tag="openaix.responses_client")
+LOGGER = structlog.get_logger(log_tag="agentlane.openai.responses_client")
 _MAX_REFUSAL_RETRIES = 3
 
 
@@ -138,17 +139,6 @@ def _extract_message_content(item: ResponseOutputMessage) -> str | None:
     return "".join(texts) if texts else None
 
 
-def _resolve_output_schema(
-    schema: type[BaseModel] | OutputSchema[Any] | None,
-) -> OutputSchema[Any] | None:
-    """Normalize raw schema input into an OutputSchema instance."""
-    if schema is None:
-        return None
-    if isinstance(schema, type):
-        return OutputSchema(schema)
-    return schema
-
-
 def _convert_tool_call(item: ResponseFunctionToolCall) -> ChatCompletionMessageToolCall:
     """Convert ResponseFunctionToolCall to ChatCompletionMessageToolCall."""
     return ChatCompletionMessageToolCall(
@@ -161,16 +151,21 @@ def _convert_tool_call(item: ResponseFunctionToolCall) -> ChatCompletionMessageT
     )
 
 
-def _append_research_disclaimer(
+def _append_refusal_context(
     input_data: list[dict[str, Any]],
+    refusal_context: str,
 ) -> list[dict[str, Any]]:
-    """Return a copy of input_data with a new research-context user message appended.
+    """Return a copy of input_data with a refusal-context user message appended.
+
+    Used to retry Azure content-filter blocks by providing additional context
+    that may help the model produce an acceptable response.
 
     Args:
         input_data: The conversation input messages (after _messages_to_input conversion).
+        refusal_context: The context message to append.
 
     Returns:
-        A copy with a new user message containing a research disclaimer.
+        A copy with a new user message containing the refusal context.
     """
     messages_with_context = input_data.copy()
     messages_with_context.append(
@@ -180,10 +175,7 @@ def _append_research_disclaimer(
             "content": [
                 {
                     "type": "input_text",
-                    "text": (
-                        "Note: This is for medical research purposes only, "
-                        "not for providing medical advice to patients."
-                    ),
+                    "text": refusal_context,
                 }
             ],
         }
@@ -216,7 +208,7 @@ def response_to_model_response(response: OpenAIResponse) -> ModelResponse:
             reasoning_item = item
 
     # Determine finish reason
-    finish_reason: str = "stop"
+    finish_reason: Literal["stop", "length", "tool_calls", "content_filter"] = "stop"
     if tool_calls:
         finish_reason = "tool_calls"
     elif response.status == "incomplete":
@@ -320,12 +312,16 @@ class ResponsesClient(Model[TResponseType]):
     def __init__(
         self,
         config: Config,
+        refusal_context: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Initialize the client.
 
         Args:
             config: The configuration for the client.
+            refusal_context: Optional message appended to retry requests when
+                Azure content filters block a response.  When ``None``, no
+                refusal-retry context is added.
             kwargs: Additional keyword arguments passed to the OpenAI client.
         """
         if config.temperature is not None and config.reasoning_effort is not None:
@@ -345,6 +341,7 @@ class ResponsesClient(Model[TResponseType]):
         self._max_retries = config.max_retries
         self._schema_validation_retries = config.schema_validation_retries
         self._prompt_cache_retention = config.prompt_cache_retention
+        self._refusal_context = refusal_context
 
         # Build common client parameters
         client_kwargs: dict[str, Any] = {
@@ -359,16 +356,16 @@ class ResponsesClient(Model[TResponseType]):
 
         # Create the appropriate OpenAI client based on provider
         if provider == "azure":
-            if not config.api_base:
+            if not config.base_url:
                 raise ValueError(
-                    "api_base is required for Azure OpenAI (e.g., "
+                    "base_url is required for Azure OpenAI (e.g., "
                     "'https://your-resource.openai.azure.com/')"
                 )
-            client_kwargs["azure_endpoint"] = config.api_base
+            client_kwargs["azure_endpoint"] = config.base_url
             client_kwargs["api_version"] = (
                 "2025-03-01-preview"  # Responses API requires preview
             )
-            self._openai_client = AsyncAzureOpenAI(**client_kwargs)
+            self._openai_client: AsyncOpenAI = AsyncAzureOpenAI(**client_kwargs)
         else:
             if config.base_url:
                 client_kwargs["base_url"] = config.base_url
@@ -503,7 +500,7 @@ class ResponsesClient(Model[TResponseType]):
 
                 # Validate structured output if schema is provided
                 if schema is not None:
-                    output_schema = _resolve_output_schema(schema)
+                    output_schema = resolve_output_schema(schema)
                     if output_schema is None:
                         raise ValueError(
                             "schema normalization unexpectedly returned None"
@@ -776,7 +773,7 @@ class ResponsesClient(Model[TResponseType]):
 
         # Handle structured output via response_format / text parameter
         if schema is not None and self._enforce_structured_output:
-            output_schema = _resolve_output_schema(schema)
+            output_schema = resolve_output_schema(schema)
             if output_schema is not None:
                 response_format = output_schema.response_format()
                 # Convert Chat Completions response_format to Responses API text format
@@ -897,7 +894,7 @@ class ResponsesClient(Model[TResponseType]):
         async def _api_call() -> OpenAIResponse:
             if self._rate_limiter is not None:
                 async with self._rate_limiter:
-                    result = cast(
+                    result = cast(  # type: ignore[redundant-cast]
                         OpenAIResponse,
                         await self._openai_client.responses.create(
                             model=self._model,
@@ -906,13 +903,11 @@ class ResponsesClient(Model[TResponseType]):
                         ),
                     )
                     # Record token usage for TPM limiters
-                    if hasattr(self._rate_limiter, "record_usage"):
-                        usage = getattr(result, "usage", None)
-                        if usage:
-                            self._rate_limiter.record_usage(usage.total_tokens)
+                    if result.usage is not None:
+                        self._rate_limiter.record_usage(result.usage.total_tokens)
                     return result
 
-            return cast(
+            return cast(  # type: ignore[redundant-cast]
                 OpenAIResponse,
                 await self._openai_client.responses.create(
                     model=self._model,
@@ -939,8 +934,9 @@ class ResponsesClient(Model[TResponseType]):
     ) -> tuple[OpenAIResponse, RetryMetrics]:
         """Execute API call with retry on Azure content filter blocks.
 
-        Checks responses for Azure content filters. On each block, appends
-        a medical research disclaimer and retries up to ``_MAX_REFUSAL_RETRIES`` times.
+        When a ``refusal_context`` was provided at construction, checks
+        responses for Azure content filters and retries with the context
+        message appended up to ``_MAX_REFUSAL_RETRIES`` times.
 
         Returns:
             A tuple of (response, retry_metrics).
@@ -951,6 +947,9 @@ class ResponsesClient(Model[TResponseType]):
             cancellation_token=cancellation_token,
         )
 
+        if self._refusal_context is None:
+            return response, metrics
+
         for attempt in range(_MAX_REFUSAL_RETRIES):
             # Check for Azure content filters in response
             response_dict = response.model_dump()
@@ -960,13 +959,13 @@ class ResponsesClient(Model[TResponseType]):
                 return response, metrics
 
             LOGGER.warning(
-                "model output blocked by content filter, retrying with research disclaimer",
+                "model output blocked by content filter, retrying with refusal context",
                 block_reason=block_msg[:100],
                 attempt=attempt + 1,
                 max_attempts=_MAX_REFUSAL_RETRIES,
             )
             response, metrics = await self._execute_with_retry(
-                input_data=_append_research_disclaimer(input_data),
+                input_data=_append_refusal_context(input_data, self._refusal_context),
                 call_args=call_args,
                 cancellation_token=cancellation_token,
             )

@@ -181,9 +181,9 @@ def test_edge_case_text_with_some_json_chars() -> None:
 
     for edge_text in edge_case_examples:
         result = parse_json_dict(edge_text)
-        assert result is None or isinstance(result, dict | list), (
-            f"Unexpected result type for edge case: '{edge_text}'"
-        )
+        assert result is None or isinstance(
+            result, dict | list
+        ), f"Unexpected result type for edge case: '{edge_text}'"
 
 
 def test_valid_json() -> None:
@@ -275,7 +275,7 @@ def test_real_world_llm_output_double_escaped() -> None:
     """Real-world double-escaped LLM output should normalize correctly."""
     json_str = (
         '{"text": "consider targeted nutritional strategies.\\\\n\\\\n* '
-        '**Reduced albumin synthesis (moderate strength)**: Albumin below '
+        "**Reduced albumin synthesis (moderate strength)**: Albumin below "
         'optimal suggests a mild reduction."}'
     )
     result = parse_json_dict(json_str)

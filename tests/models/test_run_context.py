@@ -6,6 +6,7 @@ from typing import Any
 
 from agentlane.models.run import DefaultRunContext, RunContext
 
+
 def run_async[T](awaitable: Coroutine[Any, Any, T]) -> T:
     """Run an awaitable inside a fresh event loop for sync pytest tests."""
     return asyncio.run(awaitable)
@@ -79,6 +80,7 @@ class TestDefaultRunContextIncrement:
 
     def test_increment_creates_key_with_default(self) -> None:
         """Increment should create a missing key using the default value."""
+
         async def exercise() -> tuple[int, DefaultRunContext]:
             run_context = DefaultRunContext()
             result = await run_context.increment("counter")
@@ -90,6 +92,7 @@ class TestDefaultRunContextIncrement:
 
     def test_increment_with_custom_default(self) -> None:
         """Increment should honor a custom default."""
+
         async def exercise() -> tuple[int, DefaultRunContext]:
             run_context = DefaultRunContext()
             result = await run_context.increment("counter", default=10)
@@ -101,6 +104,7 @@ class TestDefaultRunContextIncrement:
 
     def test_increment_existing_value(self) -> None:
         """Increment should update an existing counter."""
+
         async def exercise() -> tuple[int, DefaultRunContext]:
             run_context = DefaultRunContext()
             run_context["counter"] = 5
@@ -113,6 +117,7 @@ class TestDefaultRunContextIncrement:
 
     def test_increment_multiple_times(self) -> None:
         """Multiple sequential increments should produce increasing values."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
             for i in range(1, 6):
@@ -125,6 +130,7 @@ class TestDefaultRunContextIncrement:
 
     def test_increment_concurrent_access(self) -> None:
         """Concurrent increments should remain atomic."""
+
         async def exercise() -> tuple[list[int], DefaultRunContext]:
             run_context = DefaultRunContext()
             num_tasks = 100
@@ -149,6 +155,7 @@ class TestDefaultRunContextSet:
 
     def test_set_creates_key(self) -> None:
         """Set should create a new key when missing."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
             await run_context.set("key", "value")
@@ -159,6 +166,7 @@ class TestDefaultRunContextSet:
 
     def test_set_overwrites_existing(self) -> None:
         """Set should overwrite an existing value."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
             run_context["key"] = "old"
@@ -170,6 +178,7 @@ class TestDefaultRunContextSet:
 
     def test_set_concurrent_access(self) -> None:
         """Concurrent set operations should not corrupt state."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
             num_tasks = 50
@@ -191,6 +200,7 @@ class TestDefaultRunContextAppendToList:
 
     def test_append_creates_list_if_missing(self) -> None:
         """append_to_list should create a list when the key is missing."""
+
         async def exercise() -> tuple[list[object], DefaultRunContext]:
             run_context = DefaultRunContext()
             result = await run_context.append_to_list("items", "first")
@@ -202,6 +212,7 @@ class TestDefaultRunContextAppendToList:
 
     def test_append_to_existing_list(self) -> None:
         """append_to_list should append to an existing list."""
+
         async def exercise() -> tuple[list[object], DefaultRunContext]:
             run_context = DefaultRunContext()
             run_context["items"] = ["existing"]
@@ -214,6 +225,7 @@ class TestDefaultRunContextAppendToList:
 
     def test_append_multiple_items(self) -> None:
         """Sequential append_to_list calls should preserve order."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
             for i in range(5):
@@ -225,6 +237,7 @@ class TestDefaultRunContextAppendToList:
 
     def test_append_concurrent_access(self) -> None:
         """Concurrent appends should preserve all items."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
             num_tasks = 100
@@ -247,6 +260,7 @@ class TestDefaultRunContextExtendList:
 
     def test_extend_creates_list_if_missing(self) -> None:
         """extend_list should create a list when the key is missing."""
+
         async def exercise() -> tuple[list[object], DefaultRunContext]:
             run_context = DefaultRunContext()
             result = await run_context.extend_list("items", [1, 2, 3])
@@ -258,6 +272,7 @@ class TestDefaultRunContextExtendList:
 
     def test_extend_existing_list(self) -> None:
         """extend_list should append multiple values to an existing list."""
+
         async def exercise() -> tuple[list[object], DefaultRunContext]:
             run_context = DefaultRunContext()
             run_context["items"] = [1, 2]
@@ -270,6 +285,7 @@ class TestDefaultRunContextExtendList:
 
     def test_extend_with_empty_list(self) -> None:
         """Extending by an empty list should leave the original list intact."""
+
         async def exercise() -> tuple[list[object], DefaultRunContext]:
             run_context = DefaultRunContext()
             run_context["items"] = [1, 2]
@@ -282,6 +298,7 @@ class TestDefaultRunContextExtendList:
 
     def test_extend_concurrent_access(self) -> None:
         """Concurrent extend_list calls should preserve all values."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
             num_tasks = 50
@@ -305,6 +322,7 @@ class TestDefaultRunContextAppendIfUnique:
 
     def test_append_if_unique_creates_list(self) -> None:
         """append_if_unique should create a new list when missing."""
+
         async def exercise() -> tuple[bool, DefaultRunContext]:
             run_context = DefaultRunContext()
             result = await run_context.append_if_unique(
@@ -320,6 +338,7 @@ class TestDefaultRunContextAppendIfUnique:
 
     def test_append_if_unique_adds_unique(self) -> None:
         """append_if_unique should append unique values."""
+
         async def exercise() -> tuple[bool, DefaultRunContext]:
             run_context = DefaultRunContext()
             run_context["items"] = ["a", "b"]
@@ -336,6 +355,7 @@ class TestDefaultRunContextAppendIfUnique:
 
     def test_append_if_unique_rejects_duplicate(self) -> None:
         """append_if_unique should reject duplicate values."""
+
         async def exercise() -> tuple[bool, DefaultRunContext]:
             run_context = DefaultRunContext()
             run_context["items"] = ["a", "b"]
@@ -383,6 +403,7 @@ class TestDefaultRunContextAppendIfUnique:
 
     def test_append_if_unique_concurrent_access(self) -> None:
         """Concurrent append_if_unique calls should remain atomic."""
+
         async def exercise() -> tuple[list[bool], DefaultRunContext]:
             run_context = DefaultRunContext()
             num_tasks = 100
@@ -409,6 +430,7 @@ class TestDefaultRunContextConcurrentMixedOperations:
 
     def test_mixed_operations_concurrent(self) -> None:
         """Different atomic operations should remain safe under concurrency."""
+
         async def exercise() -> DefaultRunContext:
             run_context = DefaultRunContext()
 

@@ -158,10 +158,15 @@ def test_parse_content_filter_block_returns_categories_when_filtered() -> None:
 
     result = parse_content_filter_block(response_dict)
 
-    assert result == "completion blocked by content filter: self_harm=high, violence=medium"
+    assert (
+        result
+        == "completion blocked by content filter: self_harm=high, violence=medium"
+    )
 
 
-def test_parse_content_filter_block_returns_unspecified_when_no_triggered_categories() -> None:
+def test_parse_content_filter_block_returns_unspecified_when_no_triggered_categories() -> (
+    None
+):
     """Blocked filters with no triggered categories should return unspecified."""
     response_dict: dict[str, Any] = {
         "content_filters": [
@@ -181,7 +186,9 @@ def test_parse_content_filter_block_returns_unspecified_when_no_triggered_catego
     assert result == "prompt blocked by content filter: unspecified"
 
 
-def test_parse_content_filter_block_uses_filtered_fallback_for_missing_severity() -> None:
+def test_parse_content_filter_block_uses_filtered_fallback_for_missing_severity() -> (
+    None
+):
     """Missing severities should fall back to the word filtered."""
     response_dict: dict[str, Any] = {
         "content_filters": [
