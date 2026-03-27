@@ -3,7 +3,6 @@
 from agentlane.messaging import (
     AgentId,
     AgentType,
-    CancellationToken,
     CorrelationId,
     DeliveryOutcome,
     IdempotencyKey,
@@ -11,6 +10,7 @@ from agentlane.messaging import (
     TopicId,
 )
 
+from ._cancellation import CancellationToken
 from ._engine import Engine
 
 

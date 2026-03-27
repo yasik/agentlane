@@ -1,6 +1,7 @@
 """Runtime primitives and engine exports."""
 
 from ._base_agent import BaseAgent
+from ._cancellation import CancellationToken
 from ._context import (
     distributed_runtime,
     runtime_scope,
@@ -21,6 +22,7 @@ __all__ = [
     "AgentRegistry",
     "Agent",
     "BaseAgent",
+    "CancellationToken",
     "Engine",
     "DistributedRuntimeEngine",
     "distributed_runtime",

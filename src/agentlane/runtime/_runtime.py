@@ -21,7 +21,6 @@ from typing import cast
 from agentlane.messaging import (
     AgentId,
     AgentType,
-    CancellationToken,
     CorrelationId,
     DeliveryMode,
     DeliveryOutcome,
@@ -45,6 +44,7 @@ from agentlane.transport import (
 )
 from agentlane.util import utc_now_ms
 
+from ._cancellation import CancellationToken
 from ._dispatcher import Dispatcher
 from ._engine import Engine
 from ._message_helpers import payload_from_value, recipient_for_publish_route

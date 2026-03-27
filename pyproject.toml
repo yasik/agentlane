@@ -5,13 +5,18 @@ description = "AI agent runtime and messaging framework"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "demjson3>=3.0.6,<4.0.0",
+  "httpx>=0.28.0,<1.0.0",
+  "jinja2>=3.1.0,<4.0.0",
+  "json-repair>=0.39.0,<1.0.0",
+  "openai>=1.68.2",
   "pydantic>=2.8.0,<3.0.0",
   "protobuf>=5.29.0,<6.0.0",
   "grpcio>=1.71.0,<2.0.0",
+  "structlog>=25.1.0,<26.0.0",
+  "tenacity>=9.0.0,<10.0.0",
   "typing-extensions>=4.12.0",
   "rich>=14.2.0",
-  "agentlane-transport",
-  "agentlane-cli",
   "types-protobuf>=6.32.1.20260221",
   "types-grpcio>=1.0.0.20251009",
 ]
@@ -42,6 +47,10 @@ disallow_untyped_calls = false
 members = ["packages/*"]
 
 [tool.uv.sources]
+agentlane = { workspace = true }
+agentlane-braintrust = { workspace = true }
+agentlane-openai = { workspace = true }
+agentlane-litellm = { workspace = true }
 agentlane-transport = { workspace = true }
 agentlane-cli = { workspace = true }
 
@@ -52,7 +61,7 @@ packages = ["src/agentlane"]
 "src" = ""
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "packages"]
 
 [dependency-groups]
 dev = [
