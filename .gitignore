@@ -30,3 +30,6 @@ build/
 
 # tmp
 docs/plans/*
+
+# AI
+.superset

@@ -12,3 +12,7 @@
 
 1. [Agent Handler Patterns](./agents/handler-patterns.md)
 2. [Transport Serialization](./transport/serialization.md)
+
+## Harness
+
+1. [Harness Architecture](./harness/architecture.md)
