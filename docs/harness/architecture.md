@@ -24,7 +24,8 @@ implementing lifecycle, runner, tooling, or handoff behavior.
 Root package:
 
 1. `src/agentlane/harness/_task.py`
-   Defines the top-level task primitive that sits upstream of LLM-driven agents.
+   Defines the top-level task primitive that sits upstream of LLM-driven agents,
+   including small runtime-aligned registration helpers.
 2. `src/agentlane/harness/_agent.py`
    Defines the default harness agent type built on top of `Task`.
 3. `src/agentlane/harness/_runner.py`
@@ -57,6 +58,15 @@ The public export surface is intentionally small:
 4. `RunnerHooks`
 
 Everything else remains private until later phases define stable behavior.
+
+## Phase 2 Additions
+
+Phase 2 keeps `Task` thin and runtime-native:
+
+1. `Task.create_factory(...)` builds a runtime-compatible task factory.
+2. `Task.register(runtime, agent_type, ...)` registers lazy task factories.
+3. `Task.bind(runtime, agent_id, ...)` registers one explicit stateful task instance.
+4. `Task.task_id` exposes the bound runtime identity without inventing a second identity model.
 
 ## Non-Goals for Phase 1
 

@@ -16,3 +16,4 @@
 ## Harness
 
 1. [Harness Architecture](./harness/architecture.md)
+2. [Harness Tasks](./harness/tasks.md)
