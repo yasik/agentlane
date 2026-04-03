@@ -5,8 +5,8 @@ import abc
 from agentlane.models import MessageDict
 from agentlane.runtime import CancellationToken
 
-from ._agent import Agent
 from ._hooks import RunnerHooks
+from ._task import Task
 
 
 class Runner(abc.ABC):
@@ -15,7 +15,7 @@ class Runner(abc.ABC):
     @abc.abstractmethod
     async def run(
         self,
-        agent: Agent,
+        agent: Task,
         messages: list[MessageDict],
         *,
         hooks: RunnerHooks | None = None,
@@ -24,7 +24,7 @@ class Runner(abc.ABC):
         """Execute one harness agent loop.
 
         Args:
-            agent: Agent instance whose loop should run.
+            agent: Harness task or agent instance whose loop should run.
             messages: Canonical conversation input for the current turn.
             hooks: Optional lifecycle hooks for observability and testing.
             cancellation_token: Optional cooperative cancellation token.

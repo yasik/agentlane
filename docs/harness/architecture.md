@@ -68,6 +68,17 @@ Phase 2 keeps `Task` thin and runtime-native:
 3. `Task.bind(runtime, agent_id, ...)` registers one explicit stateful task instance.
 4. `Task.task_id` exposes the bound runtime identity without inventing a second identity model.
 
+## Phase 3 Additions
+
+Phase 3 adds the default agent lifecycle while preserving the runtime execution model:
+
+1. `Agent` owns conversation history, descriptive metadata, and queued user turns.
+2. `UserMessage` is the public runtime payload for one user turn, and `Agent.user_message(content)` is the convenience constructor.
+3. New conversations begin with the configured system prompt when present.
+4. Idle agents continue from prior history on the next inbound message.
+5. Running agents queue additional user turns for the next loop turn instead of allowing concurrent re-entry for the same `AgentId`.
+6. Queued user turns are drained one runner turn at a time rather than being batch-appended into one larger runner invocation.
+
 ## Non-Goals for Phase 1
 
 1. No agent lifecycle execution semantics yet

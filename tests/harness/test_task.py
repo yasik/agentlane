@@ -2,7 +2,7 @@ import asyncio
 
 import agentlane.harness.context as harness_context
 import agentlane.harness.memory as harness_memory
-from agentlane.harness import Agent, Runner, RunnerHooks, Task
+from agentlane.harness import Agent, Runner, RunnerHooks, Task, UserMessage
 from agentlane.messaging import (
     AgentId,
     AgentType,
@@ -76,7 +76,7 @@ class _FakeAgent(Agent):
 class _FakeRunner(Runner):
     async def run(
         self,
-        agent: Agent,
+        agent: Task,
         messages: list[MessageDict],
         *,
         hooks: RunnerHooks | None = None,
@@ -94,6 +94,7 @@ def test_harness_public_exports_are_defined() -> None:
     assert Agent is not None
     assert Runner is not None
     assert RunnerHooks is not None
+    assert UserMessage is not None
 
 
 def test_harness_subpackages_import() -> None:
