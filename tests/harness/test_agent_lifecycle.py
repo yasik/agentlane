@@ -9,12 +9,13 @@ from agentlane.harness import (
     RunState,
     Task,
 )
+from agentlane.harness._run import copy_run_state
 from agentlane.messaging import AgentId, DeliveryStatus
 from agentlane.models import ModelResponse
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
 
-def _assistant_response(content: str) -> ModelResponse:
+def make_assistant_response(content: str) -> ModelResponse:
     """Build one canonical assistant response for lifecycle tests."""
     return ModelResponse.model_validate(
         {
@@ -33,20 +34,6 @@ def _assistant_response(content: str) -> ModelResponse:
                 }
             ],
         }
-    )
-
-
-def _copy_run_state(run_state: RunState) -> RunState:
-    """Return a shallow copy of one run state for assertions."""
-    original_input = run_state.original_input
-    copied_input = (
-        original_input if isinstance(original_input, str) else list(original_input)
-    )
-    return RunState(
-        original_input=copied_input,
-        continuation_history=list(run_state.continuation_history),
-        responses=list(run_state.responses),
-        turn_count=run_state.turn_count,
     )
 
 
@@ -84,7 +71,9 @@ class _RecordingRunner(Runner):
     ) -> RunResult:
         _ = hooks
         _ = cancellation_token
-        self.calls.append(_copy_run_state(state))
+        copied = copy_run_state(state)
+        assert copied is not None
+        self.calls.append(copied)
 
         if self._block_first_turn and len(self.calls) == 1:
             self.first_turn_started.set()
@@ -97,7 +86,7 @@ class _RecordingRunner(Runner):
 
         state.turn_count += 1
         reply_text = f"{agent.name}:{_last_user_input(state)}"
-        response = _assistant_response(reply_text)
+        response = make_assistant_response(reply_text)
         state.responses.append(response)
         state.continuation_history.append(response)
         return RunResult(
@@ -251,7 +240,7 @@ def test_agent_continues_from_preloaded_run_state() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = _RecordingRunner()
         agent_id = AgentId.from_values("assistant-agent", "session-recovered")
-        prior_response = _assistant_response("Recovered:before")
+        prior_response = make_assistant_response("Recovered:before")
         recovered_state = RunState(
             original_input="before",
             continuation_history=[prior_response],
@@ -295,8 +284,8 @@ def test_agent_accepts_run_state_as_runtime_input() -> None:
         runner = _RecordingRunner()
         resumed_state = RunState(
             original_input="before",
-            continuation_history=[_assistant_response("Support:before")],
-            responses=[_assistant_response("Support:before")],
+            continuation_history=[make_assistant_response("Support:before")],
+            responses=[make_assistant_response("Support:before")],
             turn_count=1,
         )
 

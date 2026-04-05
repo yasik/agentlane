@@ -42,9 +42,9 @@ def _copy_messages(messages: list[MessageDict]) -> list[MessageDict]:
     return [dict(message) for message in messages]
 
 
-def _assistant_response(
-    *,
+def make_assistant_response(
     content: str | None,
+    *,
     tool_calls: list[ToolCall] | None = None,
 ) -> ModelResponse:
     """Build one canonical chat-completions response for tests."""
@@ -186,7 +186,7 @@ def test_runner_returns_run_result_and_updates_run_state() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
-        model = _SequenceModel([_assistant_response(content="hello back")])
+        model = _SequenceModel([make_assistant_response(content="hello back")])
         agent = Agent(
             runtime,
             runner,
@@ -232,7 +232,7 @@ def test_runner_retries_retryable_model_failures() -> None:
         model = _SequenceModel(
             [
                 _RetryableModelError("rate limited", status_code=429),
-                _assistant_response(content="retried response"),
+                make_assistant_response(content="retried response"),
             ]
         )
         agent = Agent(
@@ -262,7 +262,7 @@ def test_runner_invokes_hooks_in_order() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
-        model = _SequenceModel([_assistant_response(content="observed")])
+        model = _SequenceModel([make_assistant_response(content="observed")])
         hooks = _RecordingHooks()
         agent = Agent(
             runtime,
@@ -292,7 +292,7 @@ def test_runner_forwards_native_model_call_options() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
-        model = _SequenceModel([_assistant_response(content="configured")])
+        model = _SequenceModel([make_assistant_response(content="configured")])
         schema = _StructuredResponse
         tools = Tools(tools=[])
         agent = Agent(
@@ -338,8 +338,8 @@ def test_runner_builds_request_from_prompt_instructions_and_history_items() -> N
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
-        model = _SequenceModel([_assistant_response(content="done")])
-        prior_response = _assistant_response(content="first reply")
+        model = _SequenceModel([make_assistant_response(content="done")])
+        prior_response = make_assistant_response(content="first reply")
         instruction_template = PromptTemplate[dict[str, object], list[str]](
             system_template="You support {{ team }}.",
             user_template=None,
@@ -396,12 +396,12 @@ def test_runner_shared_instance_serves_multiple_agents_safely() -> None:
         release = asyncio.Event()
 
         first_model = _SequenceModel(
-            [_assistant_response(content="first done")],
+            [make_assistant_response(content="first done")],
             started=first_started,
             release=release,
         )
         second_model = _SequenceModel(
-            [_assistant_response(content="second done")],
+            [make_assistant_response(content="second done")],
             started=second_started,
             release=release,
         )
@@ -468,7 +468,7 @@ def test_runner_raises_for_tool_calls_before_phase_five() -> None:
         runner = Runner()
         model = _SequenceModel(
             [
-                _assistant_response(
+                make_assistant_response(
                     content=None,
                     tool_calls=[
                         ToolCall.model_validate(

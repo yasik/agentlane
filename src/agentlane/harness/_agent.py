@@ -78,9 +78,7 @@ class Agent(Task):
     @property
     def model_args(self) -> dict[str, Any] | None:
         """Return model request arguments forwarded to the model call."""
-        if self._descriptor.model_args is None:
-            return None
-        return dict(self._descriptor.model_args)
+        return self._descriptor.model_args
 
     @property
     def schema(self) -> type[BaseModel] | OutputSchema[Any] | None:
