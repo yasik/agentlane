@@ -270,7 +270,8 @@ class ResponsesFactory(BaseFactory[TResponseType]):
         Args:
             tracing: The tracing mode to use for the client.
             kwargs: Additional keyword arguments. Keys matching Config fields
-                override the default config; remaining keys are forwarded.
+                override the default config; remaining keys are forwarded as
+                default model-call args.
         """
 
         config = replace(self._default_config, tracing=tracing)
@@ -322,9 +323,9 @@ class ResponsesClient(Model[TResponseType]):
             refusal_context: Optional message appended to retry requests when
                 Azure content filters block a response.  When ``None``, no
                 refusal-retry context is added.
-            kwargs: Additional keyword arguments passed to the OpenAI client.
+            kwargs: Default model-call arguments forwarded to the Responses API.
         """
-        if config.temperature is not None and config.reasoning_effort is not None:
+        if "temperature" in kwargs and "reasoning_effort" in kwargs:
             raise ValueError(
                 "Either temperature or reasoning_effort must be provided, not both."
             )
@@ -340,7 +341,6 @@ class ResponsesClient(Model[TResponseType]):
         self._rate_limiter = config.rate_limiter
         self._max_retries = config.max_retries
         self._schema_validation_retries = config.schema_validation_retries
-        self._prompt_cache_retention = config.prompt_cache_retention
         self._refusal_context = refusal_context
 
         # Build common client parameters
@@ -372,15 +372,7 @@ class ResponsesClient(Model[TResponseType]):
             self._openai_client = AsyncOpenAI(**client_kwargs)
 
         # Common parameters for API calls
-        self._common_params: dict[str, Any] = {}
-        if config.temperature is not None:
-            self._common_params["temperature"] = config.temperature
-        if config.reasoning_effort is not None:
-            # Map reasoning_effort to Responses API reasoning parameter
-            self._common_params["reasoning"] = {"effort": config.reasoning_effort}
-
-        # Store extra kwargs
-        self._extra_kwargs = kwargs
+        self._common_params: dict[str, Any] = dict(kwargs)
 
         # Initialize tool executor with Responses API adapter
         self._tool_executor = ToolExecutor(
@@ -761,12 +753,6 @@ class ResponsesClient(Model[TResponseType]):
     ) -> dict[str, Any]:
         """Build the arguments for the Responses API call."""
         call_args: dict[str, Any] = {**self._common_params}
-
-        # Add prompt cache retention if configured (for extended 24h caching).
-        # This is set unconditionally when configured, allowing extra_call_args
-        # to override if needed for per-call customization.
-        if self._prompt_cache_retention is not None:
-            call_args["prompt_cache_retention"] = self._prompt_cache_retention
 
         if extra_call_args:
             call_args.update(extra_call_args)

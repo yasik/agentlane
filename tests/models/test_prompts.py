@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from agentlane.models import PromptTemplate
+from agentlane.models import PromptSpec, PromptTemplate
 
 
 def test_prompt_template_renders_messages(mock_output_schema: Any) -> None:
@@ -34,3 +34,20 @@ def test_prompt_template_response_format_delegates(
     response_format = prompt_template.response_format()
 
     assert response_format == {"type": "mock", "ok": True}
+
+
+def test_prompt_spec_pairs_template_with_values(mock_output_schema: Any) -> None:
+    """PromptSpec should preserve the typed values paired with a template."""
+    prompt_template = PromptTemplate[dict[str, object], list[str]](
+        system_template="sys: {{ team }}",
+        user_template="unused",
+        output_schema=mock_output_schema,
+    )
+
+    prompt_spec = PromptSpec(
+        template=prompt_template,
+        values={"team": "ops"},
+    )
+
+    assert prompt_spec.template is prompt_template
+    assert prompt_spec.values == {"team": "ops"}

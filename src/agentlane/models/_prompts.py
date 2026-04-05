@@ -26,6 +26,23 @@ class PromptTemplateBase[CtxT, OutT](abc.ABC):
         """Returns the response format for the prompt template."""
 
 
+@dataclass(slots=True)
+class PromptSpec[CtxT]:
+    """A prompt template paired with the concrete values used to render it.
+
+    This is the developer-facing templating surface used by the harness.
+    Callers provide a strongly typed values object, often a `TypedDict`, and
+    the harness later resolves the template into the system or user message
+    content needed for the current role.
+    """
+
+    template: PromptTemplateBase[CtxT, Any]
+    """Prompt template responsible for rendering the instructions."""
+
+    values: CtxT | None = None
+    """Concrete values supplied to the prompt template at render time."""
+
+
 @dataclass(init=False)
 class PromptTemplate(PromptTemplateBase[CtxT, OutT]):
     """A prompt template that can be used to generate a prompt for an LLM."""

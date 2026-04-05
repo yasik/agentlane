@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import litellm
 import pytest
-from agentlane_litellm import Client
+from agentlane_litellm import Client, Factory
 from pydantic import BaseModel
 
 from agentlane.models import Config, ModelResponse, Tool, Tools
@@ -87,3 +87,28 @@ def test_litellm_client_forwards_native_tool_schema(
     assert await_kwargs["tools"][0]["function"]["name"] == "echo"
     assert await_kwargs["parallel_tool_calls"] is True
     assert await_kwargs["drop_params"] is True
+
+
+def test_litellm_factory_forwards_default_model_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Factory kwargs outside Config should become default model-call args."""
+    factory = Factory(Config(api_key="test-key", model="gpt-4o"))
+    client = factory.get_model_client(
+        temperature=0.2,
+        max_tokens=128,
+    )
+    completion_mock = AsyncMock(return_value=_make_model_response("hello"))
+    monkeypatch.setattr(litellm, "acompletion", completion_mock)
+
+    response = asyncio.run(
+        client.get_response(
+            messages=[{"role": "user", "content": "hello"}],
+        )
+    )
+
+    assert response.choices[0].message.content == "hello"
+
+    await_kwargs = cast(dict[str, Any], cast(Any, completion_mock.await_args).kwargs)
+    assert await_kwargs["temperature"] == 0.2
+    assert await_kwargs["max_tokens"] == 128

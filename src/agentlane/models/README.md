@@ -7,7 +7,7 @@ It exists to keep model-facing concerns separate from both the runtime and the h
 At a high level, this package provides:
 
 1. client-facing model primitives such as `Model`, `Factory`, `Config`, and the shared `ModelResponse` contract,
-2. prompt and output-schema helpers for building and validating LLM interactions,
+2. prompt-template helpers such as `PromptTemplate`, `MultiPartPromptTemplate`, and `PromptSpec` for building typed LLM message content,
 3. the native `Tool` primitive and tool execution helpers,
 4. retry and rate-limiting helpers for model clients,
 5. `RunContext` primitives for ephemeral per-run state,
@@ -20,6 +20,13 @@ Core principles:
 3. Keep orchestration out of this package. Tasks, agents, and runners belong in higher layers.
 4. Put reusable LLM mechanics here once so runtime, harness, and provider packages do not drift apart.
 
+`Config` is intentionally the shared control-plane and networking surface for model
+clients. Model-specific request parameters such as temperature, reasoning effort,
+cache retention, and provider-specific extras should be passed through client kwargs
+or per-call model args rather than being normalized into `Config`.
+
 The shared cancellation token intentionally lives in `agentlane.runtime`, not here. Model clients and tools consume that runtime primitive instead of growing a second copy.
 
-If you are building orchestration, use the harness or runtime layers. If you are defining how the framework talks to models, validates outputs, executes tools, or carries ephemeral model-call state, it belongs here.
+If you are building orchestration, use the harness or runtime layers. Application developers should provide plain payloads or higher-level prompt primitives such as `PromptSpec`, not assemble low-level message dictionaries themselves. The harness runner owns request construction and decides how typed prompt input and accumulated run state become canonical model messages.
+
+If you are defining how the framework talks to models, validates outputs, executes tools, or carries ephemeral model-call state, it belongs here.

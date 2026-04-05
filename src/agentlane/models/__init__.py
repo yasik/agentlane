@@ -5,13 +5,14 @@ from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from ._exceptions import ModelBehaviorError, ModelsException, RunErrorDetails
 from ._interface import Config, Factory, MessageDict, Model, ModelTracing, Tools
 from ._json_repair import parse_json_dict
-from ._messages import create_system_message, create_user_message
 from ._output_schema import OutputSchema, SchemaValidationResult, resolve_output_schema
 from ._prompts import (
     FilePart,
     ImagePart,
     MultiPartPromptTemplate,
+    PromptSpec,
     PromptTemplate,
+    PromptTemplateBase,
     TextPart,
 )
 from ._rate_limiter import (
@@ -58,8 +59,6 @@ __all__ = [
     "ModelBehaviorError",
     "RunErrorDetails",
     "parse_json_dict",
-    "create_system_message",
-    "create_user_message",
     "OutputSchema",
     "SchemaValidationResult",
     "resolve_output_schema",
@@ -72,7 +71,9 @@ __all__ = [
     "ReasoningContent",
     "ResponseReasoningItem",
     "PromptTemplate",
+    "PromptTemplateBase",
     "MultiPartPromptTemplate",
+    "PromptSpec",
     "TextPart",
     "FilePart",
     "ImagePart",

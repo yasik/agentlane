@@ -3,72 +3,88 @@
 import asyncio
 from asyncio import Future, get_running_loop
 from collections import deque
-from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-from agentlane.models import MessageDict
-from agentlane.models import Tool as HarnessTool
-from agentlane.models import create_system_message, create_user_message
+from pydantic import BaseModel
+
+from agentlane.models import (
+    Model,
+    ModelResponse,
+    OutputSchema,
+    PromptSpec,
+    Tools,
+)
 from agentlane.runtime import CancellationToken
 
 from ._hooks import RunnerHooks
+from ._run import RunInput, RunResult, RunState
 from ._runner import Runner
 from ._task import Task
 
 
 @dataclass(slots=True)
 class AgentDescriptor:
-    """Static descriptive properties for one harness agent instance."""
+    """Static agent configuration shared by the public agent and lifecycle."""
 
     name: str
     """Human-readable agent name."""
 
-    description: str | None
+    description: str | None = None
     """Short description of the agent responsibility."""
 
-    system_prompt: str | None
-    """Optional system prompt used to seed new conversations."""
+    model: Model[ModelResponse] | None = None
+    """Canonical model client used by the default runner."""
 
-    tools: tuple[HarnessTool[Any, Any], ...] | None
-    """Tools visible to the agent in later phases."""
+    instructions: str | PromptSpec[Any] | None = None
+    """Optional instructions used to seed new conversations."""
 
-    skills: tuple[object, ...] | None
+    model_args: dict[str, Any] | None = None
+    """Model request arguments forwarded as-is to the model call."""
+
+    schema: type[BaseModel] | OutputSchema[Any] | None = None
+    """Structured-output schema forwarded to the model."""
+
+    tools: Tools | None = None
+    """Canonical tool configuration visible to the model and later phases."""
+
+    skills: tuple[object, ...] | None = None
     """Skills associated with the agent in later phases."""
 
-    context: object | None
+    context: object | None = None
     """Opaque context reference reserved for later phases."""
 
-    memory: object | None
+    memory: object | None = None
     """Opaque memory reference reserved for later phases."""
 
 
 @dataclass(slots=True)
-class _QueuedUserTurn:
-    """One pending inbound user turn waiting for runner execution."""
+class _QueuedRunInput:
+    """One pending inbound run input waiting for runner execution."""
 
-    message: MessageDict
-    """Canonical user-role message to append to the conversation."""
+    run_input: RunInput
+    """Public run input queued for the next runner invocation."""
 
-    future: Future[object]
-    """Future resolved with the packaged runner result for this turn."""
+    future: Future[RunResult]
+    """Future resolved with the final run result for this input."""
 
     cancellation_token: CancellationToken | None
     """Optional cancellation token for the runner turn."""
 
 
 class AgentLifecycle:
-    """Owns per-agent conversation history and next-turn message queueing."""
+    """Owns per-agent run state and next-turn input queueing."""
 
     def __init__(
         self,
         *,
         descriptor: AgentDescriptor,
+        run_state: RunState | None = None,
     ) -> None:
-        """Initialize empty lifecycle state for one agent instance."""
+        """Initialize lifecycle state for one agent instance."""
         self._descriptor = descriptor
-        self._history: list[MessageDict] = []
-        self._pending_turns: deque[_QueuedUserTurn] = deque()
+        self._run_state = _copy_run_state(run_state)
+        self._pending_inputs: deque[_QueuedRunInput] = deque()
         self._is_running = False
         self._lock = asyncio.Lock()
 
@@ -78,53 +94,49 @@ class AgentLifecycle:
         return self._is_running
 
     @property
-    def pending_message_count(self) -> int:
-        """Return the number of queued user turns not yet started."""
-        return len(self._pending_turns)
+    def pending_input_count(self) -> int:
+        """Return the number of queued run inputs not yet started."""
+        return len(self._pending_inputs)
 
-    def history_snapshot(self) -> list[MessageDict]:
-        """Return a shallow copy of the current conversation history."""
-        return [dict(message) for message in self._history]
+    def run_state_snapshot(self) -> RunState | None:
+        """Return a shallow copy of the current resumable run state."""
+        return _copy_run_state(self._run_state)
 
-    async def enqueue_user_message(
+    async def enqueue_input(
         self,
         *,
         agent: Task,
         runner: Runner,
         hooks: RunnerHooks | None,
-        content: object,
+        run_input: RunInput,
         cancellation_token: CancellationToken | None = None,
-    ) -> object:
-        """Queue one user message and return the packaged turn result."""
-        queued_turn = _QueuedUserTurn(
-            message=create_user_message(content),
+    ) -> RunResult:
+        """Queue one run input and return the final run result."""
+        queued_input = _QueuedRunInput(
+            run_input=run_input,
             future=get_running_loop().create_future(),
             cancellation_token=cancellation_token,
         )
         should_drain = False
 
         async with self._lock:
-            _initialize_conversation_if_needed(
-                history=self._history,
-                system_prompt=self._descriptor.system_prompt,
-            )
-            self._pending_turns.append(queued_turn)
+            self._pending_inputs.append(queued_input)
             if not self._is_running:
                 # Only the first enqueuer becomes the active drainer. Later
-                # arrivals simply append turns and wait for their own futures.
+                # arrivals simply append inputs and wait for their own futures.
                 self._is_running = True
                 should_drain = True
 
         if should_drain:
-            await self._drain_pending_turns(
+            await self._drain_pending_inputs(
                 agent=agent,
                 runner=runner,
                 hooks=hooks,
             )
 
-        return await queued_turn.future
+        return await queued_input.future
 
-    async def _drain_pending_turns(
+    async def _drain_pending_inputs(
         self,
         *,
         agent: Task,
@@ -133,79 +145,130 @@ class AgentLifecycle:
     ) -> None:
         """Drain queued turns sequentially under the current runtime guarantee.
 
-        The lifecycle intentionally processes one queued user turn per runner
-        invocation. It does not batch-append all outstanding queued messages
-        into one larger turn before calling the runner again.
+        The lifecycle intentionally processes one queued input per runner
+        invocation. It does not batch multiple queued inputs into one larger
+        runner call.
         """
-        active_turn: _QueuedUserTurn | None = None
+        active_input: _QueuedRunInput | None = None
         try:
             while True:
                 async with self._lock:
-                    if not self._pending_turns:
+                    if not self._pending_inputs:
                         self._is_running = False
                         return
-                    # Intentionally drain one queued user turn per runner call.
-                    active_turn = self._pending_turns.popleft()
-                    self._history.append(active_turn.message)
+                    active_input = self._pending_inputs.popleft()
+                    # The lifecycle hands each queued input a private working
+                    # copy so failed turns do not mutate the persisted run
+                    # state. Only successful runner completion is committed.
+                    working_state = _next_run_state(
+                        self._run_state,
+                        active_input.run_input,
+                    )
 
                 try:
-                    # The runner receives the shared mutable history so later
-                    # phases can append assistant/tool outputs in place.
-                    results = await runner.run(
+                    result = await runner.run(
                         agent=agent,
-                        messages=self._history,
+                        state=working_state,
                         hooks=hooks,
-                        cancellation_token=active_turn.cancellation_token,
+                        cancellation_token=active_input.cancellation_token,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    _set_future_exception(active_turn.future, exc)
+                    _set_future_exception(active_input.future, exc)
                 else:
-                    _set_future_result(
-                        active_turn.future,
-                        package_runner_results(results),
-                    )
+                    # Persist the advanced state only after the runner returns
+                    # successfully for this queued input.
+                    self._run_state = working_state
+                    _set_future_result(active_input.future, result)
                 finally:
-                    active_turn = None
+                    active_input = None
         except BaseException as exc:
-            if active_turn is not None:
-                _set_future_exception(active_turn.future, exc)
+            if active_input is not None:
+                _set_future_exception(active_input.future, exc)
             async with self._lock:
-                pending_turns = list(self._pending_turns)
-                self._pending_turns.clear()
+                pending_inputs = list(self._pending_inputs)
+                self._pending_inputs.clear()
                 self._is_running = False
-            for queued_turn in pending_turns:
-                _set_future_exception(queued_turn.future, exc)
+            for queued_input in pending_inputs:
+                _set_future_exception(queued_input.future, exc)
             raise
 
 
-def package_runner_results(results: Sequence[object]) -> object:
-    """Package runner results into the agent response shape for this phase."""
-    if not results:
-        return None
-    if len(results) == 1:
-        return results[0]
-    return list(results)
+def _next_run_state(
+    current_state: RunState | None,
+    run_input: RunInput,
+) -> RunState:
+    """Return the next working state for one queued input."""
+    if isinstance(run_input, RunState):
+        if current_state is not None:
+            raise ValueError(
+                "Cannot resume a `RunState` when the agent already has persisted run state."
+            )
+        resumed_state = _copy_run_state(run_input)
+        if resumed_state is None:
+            raise AssertionError("RunState copy unexpectedly returned None.")
+        return resumed_state
+
+    if current_state is None:
+        return RunState(
+            original_input=_copy_original_input(run_input),
+            continuation_history=[],
+            responses=[],
+        )
+
+    next_state = _copy_run_state(current_state)
+    if next_state is None:
+        raise AssertionError("Current run state copy unexpectedly returned None.")
+    _append_run_input(next_state.continuation_history, run_input)
+    return next_state
 
 
-def _initialize_conversation_if_needed(
-    *,
-    history: list[MessageDict],
-    system_prompt: str | None,
-) -> None:
-    """Seed a new conversation with the system prompt exactly once."""
-    if history or system_prompt is None:
+def _append_run_input(history: list[object], run_input: str | list[object]) -> None:
+    """Append one raw run input onto continuation history."""
+    if isinstance(run_input, str):
+        history.append(run_input)
         return
-    # System prompt seeding happens lazily on the first inbound user turn.
-    history.append(create_system_message(system_prompt))
+    for item in run_input:
+        history.append(_copy_item(item))
 
 
-def _set_future_result(future: Future[object], value: object) -> None:
+def _copy_original_input(original_input: str | list[object]) -> str | list[object]:
+    """Copy one original run input for state ownership."""
+    if isinstance(original_input, str):
+        return original_input
+    return [_copy_item(item) for item in original_input]
+
+
+def _copy_run_state(run_state: RunState | None) -> RunState | None:
+    """Copy one run state for lifecycle isolation."""
+    if run_state is None:
+        return None
+    return RunState(
+        original_input=_copy_original_input(run_state.original_input),
+        continuation_history=[
+            _copy_item(item) for item in run_state.continuation_history
+        ],
+        responses=list(run_state.responses),
+        turn_count=run_state.turn_count,
+    )
+
+
+def _copy_item(item: object) -> object:
+    """Copy one generic run item when shallow ownership is needed."""
+    if isinstance(item, list):
+        return list(cast(list[object], item))
+    return item
+
+
+def _set_future_result(future: Future[RunResult], value: RunResult) -> None:
     """Resolve a future once when it is still pending."""
     if not future.done():
         future.set_result(value)
 
 
-def _set_future_exception(future: Future[object], exc: BaseException) -> None:
+def _set_future_exception(
+    future: Future[RunResult],
+    exc: BaseException,
+) -> None:
     """Fail a future once when it is still pending."""
     if not future.done():
         future.set_exception(exc)

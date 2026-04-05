@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
-from agentlane_openai import ResponsesClient
+from agentlane_openai import ResponsesClient, ResponsesFactory
 from openai.types.responses import Response as OpenAIResponse
 from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_output_text import ResponseOutputText
@@ -121,3 +121,29 @@ def test_responses_client_get_response_converts_and_forwards_configuration() -> 
     assert await_kwargs["text"]["format"]["schema"]["properties"] == {
         "message": {"title": "Message", "type": "string"}
     }
+
+
+def test_responses_factory_forwards_default_model_args() -> None:
+    """Factory kwargs outside Config should become default Responses API args."""
+    factory = ResponsesFactory(Config(api_key="test-key", model="gpt-4o"))
+    client = factory.get_model_client(
+        temperature=0.2,
+        prompt_cache_retention="24h",
+        verbosity="low",
+    )
+    create_mock = AsyncMock(return_value=_make_response("hello"))
+    openai_client = cast(Any, client)._openai_client
+    openai_client.responses.create = create_mock
+
+    response = asyncio.run(
+        client.get_response(
+            messages=[{"role": "user", "content": "hello"}],
+        )
+    )
+
+    assert response.choices[0].message.content == "hello"
+
+    await_kwargs = cast(dict[str, Any], cast(Any, create_mock.await_args).kwargs)
+    assert await_kwargs["temperature"] == 0.2
+    assert await_kwargs["prompt_cache_retention"] == "24h"
+    assert await_kwargs["text"]["verbosity"] == "low"

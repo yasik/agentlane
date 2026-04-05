@@ -1,7 +1,7 @@
 # Harness Architecture v1
 
-Date: 2026-04-02
-Status: Phase 1 baseline
+Date: 2026-04-05
+Status: Phase 4 baseline
 
 ## Goal
 
@@ -14,10 +14,10 @@ implementing lifecycle, runner, tooling, or handoff behavior.
 2. The `srs/agentlane/harness` path from the design note is treated as a typo for this repository unless explicitly revisited in review.
 3. The harness builds on top of `agentlane.runtime.BaseAgent` and existing runtime messaging semantics.
 4. The harness reuses the existing OpenAI-native aliases already exposed by `agentlane.models`:
-   - `MessageDict` for conversation input items,
    - `ModelResponse` for canonical model responses,
    - `ToolCall` for canonical tool-call records.
-5. Provider-specific clients continue adapting into those canonical shapes instead of introducing harness-specific response wrapper models.
+5. `MessageDict` remains the canonical model-call wire shape, but it is now a runner-internal concern rather than a public harness boundary.
+6. Provider-specific clients continue adapting into those canonical shapes instead of introducing harness-specific response wrapper models.
 
 ## Package Boundaries
 
@@ -72,17 +72,34 @@ Phase 2 keeps `Task` thin and runtime-native:
 
 Phase 3 adds the default agent lifecycle while preserving the runtime execution model:
 
-1. `Agent` owns conversation history, descriptive metadata, and queued user turns.
-2. `UserMessage` is the public runtime payload for one user turn, and `Agent.user_message(content)` is the convenience constructor.
-3. New conversations begin with the configured system prompt when present.
-4. Idle agents continue from prior history on the next inbound message.
-5. Running agents queue additional user turns for the next loop turn instead of allowing concurrent re-entry for the same `AgentId`.
-6. Queued user turns are drained one runner turn at a time rather than being batch-appended into one larger runner invocation.
+1. `Agent` owns descriptive metadata and queued next-turn inputs.
+2. Running agents queue additional inputs for the next loop turn instead of allowing concurrent re-entry for the same `AgentId`.
+3. Queued inputs are drained one runner invocation at a time rather than being batch-appended into one larger runner call.
+4. The single-handler-per-`AgentId` runtime guarantee is preserved.
 
-## Non-Goals for Phase 1
+## Phase 4 Additions
 
-1. No agent lifecycle execution semantics yet
-2. No tool loop implementation yet
-3. No handoff implementation yet
-4. No memory persistence semantics yet
-5. No provider-specific harness abstractions beyond the existing `agentlane.models` aliases
+Phase 4 turns `Runner` into the default stateless loop engine and resets the
+public harness boundary around runs instead of model messages:
+
+1. `AgentDescriptor` is the canonical static agent configuration shared between the public `Agent` surface and lifecycle state.
+2. That descriptor now carries instructions, tools, model, model args, schema, and the other descriptive fields.
+3. `Agent` projects those values as properties such as `agent.model`, `agent.model_args`, `agent.schema`, `agent.tools`, and `agent.instructions`.
+4. The public agent input is now `RunInput = str | list[object] | RunState`.
+5. Recovery now uses `RunState` instead of persisted `message_history`.
+6. `Runner` accepts `RunState`, builds the concrete `list[MessageDict]` request internally, and returns `RunResult`.
+7. `RunState` is intentionally minimal for now: `original_input`, `continuation_history`, `responses`, and `turn_count`.
+8. `RunResult` is intentionally minimal for now: `final_output`, `responses`, and `turn_count`.
+9. `RunnerHooks.on_agent_start` and `RunnerHooks.on_agent_end` now observe run-level values rather than message-history payloads.
+10. `PromptSpec` remains the developer-facing typed prompt input for both instructions and user-side input items, but only the runner resolves it into model messages.
+11. `Runner` accumulates raw `ModelResponse` values across turns without wrapping them in new harness-specific response models.
+12. Tool-calling responses still fail fast with `ModelBehaviorError` until Phase 5 adds tool execution.
+13. Runner-level retries are optional and reuse `agentlane.models.retry_on_errors`.
+
+## Current Non-Goals
+
+1. No tool loop implementation yet
+2. No handoff implementation yet
+3. No memory persistence semantics yet
+4. No provider-specific harness abstractions beyond the existing `agentlane.models` aliases
+5. No event-log, approval-state, or resumable interruption envelope until a later phase needs them

@@ -2,6 +2,7 @@
 
 from agentlane.models import MessageDict, ModelResponse, ToolCall
 
+from ._run import RunResult, RunState
 from ._task import Task
 
 
@@ -11,30 +12,30 @@ class RunnerHooks:
     async def on_agent_start(
         self,
         task: Task,
-        messages: list[MessageDict],
+        state: RunState,
     ) -> None:
         """Observe the start of one agent run.
 
         Args:
             task: Harness task or agent being executed.
-            messages: Canonical conversation input passed into the runner.
+            state: Current run state before the loop executes.
         """
         _ = task
-        _ = messages
+        _ = state
 
     async def on_agent_end(
         self,
         task: Task,
-        results: list[object],
+        result: RunResult | None,
     ) -> None:
         """Observe the end of one agent run.
 
         Args:
             task: Harness task or agent being executed.
-            results: Runner outputs returned to the caller.
+            result: Final run result, if the run completed successfully.
         """
         _ = task
-        _ = results
+        _ = result
 
     async def on_llm_start(
         self,

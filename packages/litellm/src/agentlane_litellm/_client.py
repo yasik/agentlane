@@ -104,7 +104,7 @@ class Factory(BaseFactory[TResponseType]):
             tracing: The tracing mode to use for the client.
             kwargs: Additional keyword arguments to pass to the client. Any keys that
                 match fields of ``Config`` will override the default config via dataclass
-                replace; remaining keys are forwarded to the client.
+                replace; remaining keys are forwarded as default model-call args.
         """
         config = replace(self._default_config, tracing=tracing)
 
@@ -142,7 +142,7 @@ class Client(Model[TResponseType]):
 
         Args:
             config: The configuration to use for the client
-            kwargs: Additional keyword arguments to pass to the client
+            kwargs: Default model-call arguments forwarded to LiteLLM.
         """
         # Disable aiohttp transport which leads to sessions being created for
         # each call and never closed properly.  Forces litellm to use httpx.
@@ -152,7 +152,7 @@ class Client(Model[TResponseType]):
             litellm.disable_aiohttp_transport = True
             _litellm_transport_configured = True
 
-        if config.temperature is not None and config.reasoning_effort is not None:
+        if "temperature" in kwargs and "reasoning_effort" in kwargs:
             raise ValueError(
                 "Either temperature or reasoning_effort must be provided, not both."
             )
@@ -169,8 +169,6 @@ class Client(Model[TResponseType]):
         # Note: max_retries/num_retries=0 disables litellm's internal retry.
         # We handle retries ourselves via the retry_on_errors decorator.
         self._common_params = {
-            "temperature": config.temperature,
-            "reasoning_effort": config.reasoning_effort,
             "api_key": config.api_key,
             "base_url": config.base_url,
             "timeout": config.timeout,

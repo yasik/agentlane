@@ -40,10 +40,11 @@ class ModelTracing(enum.Enum):
 class Config:
     """Common configuration for the LLM clients.
 
-    This config holds only most common configuration for creating LLM clients for
-    different models classes (i.e. Anthropic, Gemini, OpenAI, etc.). The specific
-    parameters such as temperature, max tokens, etc. should be provided at the time
-    of creation of the client or a request to the LLM.
+    This config is intentionally limited to control-plane and networking concerns
+    shared across provider clients. Model-specific request parameters such as
+    temperature, reasoning effort, cache retention, and provider-specific extras
+    should be passed as client kwargs or per-call model args instead of being
+    normalized into this shared config.
 
     Note on ``enforce_structured_output`` behavior:
     1. If ``True``, the schema should not be included in the prompt. The client
@@ -62,15 +63,6 @@ class Config:
 
     model: str
     """Model for the LLM client."""
-
-    # Optional parameters
-    temperature: float | None = None
-    """Temperature for the LLM client."""
-
-    reasoning_effort: (
-        Literal["none", "minimal", "low", "medium", "high", "default"] | None
-    ) = None
-    """Reasoning effort for the LLM client."""
 
     max_retries: int = 3
     """Maximum number of retries for the LLM client."""
@@ -126,23 +118,10 @@ class Config:
     created from the same factory, enabling global rate limiting per model.
     """
 
-    prompt_cache_retention: Literal["24h", "in_memory"] | None = None
-    """Prompt cache retention policy for extended caching.
-
-    Set to "24h" to enable extended prompt caching, which keeps cached prefixes
-    active for up to 24 hours. This is only supported on certain models
-    (gpt-5.1, gpt-5, gpt-4.1). When None, uses default in-memory caching
-    (5-10 min retention).
-    """
-
     def to_trace_settings(self) -> dict[str, Any]:
         """Convert the configuration to trace settings."""
         trace_settings: dict[str, Any] = {}
 
-        if self.temperature is not None:
-            trace_settings["temperature"] = self.temperature
-        if self.reasoning_effort is not None:
-            trace_settings["reasoning_effort"] = self.reasoning_effort
         if self.base_url is not None:
             trace_settings["base_url"] = self.base_url
         trace_settings["timeout"] = self.timeout
@@ -153,8 +132,7 @@ class Config:
             trace_settings["vertex_location"] = self.vertex_location
         if self.enforce_structured_output:
             trace_settings["enforce_structured_output"] = self.enforce_structured_output
-        if self.prompt_cache_retention is not None:
-            trace_settings["prompt_cache_retention"] = self.prompt_cache_retention
+        trace_settings["schema_validation_retries"] = self.schema_validation_retries
         return trace_settings
 
 
