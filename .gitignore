@@ -9,6 +9,7 @@ __pycache__/
 .venv/
 .uv-cache/
 .uv_cache/
+.env
 
 # Tooling caches
 .pytest_cache/

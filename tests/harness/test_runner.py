@@ -342,7 +342,7 @@ def test_runner_builds_request_from_prompt_instructions_and_history_items() -> N
         prior_response = _assistant_response(content="first reply")
         instruction_template = PromptTemplate[dict[str, object], list[str]](
             system_template="You support {{ team }}.",
-            user_template="unused",
+            user_template=None,
             output_schema=cast(OutputSchema[list[str]], _MockOutputSchema()),
         )
         user_template = PromptTemplate[dict[str, object], list[str]](

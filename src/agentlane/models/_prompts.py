@@ -45,19 +45,25 @@ class PromptSpec[CtxT]:
 
 @dataclass(init=False)
 class PromptTemplate(PromptTemplateBase[CtxT, OutT]):
-    """A prompt template that can be used to generate a prompt for an LLM."""
+    """A prompt template that can render optional system and user messages."""
 
     def __init__(
         self,
         *,
-        system_template: str | None,
-        user_template: str,
         output_schema: OutputSchema[OutT],
+        system_template: str | None = None,
+        user_template: str | None = None,
     ) -> None:
+        if system_template is None and user_template is None:
+            raise ValueError(
+                "PromptTemplate requires at least one of `system_template` or `user_template`."
+            )
         self._system_template = (
             Template(system_template, trim_blocks=True) if system_template else None
         )
-        self._user_template = Template(user_template, trim_blocks=True)
+        self._user_template = (
+            Template(user_template, trim_blocks=True) if user_template else None
+        )
         self._output_schema = output_schema
 
     def render_messages(self, ctx: CtxT | None = None) -> list[dict[str, Any]]:
@@ -74,16 +80,17 @@ class PromptTemplate(PromptTemplateBase[CtxT, OutT]):
                     ),
                 }
             )
-        msgs.append(
-            {
-                "role": "user",
-                "content": (
-                    self._user_template.render()
-                    if ctx is None
-                    else self._user_template.render(ctx)
-                ),
-            }
-        )
+        if self._user_template:
+            msgs.append(
+                {
+                    "role": "user",
+                    "content": (
+                        self._user_template.render()
+                        if ctx is None
+                        else self._user_template.render(ctx)
+                    ),
+                }
+            )
         return msgs
 
     def response_format(self) -> dict[str, Any] | None:
@@ -162,19 +169,23 @@ class MultiPartPromptTemplate(PromptTemplateBase[CtxT, OutT]):
     """A prompt template that renders message content as a list of parts.
 
     - system_parts: optional list of parts for the system message
-    - user_parts: list of parts for the user message
+    - user_parts: optional list of parts for the user message
     """
 
     def __init__(
         self,
         *,
-        system_parts: list[PartTemplate[CtxT]] | None,
-        user_parts: list[PartTemplate[CtxT]],
         output_schema: OutputSchema[OutT],
+        system_parts: list[PartTemplate[CtxT]] | None = None,
+        user_parts: list[PartTemplate[CtxT]] | None = None,
     ) -> None:
         """Initialize the multi-part prompt template."""
+        if not system_parts and not user_parts:
+            raise ValueError(
+                "MultiPartPromptTemplate requires at least one of `system_parts` or `user_parts`."
+            )
         self._system_parts = system_parts or []
-        self._user_parts = user_parts
+        self._user_parts = user_parts or []
         self._output_schema = output_schema
 
     def render_messages(self, ctx: CtxT | None = None) -> list[dict[str, Any]]:
@@ -187,12 +198,13 @@ class MultiPartPromptTemplate(PromptTemplateBase[CtxT, OutT]):
                     "content": [part.render(ctx) for part in self._system_parts],
                 }
             )
-        msgs.append(
-            {
-                "role": "user",
-                "content": [part.render(ctx) for part in self._user_parts],
-            }
-        )
+        if self._user_parts:
+            msgs.append(
+                {
+                    "role": "user",
+                    "content": [part.render(ctx) for part in self._user_parts],
+                }
+            )
         return msgs
 
     def response_format(self) -> dict[str, Any] | None:
