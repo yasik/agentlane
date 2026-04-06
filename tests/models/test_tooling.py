@@ -8,7 +8,14 @@ from typing import Annotated, cast
 import pytest
 from pydantic import BaseModel
 
-from agentlane.models import ModelBehaviorError, Tool, ToolCall, ToolExecutor, Tools
+from agentlane.models import (
+    ModelBehaviorError,
+    Tool,
+    ToolCall,
+    ToolExecutor,
+    Tools,
+    as_tool,
+)
 from agentlane.runtime import CancellationToken
 
 
@@ -127,6 +134,53 @@ def test_tool_from_function_raises_for_missing_parameter_annotations() -> None:
 
     with pytest.raises(TypeError, match="Missing: query"):
         Tool.from_function(cast(Callable[..., object], invalid_tool))
+
+
+def test_as_tool_decorates_typed_callable() -> None:
+    """as_tool should return a native Tool from a typed function declaration."""
+
+    @as_tool
+    async def lookup_order(
+        order_id: str,
+        cancellation_token: CancellationToken,
+    ) -> str:
+        """Look up one order."""
+        del cancellation_token
+        return f"order:{order_id}"
+
+    args_model = lookup_order.args_type()
+    result = asyncio.run(
+        lookup_order.run(
+            args_model(order_id="A-123"),
+            CancellationToken(),
+        )
+    )
+
+    assert isinstance(lookup_order, Tool)
+    assert lookup_order.name == "lookup_order"
+    assert lookup_order.description == "Look up one order."
+    assert result == "order:A-123"
+
+
+def test_as_tool_supports_configured_overrides() -> None:
+    """as_tool(...) should support explicit native tool overrides."""
+
+    @as_tool(name="help_search", description="Search the help center.")
+    async def search_help_center(question: str) -> str:
+        return f"result:{question}"
+
+    args_model = search_help_center.args_type()
+    result = asyncio.run(
+        search_help_center.run(
+            args_model(question="returns"),
+            CancellationToken(),
+        )
+    )
+
+    assert isinstance(search_help_center, Tool)
+    assert search_help_center.name == "help_search"
+    assert search_help_center.description == "Search the help center."
+    assert result == "result:returns"
 
 
 def test_tools_accept_plain_typed_callables() -> None:

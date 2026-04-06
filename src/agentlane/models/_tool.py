@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, is_dataclass
-from typing import Annotated, Any, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, get_args, get_origin, get_type_hints, overload
 
 from pydantic import BaseModel, Field, create_model
 
@@ -24,6 +24,9 @@ type ToolFormatter[ResultT] = Callable[[ResultT], str]
 
 type ToolFunction = Callable[..., Any | Awaitable[Any]]
 """Developer-facing callable used to define a tool ergonomically."""
+
+type ToolDecorator = Callable[[ToolFunction], "Tool[BaseModel, Any]"]
+"""Decorator that turns one typed Python callable into a native Tool."""
 
 
 class Tool[ArgsT: BaseModel, ResultT]:
@@ -152,6 +155,58 @@ class Tool[ArgsT: BaseModel, ResultT]:
         if self._formatter is not None:
             return self._formatter(value)
         return _default_tool_formatter(value)
+
+
+@overload
+def as_tool(func: ToolFunction, /) -> Tool[BaseModel, Any]: ...
+
+
+@overload
+def as_tool(
+    func: None = None,
+    /,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    formatter: ToolFormatter[Any] | None = None,
+    parameters_schema: dict[str, Any] | None = None,
+) -> ToolDecorator: ...
+
+
+def as_tool(
+    func: ToolFunction | None = None,
+    /,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    formatter: ToolFormatter[Any] | None = None,
+    parameters_schema: dict[str, Any] | None = None,
+) -> Tool[BaseModel, Any] | ToolDecorator:
+    """Decorate one typed callable and return a native ``Tool``.
+
+    This is a thin wrapper around ``Tool.from_function(...)``. Use it when the
+    function is meant to exist only as a tool definition and you want that
+    intent to be visible at the function declaration site.
+    """
+    if func is not None:
+        return Tool.from_function(
+            func,
+            name=name,
+            description=description,
+            formatter=formatter,
+            parameters_schema=parameters_schema,
+        )
+
+    def decorator(decorated: ToolFunction) -> Tool[BaseModel, Any]:
+        return Tool.from_function(
+            decorated,
+            name=name,
+            description=description,
+            formatter=formatter,
+            parameters_schema=parameters_schema,
+        )
+
+    return decorator
 
 
 def _default_tool_formatter(value: object) -> str:

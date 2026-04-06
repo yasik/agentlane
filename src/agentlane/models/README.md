@@ -14,11 +14,11 @@ At a high level, this package provides:
 6. a clean dependency boundary so provider packages can build on the same core model contract.
 
 For tooling ergonomics, the common application path is intentionally lightweight:
-pass a normal typed Python callable into `Tools(...)`, or use
-`Tool.from_function(...)` when you want an explicit native `Tool` value. The
-framework derives the tool name, description, and strict argument schema from
-the callable signature, while still preserving the lower-level `Tool(...)`
-constructor for full manual control.
+decorate a typed Python function with `@as_tool`, pass a normal typed callable
+into `Tools(...)`, or use `Tool.from_function(...)` when you want an explicit
+native `Tool` value. All three paths share the same inference logic for tool
+name, description, and strict argument schema, while still preserving the
+lower-level `Tool(...)` constructor for full manual control.
 
 Core principles:
 
@@ -36,9 +36,11 @@ The shared cancellation token intentionally lives in `agentlane.runtime`, not he
 
 If you are building orchestration, use the harness or runtime layers. Application developers should provide plain payloads or higher-level prompt primitives such as `PromptSpec`, not assemble low-level message dictionaries themselves. The harness runner owns request construction and decides how typed prompt input and accumulated run state become canonical model messages.
 
-Likewise, application developers should usually provide typed callables for
-tools rather than hand-writing argument models for every simple tool. Reach for
-the explicit `Tool(...)` constructor only when you need custom low-level control
-over the schema, handler shape, or output formatting.
+Likewise, application developers should usually define tools from typed Python
+functions rather than hand-writing argument models for every simple tool. Reach
+for `@as_tool` when you want the function declaration itself to read like a
+tool definition, `Tools(tools=[my_function])` for lightweight one-offs, and the
+explicit `Tool(...)` constructor only when you need low-level control over the
+schema, handler shape, or output formatting.
 
 If you are defining how the framework talks to models, validates outputs, executes tools, or carries ephemeral model-call state, it belongs here.

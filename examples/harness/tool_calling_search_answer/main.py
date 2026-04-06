@@ -22,8 +22,9 @@ from agentlane.models import (
     PromptSpec,
     PromptTemplate,
     Tools,
+    as_tool,
 )
-from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.runtime import SingleThreadedRuntimeEngine
 
 MODEL_NAME = "gpt-5.4-mini"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -56,13 +57,10 @@ result and keep the answer under 80 words.
 )
 
 
-async def search_help_center(
-    question: str,
-    cancellation_token: CancellationToken,
-) -> str:
+@as_tool
+async def search_help_center(question: str) -> str:
     """Search the Acme help center for the current policy answer."""
-    _ = question
-    _ = cancellation_token
+    del question
     return MOCK_SEARCH_RESULT
 
 
@@ -86,8 +84,8 @@ def build_descriptor(api_key: str) -> AgentDescriptor:
         # Require one search call so the demo always exercises the tool path.
         # After that first call, the runner removes the tool for the answer turn.
         tools=Tools(
-            # The common path is intentionally lightweight: just pass a typed
-            # Python function and let the framework derive the tool schema.
+            # The most explicit ergonomic path is to decorate the function once
+            # and then pass the resulting native Tool directly into the harness.
             tools=[search_help_center],
             tool_choice="required",
             tool_call_limits={"search_help_center": 1},
