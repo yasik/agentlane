@@ -28,6 +28,12 @@ Run the harness customer-support demo:
 uv run python examples/harness/customer_support_conversation/main.py
 ```
 
+Run the harness tool-calling demo:
+
+```bash
+uv run python examples/harness/tool_calling_search_answer/main.py
+```
+
 Run the distributed publish fan-out / fan-in demo:
 
 ```bash
