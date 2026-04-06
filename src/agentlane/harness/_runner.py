@@ -1,23 +1,21 @@
 """Default stateless runner for the harness agent loop.
 
-The runner is the inner execution engine of one agent turn. It is
-intentionally stateless — all mutable conversation state lives in
-``RunState``, which the lifecycle owns and copies before each invocation.
+The runner owns the generic loop for one agent run:
 
-For the current phase the runner handles a single terminal model turn:
-
-1. Build the ``list[MessageDict]`` request from instructions + run state.
+1. Build the next model request from instructions + run state.
 2. Call the model (with optional retry).
-3. Validate the response as a direct assistant answer.
-4. Return a ``RunResult`` with the extracted output.
+3. Record the raw ``ModelResponse`` on the run state.
+4. If tool calls were returned, execute them and continue the loop.
+5. Otherwise extract the direct assistant answer and return ``RunResult``.
 
-Tool execution and handoff loops are deferred to later phases and will
-fail fast with ``ModelBehaviorError`` if the model returns tool calls.
+The lifecycle stays responsible for queueing and persistence. The runner
+stays responsible for model-facing normalization, tool execution, and loop
+control within one run.
 """
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel
@@ -30,6 +28,8 @@ from agentlane.models import (
     OutputSchema,
     PromptSpec,
     RunErrorDetails,
+    ToolCall,
+    ToolExecutor,
     Tools,
     retry_on_errors,
 )
@@ -95,6 +95,7 @@ class Runner:
         self._max_attempts = max_attempts
         self._max_turns = max_turns
         self._is_retryable = is_retryable
+        self._tool_executor = ToolExecutor()
 
         # Cache the retry-wrapped model call once at init so we don't
         # recreate the decorator closure on every turn.
@@ -127,6 +128,7 @@ class Runner:
             while True:
                 state.turn_count += 1
                 _check_turn_limit(state.turn_count, self._max_turns)
+                visible_tools = _visible_tools(agent, state)
 
                 # 1. Build the full message list from instructions + history
                 messages = _build_request(agent, state)
@@ -135,21 +137,33 @@ class Runner:
                 response = await self._run_with_retry(
                     agent=agent,
                     messages=messages,
+                    tools=visible_tools,
                     hooks=resolved_hooks,
                     cancellation_token=cancellation_token,
                 )
 
                 # 3. Record the raw response on the working state
                 state.responses.append(response)
-
-                # 4. Validate this is a terminal answer (no tool calls)
-                _validate_terminal_response(response)
-
-                # 5. Append the response as an assistant turn for future
-                #    continuation when the agent receives more input
                 state.continuation_history.append(response)
 
-                # 6. Extract and return the final output
+                # The raw assistant turn is committed before tool execution
+                # so the next request includes the function-call message that
+                # produced the tool results.
+                tool_calls = _extract_tool_calls(response)
+                if tool_calls:
+                    tool_messages = await self._execute_tool_calls(
+                        agent=agent,
+                        tools=visible_tools,
+                        tool_calls=tool_calls,
+                        response=response,
+                        hooks=resolved_hooks,
+                        cancellation_token=cancellation_token,
+                    )
+                    state.continuation_history.extend(tool_messages)
+                    continue
+
+                # 4. Validate the terminal assistant answer and return it.
+                _validate_terminal_response(response)
                 result = RunResult(
                     final_output=_extract_direct_answer(response),
                     responses=list(state.responses),
@@ -165,6 +179,7 @@ class Runner:
         *,
         agent: Task,
         messages: list[MessageDict],
+        tools: Tools | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> ModelResponse:
@@ -176,6 +191,7 @@ class Runner:
         retry_result = await self._retryable_run_once(
             agent=agent,
             messages=messages,
+            tools=tools,
             hooks=hooks,
             cancellation_token=cancellation_token,
         )
@@ -186,6 +202,7 @@ class Runner:
         *,
         agent: Task,
         messages: list[MessageDict],
+        tools: Tools | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> ModelResponse:
@@ -197,12 +214,47 @@ class Runner:
             messages,
             extra_call_args=_model_args(agent),
             schema=_schema(agent),
-            tools=_tools(agent),
+            tools=tools,
             cancellation_token=cancellation_token,
         )
         await hooks.on_llm_end(agent, response)
 
         return response
+
+    async def _execute_tool_calls(
+        self,
+        *,
+        agent: Task,
+        tools: Tools | None,
+        tool_calls: list[ToolCall],
+        response: ModelResponse,
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> list[MessageDict]:
+        """Execute one model-emitted tool batch and return tool messages."""
+        if tools is None:
+            raise _model_behavior_error(
+                "Runner received tool calls, but the agent exposes no tools.",
+                raw_response=response,
+            )
+        if tools.tool_choice == "none":
+            raise _model_behavior_error(
+                "Runner received tool calls even though tools were disabled for this turn.",
+                raw_response=response,
+            )
+
+        tool_messages = await self._tool_executor.execute(
+            tool_calls=tool_calls,
+            tools=tools,
+            cancellation_token=cancellation_token,
+            on_tool_start=lambda tool_call: hooks.on_tool_call_start(agent, tool_call),
+            on_tool_end=lambda tool_call, result: hooks.on_tool_call_end(
+                agent,
+                tool_call,
+                result,
+            ),
+        )
+        return tool_messages
 
 
 def _build_request(agent: Task, state: RunState) -> list[MessageDict]:
@@ -256,10 +308,14 @@ def _history_item_to_messages(item: object) -> list[MessageDict]:
 
     The run-state boundary is intentionally generic (``list[object]``).
     The runner applies a simple convention: ``ModelResponse`` objects are
-    assistant turns; everything else is user-side input.
+    assistant turns, canonical message dicts pass through unchanged, and
+    everything else is user-side input.
     """
     if isinstance(item, ModelResponse):
         return [_assistant_message_from_response(item)]
+    message = _as_message_dict(item)
+    if message is not None:
+        return [_normalize_message(message)]
     return _user_item_to_messages(item)
 
 
@@ -325,6 +381,18 @@ def _normalize_content(content: object) -> object:
         return str(content)
 
 
+def _as_message_dict(item: object) -> dict[str, object] | None:
+    """Return the item when it already looks like one canonical message dict."""
+    if not isinstance(item, dict):
+        return None
+
+    message = cast(dict[str, object], item)
+    role = message.get("role")
+    if isinstance(role, str):
+        return message
+    return None
+
+
 def _as_runner_task(agent: Task) -> RunnerTask | None:
     """Narrow a ``Task`` to ``RunnerTask`` if it exposes runner properties."""
     if isinstance(agent, RunnerTask):
@@ -369,6 +437,67 @@ def _tools(agent: Task) -> Tools | None:
     return runner_task.tools if runner_task else None
 
 
+def _visible_tools(agent: Task, state: RunState) -> Tools | None:
+    """Return the effective tools visible for the next model turn."""
+    tools = _tools(agent)
+    if tools is None:
+        return None
+
+    return _limit_tools(tools, state.responses)
+
+
+def _limit_tools(
+    tools: Tools,
+    responses: list[ModelResponse],
+) -> Tools | None:
+    """Apply tool visibility limits to the next model request."""
+    if tools.tool_choice == "none":
+        return tools
+
+    tool_call_counts, tool_round_trips = _tool_usage_from_responses(responses)
+
+    if tool_round_trips >= tools.max_tool_round_trips:
+        return None
+
+    if not tools.tool_call_limits:
+        return tools
+
+    active_tools = tuple(
+        tool
+        for tool in tools.tools
+        if tool.name not in tools.tool_call_limits
+        or tool_call_counts.get(tool.name, 0) < tools.tool_call_limits[tool.name]
+    )
+    if not active_tools:
+        return None
+    if len(active_tools) == len(tools.tools):
+        return tools
+
+    # The runner strips exhausted tools from later requests instead of
+    # delegating that policy to model adapters.
+    return replace(tools, tools=active_tools)
+
+
+def _tool_usage_from_responses(
+    responses: list[ModelResponse],
+) -> tuple[dict[str, int], int]:
+    """Summarize prior tool usage from accumulated run responses."""
+    tool_call_counts: dict[str, int] = {}
+    tool_round_trips = 0
+
+    for response in responses:
+        tool_calls = _extract_tool_calls(response)
+        if not tool_calls:
+            continue
+
+        tool_round_trips += 1
+        for tool_call in tool_calls:
+            tool_name = tool_call.function.name or ""
+            tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
+
+    return tool_call_counts, tool_round_trips
+
+
 def _check_turn_limit(turn_count: int, max_turns: int) -> None:
     """Fail fast when the run exceeds the configured turn limit."""
     if turn_count > max_turns:
@@ -378,9 +507,8 @@ def _check_turn_limit(turn_count: int, max_turns: int) -> None:
 def _validate_terminal_response(response: ModelResponse) -> None:
     """Validate the response is a direct assistant answer.
 
-    In the current phase the runner only handles terminal responses.
-    Tool calls are not yet supported and will raise ``ModelBehaviorError``
-    so the caller gets a clear signal rather than silently dropping them.
+    Tool-call responses are handled earlier in the loop. By the time this
+    validator runs, the response must represent a terminal assistant answer.
     """
     _validate_response_choice(response)
 
@@ -389,12 +517,6 @@ def _validate_terminal_response(response: ModelResponse) -> None:
     if message.role != "assistant":
         raise _model_behavior_error(
             "Runner expected the first model choice to be an assistant message.",
-            raw_response=response,
-        )
-
-    if message.tool_calls:
-        raise _model_behavior_error(
-            "Runner does not execute tool calls yet. Phase 5 adds tool-loop support.",
             raw_response=response,
         )
 
@@ -414,6 +536,12 @@ def _assistant_message_from_response(response: ModelResponse) -> MessageDict:
     """Extract the first assistant message for continuation history."""
     _validate_response_choice(response)
     return response.choices[0].message.model_dump(mode="json", exclude_none=True)
+
+
+def _extract_tool_calls(response: ModelResponse) -> list[ToolCall]:
+    """Extract any tool calls from the first model choice."""
+    _validate_response_choice(response)
+    return cast(list[ToolCall], list(response.choices[0].message.tool_calls or []))
 
 
 def _extract_direct_answer(response: ModelResponse) -> object:

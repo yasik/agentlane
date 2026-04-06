@@ -48,7 +48,6 @@ from agentlane.models import (
     RetryMetrics,
     ToolCall,
     ToolCallFunction,
-    ToolExecutor,
     Tools,
     has_escape_sequence_explosion,
     is_retryable_by_status_code,
@@ -59,7 +58,6 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span, generation_span
 
-from ._tool_output_adapter import ResponsesApiOutputAdapter
 from .types import (
     ResponseFunctionToolCall,
     ResponseOutputMessage,
@@ -374,12 +372,6 @@ class ResponsesClient(Model[TResponseType]):
         # Common parameters for API calls
         self._common_params: dict[str, Any] = dict(kwargs)
 
-        # Initialize tool executor with Responses API adapter
-        self._tool_executor = ToolExecutor(
-            tracing=config.tracing,
-            adapter=ResponsesApiOutputAdapter(),
-        )
-
     async def get_response(  # pylint: disable=R0912
         self,
         messages: list[MessageDict],
@@ -405,8 +397,6 @@ class ResponsesClient(Model[TResponseType]):
         # Convert messages to Responses API input format
         conversation_input = self._messages_to_input(messages)
         schema_retry_count = 0
-        tool_round_trips = 0
-        tool_call_counts: dict[str, int] = {}
 
         with generation_span(
             model=self._model,
@@ -422,19 +412,6 @@ class ResponsesClient(Model[TResponseType]):
                     schema=schema,
                     tools=tools,
                 )
-
-                # Enforce per-tool and global tool call limits by removing
-                # exhausted tools from the API payload.  When no tools
-                # remain, strip them entirely so the model is forced to
-                # produce a text response — this is deterministic and does
-                # not depend on the model obeying "limit reached" messages.
-                if tools is not None:
-                    self._enforce_tool_limits(
-                        call_args=call_args,
-                        tools=tools,
-                        tool_call_counts=tool_call_counts,
-                        tool_round_trips=tool_round_trips,
-                    )
 
                 LOGGER.debug(
                     "Responses API call started",
@@ -465,6 +442,13 @@ class ResponsesClient(Model[TResponseType]):
                 )
 
                 model_response = response_to_model_response(result)
+                tool_calls = self._extract_tool_calls(result)
+
+                if tool_calls:
+                    # Tool calls are returned as raw model output.
+                    self._record_tracing_output(span_generation, result)
+                    self._record_usage(span_generation, result, retry_metrics)
+                    return model_response
 
                 # Check for escape sequence explosion (e.g. Gemini combining char runs)
                 if has_escape_sequence_explosion(model_response):
@@ -523,36 +507,6 @@ class ResponsesClient(Model[TResponseType]):
                         continue  # Retry with augmented conversation
                     # Fall through if valid or no more retries
 
-                # Check for tool calls
-                tool_calls = self._extract_tool_calls(result)
-                if tool_calls and tools is not None:
-                    tool_round_trips += 1
-                    for tc in tool_calls:
-                        name = tc.function.name or ""
-                        tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
-
-                    # Execute tool calls and add results to conversation
-                    tool_results = await self._execute_tool_calls(
-                        tool_calls=tool_calls,
-                        tools=tools,
-                        parent_span=span_generation,
-                        cancellation_token=cancellation_token,
-                    )
-
-                    # Add all output items (including reasoning) and tool results to conversation
-                    # Note: Reasoning items MUST be included when function_calls are present,
-                    # as the API requires the reasoning context for follow-up requests
-                    # Exclude 'status' field - it's output-only and not accepted as input
-                    for item in result.output:
-                        item_dict = item.model_dump(mode="json", exclude={"status"})
-                        conversation_input.append(item_dict)
-                    conversation_input.extend(tool_results)
-
-                    if self._tracing.include_data():
-                        span_generation.span_data.input = conversation_input
-
-                    continue
-
                 # Record tracing and return
                 self._record_tracing_output(span_generation, result)
                 self._record_usage(span_generation, result, retry_metrics)
@@ -566,58 +520,6 @@ class ResponsesClient(Model[TResponseType]):
     def get_is_enforce_structured_output(self) -> bool:
         """Get the enforce_structured_output flag."""
         return self._enforce_structured_output
-
-    def _enforce_tool_limits(
-        self,
-        call_args: dict[str, Any],
-        tools: Tools,
-        tool_call_counts: dict[str, int],
-        tool_round_trips: int,
-    ) -> None:
-        """Remove exhausted tools from *call_args* in place.
-
-        Two layers of enforcement:
-        1. **Per-tool**: if ``tool_call_limits`` is set, each tool whose
-           call count has reached its limit is dropped from the payload.
-        2. **Global**: if ``tool_round_trips`` has reached
-           ``max_tool_round_trips``, all tools are stripped.
-
-        When *all* tools are exhausted (or the global limit fires), the
-        ``tool_choice`` is set to "none", and the ``parallel_tool_calls`` is
-        removed so the model is unable to make further calls.
-        """
-        all_exhausted = False
-
-        if tools.tool_call_limits:
-            active_names = {
-                t.name
-                for t in tools.tools
-                if t.name not in tools.tool_call_limits
-                or tool_call_counts.get(t.name, 0) < tools.tool_call_limits[t.name]
-            }
-            if not active_names:
-                all_exhausted = True
-            elif len(active_names) < len(tools.tools):
-                # Responses API uses flat {"name": ...} in tool dicts
-                call_args["tools"] = [
-                    t
-                    for t in call_args.get("tools", [])
-                    if t.get("name") in active_names
-                ]
-
-        if tool_round_trips >= tools.max_tool_round_trips:
-            all_exhausted = True
-
-        if all_exhausted:
-            call_args["tool_choice"] = "none"
-            call_args.pop("parallel_tool_calls", None)
-
-            LOGGER.warning(
-                "Tools exhausted, disabling via tool_choice=none",
-                model=self._model,
-                round_trips=tool_round_trips,
-                tool_counts=tool_call_counts,
-            )
 
     def _messages_to_input(
         self, messages: list[MessageDict]
@@ -832,34 +734,6 @@ class ResponsesClient(Model[TResponseType]):
                 tool_calls.append(tool_call)
 
         return tool_calls
-
-    async def _execute_tool_calls(
-        self,
-        *,
-        tool_calls: list[ToolCall],
-        tools: Tools,
-        parent_span: Span[Any] | None = None,
-        cancellation_token: CancellationToken | None = None,
-    ) -> list[dict[str, Any]]:
-        """Execute tool calls and return results in Responses API format.
-
-        Delegates to the shared ToolExecutor configured with ResponsesApiOutputAdapter.
-
-        Args:
-            tool_calls: List of tool calls to execute.
-            tools: Tools configuration.
-            parent_span: Optional parent span for tracing.
-            cancellation_token: Optional cancellation token.
-
-        Returns:
-            List of function_call_output items for Responses API.
-        """
-        return await self._tool_executor.execute(
-            tool_calls=tool_calls,
-            tools=tools,
-            parent_span=parent_span,
-            cancellation_token=cancellation_token,
-        )
 
     async def _execute_with_retry(
         self,

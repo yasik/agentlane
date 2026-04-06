@@ -22,6 +22,7 @@ from agentlane.models import (
     OutputSchema,
     PromptSpec,
     PromptTemplate,
+    Tool,
     ToolCall,
     Tools,
     get_content_or_none,
@@ -165,6 +166,28 @@ class _RecordingHooks(RunnerHooks):
             ("llm_end", (_task_name(task), get_content_or_none(response)))
         )
 
+    async def on_tool_call_start(
+        self,
+        task: Task,
+        tool_call: ToolCall,
+    ) -> None:
+        self.events.append(
+            ("tool_start", (_task_name(task), tool_call.function.name, tool_call.id))
+        )
+
+    async def on_tool_call_end(
+        self,
+        task: Task,
+        tool_call: ToolCall,
+        result: object,
+    ) -> None:
+        self.events.append(
+            (
+                "tool_end",
+                (_task_name(task), tool_call.function.name, tool_call.id, result),
+            )
+        )
+
 
 def _task_name(task: Task) -> str:
     """Return the agent name when present for hook assertions."""
@@ -177,9 +200,32 @@ class _StructuredResponse(BaseModel):
     value: str
 
 
+class _EchoArgs(BaseModel):
+    text: str
+
+
 class _MockOutputSchema:
     def response_format(self) -> dict[str, Any] | None:
         return None
+
+
+def _make_tool_call(
+    *,
+    tool_id: str,
+    arguments: str,
+    name: str = "echo",
+) -> ToolCall:
+    """Build one canonical tool call payload for harness tests."""
+    return ToolCall.model_validate(
+        {
+            "id": tool_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": arguments,
+            },
+        }
+    )
 
 
 def test_runner_returns_run_result_and_updates_run_state() -> None:
@@ -462,7 +508,353 @@ def test_runner_shared_instance_serves_multiple_agents_safely() -> None:
     asyncio.run(scenario())
 
 
-def test_runner_raises_for_tool_calls_before_phase_five() -> None:
+def test_runner_executes_tool_calls_and_continues_loop() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        executed: list[str] = []
+
+        async def echo_handler(
+            args: _EchoArgs,
+            cancellation_token: CancellationToken,
+        ) -> str:
+            del cancellation_token
+            executed.append(args.text)
+            return f"tool:{args.text}"
+
+        tool = Tool(
+            name="echo",
+            description="Echo text",
+            args_model=_EchoArgs,
+            handler=echo_handler,
+        )
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_1",
+                            arguments='{"text":"docs"}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="docs are ready"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="ToolRunner",
+                model=model,
+                tools=Tools(tools=[tool]),
+            ),
+        )
+        state = RunState(
+            original_input="search docs",
+            continuation_history=[],
+            responses=[],
+        )
+
+        result = await runner.run(agent, state)
+
+        assert result.final_output == "docs are ready"
+        assert executed == ["docs"]
+        assert len(result.responses) == 2
+        assert model.calls == [
+            [_message("user", "search docs")],
+            [
+                _message("user", "search docs"),
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "echo",
+                                "arguments": '{"text":"docs"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "name": "echo",
+                    "content": "tool:docs",
+                },
+            ],
+        ]
+        assert len(state.continuation_history) == 3
+        assert isinstance(state.continuation_history[0], ModelResponse)
+        assert state.continuation_history[1] == {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "name": "echo",
+            "content": "tool:docs",
+        }
+        assert isinstance(state.continuation_history[2], ModelResponse)
+
+    asyncio.run(scenario())
+
+
+def test_runner_executes_parallel_tool_calls_and_invokes_hooks() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        hooks = _RecordingHooks()
+        started_calls: list[str] = []
+        both_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def echo_handler(
+            args: _EchoArgs,
+            cancellation_token: CancellationToken,
+        ) -> str:
+            del cancellation_token
+            started_calls.append(args.text)
+            if len(started_calls) == 2:
+                both_started.set()
+            await release.wait()
+            return f"done:{args.text}"
+
+        tool = Tool(
+            name="echo",
+            description="Echo text",
+            args_model=_EchoArgs,
+            handler=echo_handler,
+        )
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_1",
+                            arguments='{"text":"one"}',
+                        ),
+                        _make_tool_call(
+                            tool_id="call_2",
+                            arguments='{"text":"two"}',
+                        ),
+                    ],
+                ),
+                make_assistant_response(content="complete"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="ParallelTools",
+                model=model,
+                tools=Tools(
+                    tools=[tool],
+                    parallel_tool_calls=True,
+                ),
+            ),
+        )
+        state = RunState(
+            original_input="run tools",
+            continuation_history=[],
+            responses=[],
+        )
+
+        run_task = asyncio.create_task(runner.run(agent, state, hooks=hooks))
+        await asyncio.wait_for(both_started.wait(), timeout=1.0)
+        release.set()
+
+        result = await run_task
+
+        assert result.final_output == "complete"
+        assert set(started_calls) == {"one", "two"}
+        assert ("tool_start", ("ParallelTools", "echo", "call_1")) in hooks.events
+        assert ("tool_start", ("ParallelTools", "echo", "call_2")) in hooks.events
+        assert (
+            "tool_end",
+            ("ParallelTools", "echo", "call_1", "done:one"),
+        ) in hooks.events
+        assert (
+            "tool_end",
+            ("ParallelTools", "echo", "call_2", "done:two"),
+        ) in hooks.events
+
+    asyncio.run(scenario())
+
+
+def test_runner_filters_exhausted_tools_on_later_turns() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+
+        async def echo_handler(
+            args: _EchoArgs,
+            cancellation_token: CancellationToken,
+        ) -> str:
+            del cancellation_token
+            return f"echo:{args.text}"
+
+        async def lookup_handler(
+            args: _EchoArgs,
+            cancellation_token: CancellationToken,
+        ) -> str:
+            del cancellation_token
+            return f"lookup:{args.text}"
+
+        echo_tool = Tool(
+            name="echo",
+            description="Echo text",
+            args_model=_EchoArgs,
+            handler=echo_handler,
+        )
+        lookup_tool = Tool(
+            name="lookup",
+            description="Lookup text",
+            args_model=_EchoArgs,
+            handler=lookup_handler,
+        )
+        tools = Tools(
+            tools=[echo_tool, lookup_tool],
+            tool_call_limits={"echo": 1},
+        )
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_1",
+                            arguments='{"text":"docs"}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="LimitedTools",
+                model=model,
+                tools=tools,
+            ),
+        )
+        state = RunState(
+            original_input="search docs",
+            continuation_history=[],
+            responses=[],
+        )
+
+        result = await runner.run(agent, state)
+
+        assert result.final_output == "done"
+        assert model.call_options[0]["tools"] == tools
+        second_turn_tools = cast(Tools, model.call_options[1]["tools"])
+        assert [tool.name for tool in second_turn_tools.tools] == ["lookup"]
+
+    asyncio.run(scenario())
+
+
+def test_runner_disables_tools_after_max_round_trips() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+
+        async def echo_handler(
+            args: _EchoArgs,
+            cancellation_token: CancellationToken,
+        ) -> str:
+            del cancellation_token
+            return f"echo:{args.text}"
+
+        tool = Tool(
+            name="echo",
+            description="Echo text",
+            args_model=_EchoArgs,
+            handler=echo_handler,
+        )
+        tools = Tools(
+            tools=[tool],
+            max_tool_round_trips=1,
+        )
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_1",
+                            arguments='{"text":"docs"}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="RoundTripLimited",
+                model=model,
+                tools=tools,
+            ),
+        )
+        state = RunState(
+            original_input="search docs",
+            continuation_history=[],
+            responses=[],
+        )
+
+        result = await runner.run(agent, state)
+
+        assert result.final_output == "done"
+        assert model.call_options[0]["tools"] == tools
+        assert model.call_options[1]["tools"] is None
+
+    asyncio.run(scenario())
+
+
+def test_agent_tool_resolution_supports_inherit_override_and_disable() -> None:
+    runtime = SingleThreadedRuntimeEngine()
+    runner = Runner()
+    parent_tools = Tools(tools=[])
+
+    inherited = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(name="Inherited"),
+        parent_tools=parent_tools,
+    )
+    overridden_tools = Tools(tools=[])
+    overridden = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(
+            name="Overridden",
+            tools=overridden_tools,
+        ),
+        parent_tools=parent_tools,
+    )
+    disabled = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(
+            name="Disabled",
+            tools=None,
+        ),
+        parent_tools=parent_tools,
+    )
+
+    assert inherited.tools is parent_tools
+    assert overridden.tools is overridden_tools
+    assert disabled.tools is None
+
+
+def test_runner_raises_when_model_returns_tool_calls_without_tools() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
@@ -471,15 +863,9 @@ def test_runner_raises_for_tool_calls_before_phase_five() -> None:
                 make_assistant_response(
                     content=None,
                     tool_calls=[
-                        ToolCall.model_validate(
-                            {
-                                "id": "call_1",
-                                "type": "function",
-                                "function": {
-                                    "name": "search",
-                                    "arguments": '{"query":"docs"}',
-                                },
-                            }
+                        _make_tool_call(
+                            tool_id="call_1",
+                            arguments='{"text":"docs"}',
                         )
                     ],
                 )
@@ -488,7 +874,11 @@ def test_runner_raises_for_tool_calls_before_phase_five() -> None:
         agent = Agent(
             runtime,
             runner,
-            descriptor=AgentDescriptor(name="ToolBoundary", model=model),
+            descriptor=AgentDescriptor(
+                name="ToolBoundary",
+                model=model,
+                tools=None,
+            ),
         )
         state = RunState(
             original_input="search docs",
@@ -498,7 +888,7 @@ def test_runner_raises_for_tool_calls_before_phase_five() -> None:
 
         with pytest.raises(
             ModelBehaviorError,
-            match="Runner does not execute tool calls yet",
+            match="agent exposes no tools",
         ):
             await runner.run(agent, state)
 

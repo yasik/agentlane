@@ -1,7 +1,7 @@
 # Harness Agents
 
 Date: 2026-04-05
-Status: Phase 4 baseline
+Status: Phase 5 implementation ready for review
 
 ## What The Default Agent Owns
 
@@ -10,7 +10,7 @@ The default harness `Agent` builds on `Task` and owns:
 1. agent identity and descriptive metadata,
 2. the canonical model client used by the default runner,
 3. low-level model call settings via `model_args` and `schema`,
-4. canonical `Tools` configuration shared by model calls and later harness phases,
+4. canonical `Tools` configuration shared by model calls and harness tool execution,
 5. persisted run state for multi-turn continuation,
 6. queued inbound run inputs, and
 7. delegation of each turn to a stateless `Runner`.
@@ -115,12 +115,16 @@ The agent exposes `agent.run_state` as a snapshot suitable for persistence and l
 
 ## Phase Boundary
 
-The Phase 3 lifecycle semantics remain unchanged in Phase 4.
+The Phase 3 lifecycle semantics remain unchanged.
 
-Phase 4 adds three new agent seams here and keeps two boundaries explicit:
+Phase 4 and Phase 5 keep the following boundaries explicit:
 
 1. `AgentDescriptor` is the canonical static agent configuration passed into `Agent`.
 2. `agent.model`, `agent.model_args`, `agent.schema`, `agent.tools`, and `agent.instructions` are projections from that descriptor.
 3. `MessageDict` construction is no longer part of the public agent boundary. The runner builds model requests internally from `RunState`.
-4. Tool execution behavior is still not implemented here.
-5. Handoffs and sub-agent delegation are still not implemented here, so agents do not expose `as_tool` yet.
+4. `AgentDescriptor.tools` now defaults to inheritance. If a parent tool set is provided to the concrete agent instance:
+   - omitted tools inherit that parent tool set,
+   - explicit `Tools(...)` overrides the parent, and
+   - explicit `None` disables tools for that agent.
+5. Tool execution behavior now lives in the runner, not in the lifecycle or the public agent boundary.
+6. Handoffs and sub-agent delegation are still not implemented here, so agents do not expose `as_tool` yet.

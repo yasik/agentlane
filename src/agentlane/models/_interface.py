@@ -163,19 +163,18 @@ class Tools:
     tool_call_limits: Mapping[str, int] | None = None
     """Per-tool call limits.  Maps tool name to max allowed calls.
 
-    When a tool's call count reaches its limit, the client removes it
-    from the API call so the model cannot invoke it.  When all tools are
-    exhausted, tools are stripped entirely, forcing the model to produce
-    a text response.  This is deterministic — it does not rely on the
-    model reading "limit reached" messages.
+    When a tool's call count reaches its limit, the harness runner removes it
+    from the next model request so the model cannot invoke it again. When all
+    tools are exhausted, tools are stripped entirely from later requests,
+    forcing the model to produce a text response.
     """
 
     max_tool_round_trips: int = 10
     """Global safety limit on LLM → tool → LLM cycles.
 
     Acts as a last resort to prevent infinite loops when
-    ``tool_call_limits`` is not configured.  When reached, all tools
-    are stripped from the next API call.
+    ``tool_call_limits`` is not configured. When reached, the harness runner
+    strips all tools from the next model request.
     """
 
     def as_args(self) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from ._lifecycle import AgentDescriptor, AgentLifecycle
 from ._run import RunInput, RunResult, RunState
 from ._runner import Runner
 from ._task import Task
+from ._tooling import resolve_tools
 
 
 class Agent(Task):
@@ -35,6 +36,7 @@ class Agent(Task):
         *,
         bind_id: AgentId | None = None,
         descriptor: AgentDescriptor | None = None,
+        parent_tools: Tools | None = None,
         run_state: RunState | None = None,
         hooks: RunnerHooks | None = None,
     ) -> None:
@@ -46,6 +48,8 @@ class Agent(Task):
             bind_id: Optional pre-bound agent id, primarily for tests.
             descriptor: Optional static agent descriptor. When omitted, the
                 agent uses a default descriptor with its class name.
+            parent_tools: Optional inherited parent tool configuration used
+                when the descriptor leaves tool visibility unset.
             run_state: Optional recovered run state for this concrete agent
                 instance. When provided, later turns continue from that exact
                 resumable state instead of starting a new run.
@@ -54,6 +58,7 @@ class Agent(Task):
         super().__init__(engine, bind_id=bind_id)
         self._runner = runner
         self._hooks = hooks
+        self._parent_tools = parent_tools
         self._descriptor = descriptor or AgentDescriptor(name=type(self).__name__)
         self._lifecycle = AgentLifecycle(
             descriptor=self._descriptor,
@@ -93,7 +98,10 @@ class Agent(Task):
     @property
     def tools(self) -> Tools | None:
         """Return the configured tools for this agent."""
-        return self._descriptor.tools
+        return resolve_tools(
+            self._descriptor.tools,
+            parent_tools=self._parent_tools,
+        )
 
     @property
     def skills(self) -> tuple[object, ...] | None:

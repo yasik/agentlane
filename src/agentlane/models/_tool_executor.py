@@ -6,7 +6,9 @@ parallel/sequential execution and optional tracing integration.
 """
 
 import asyncio
+import inspect
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import structlog
@@ -20,6 +22,9 @@ from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapte
 from ._types import ToolCall
 
 LOGGER = structlog.get_logger("agentlane.models.tool_executor")
+
+type ToolStartCallback = Callable[[ToolCall], Awaitable[None] | None]
+type ToolEndCallback = Callable[[ToolCall, object], Awaitable[None] | None]
 
 
 class ToolExecutor:
@@ -62,6 +67,8 @@ class ToolExecutor:
         tools: Tools,
         parent_span: Span[Any] | None = None,
         cancellation_token: CancellationToken | None = None,
+        on_tool_start: ToolStartCallback | None = None,
+        on_tool_end: ToolEndCallback | None = None,
     ) -> list[dict[str, Any]]:
         """Execute tool calls and return formatted messages.
 
@@ -70,6 +77,10 @@ class ToolExecutor:
             tools: Tools configuration containing available tools.
             parent_span: Optional parent tracing span for function calls.
             cancellation_token: Optional cancellation token for async operations.
+            on_tool_start: Optional callback fired immediately before one tool
+                handler invocation begins.
+            on_tool_end: Optional callback fired after one tool invocation
+                finishes or exhausts timeout retries.
 
         Returns:
             List of tool result messages formatted by the adapter.
@@ -128,11 +139,13 @@ class ToolExecutor:
                 parent=parent_span,
                 disabled=self._tracing.is_disabled(),
             ) as span_function:
+                await _maybe_await(on_tool_start, call)
                 attempts = 0
                 while True:
                     attempts += 1
                     try:
                         result = await _run_tool()
+                        await _maybe_await(on_tool_end, call, result)
                         output_text = tool.return_value_as_string(result)
                         span_function.span_data.output = output_text
                         break
@@ -152,11 +165,15 @@ class ToolExecutor:
                             attempts=attempts,
                             timeout=timeout,
                         )
+                        timeout_result = (
+                            f"Error: Tool '{function_name}' timed out after {timeout}s "
+                            f"({attempts} attempts)."
+                        )
+                        await _maybe_await(on_tool_end, call, timeout_result)
                         return self._adapter.format_error(
                             call.id,
                             function_name,
-                            f"Error: Tool '{function_name}' timed out after {timeout}s "
-                            f"({attempts} attempts).",
+                            timeout_result,
                         )
 
             return self._adapter.format_success(call.id, function_name, output_text)
@@ -171,3 +188,15 @@ class ToolExecutor:
             responses.append(await _invoke(call))
 
         return responses
+
+
+async def _maybe_await(
+    callback: Callable[..., Awaitable[None] | None] | None,
+    *args: object,
+) -> None:
+    """Await an optional callback when it returns an awaitable."""
+    if callback is None:
+        return
+    result = callback(*args)
+    if inspect.isawaitable(result):
+        await result

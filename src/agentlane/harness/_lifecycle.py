@@ -28,7 +28,6 @@ from agentlane.models import (
     ModelResponse,
     OutputSchema,
     PromptSpec,
-    Tools,
 )
 from agentlane.runtime import CancellationToken
 
@@ -43,6 +42,7 @@ from ._run import (
 )
 from ._runner import Runner
 from ._task import Task
+from ._tooling import INHERIT_TOOLS, ToolConfig
 
 
 @dataclass(slots=True)
@@ -72,8 +72,12 @@ class AgentDescriptor:
     schema: type[BaseModel] | OutputSchema[Any] | None = None
     """Structured-output schema forwarded to the model."""
 
-    tools: Tools | None = None
-    """Canonical tool configuration visible to the model and later phases."""
+    tools: ToolConfig = INHERIT_TOOLS
+    """Tool visibility policy for this agent.
+
+    When omitted, a future child agent may inherit tools from its parent.
+    ``None`` means "expose no tools explicitly".
+    """
 
     skills: tuple[object, ...] | None = None
     """Skills associated with the agent in later phases."""

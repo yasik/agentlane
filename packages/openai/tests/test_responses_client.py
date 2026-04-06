@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from agentlane_openai import ResponsesClient, ResponsesFactory
 from openai.types.responses import Response as OpenAIResponse
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_output_text import ResponseOutputText
 from openai.types.responses.response_usage import (
@@ -61,6 +62,32 @@ def _make_response(content: str) -> MagicMock:
                     annotations=[],
                 )
             ],
+        )
+    ]
+    response.usage = ResponseUsage(
+        input_tokens=10,
+        output_tokens=5,
+        total_tokens=15,
+        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+    )
+    response.status = "completed"
+    response.model_dump.return_value = {}
+    return response
+
+
+def _make_tool_call_response() -> MagicMock:
+    """Create one mocked Responses API tool-call response."""
+    response = MagicMock(spec=OpenAIResponse)
+    response.id = "resp_tool_123"
+    response.model = "gpt-4o"
+    response.created_at = 1234567890.0
+    response.output = [
+        ResponseFunctionToolCall(
+            arguments='{"text":"hello"}',
+            call_id="call_1",
+            name="echo",
+            type="function_call",
         )
     ]
     response.usage = ResponseUsage(
@@ -147,3 +174,35 @@ def test_responses_factory_forwards_default_model_args() -> None:
     assert await_kwargs["temperature"] == 0.2
     assert await_kwargs["prompt_cache_retention"] == "24h"
     assert await_kwargs["text"]["verbosity"] == "low"
+
+
+def test_responses_client_returns_raw_tool_calls_without_executing_them() -> None:
+    """Provider clients should return raw tool-call responses unchanged."""
+    client = ResponsesClient(
+        Config(
+            api_key="test-key",
+            model="gpt-4o",
+            enforce_structured_output=True,
+        )
+    )
+    tool: NativeTool[EchoArgs, str] = NativeTool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=_echo_handler,
+    )
+    create_mock = AsyncMock(return_value=_make_tool_call_response())
+    openai_client = cast(Any, client)._openai_client
+    openai_client.responses.create = create_mock
+
+    response = asyncio.run(
+        client.get_response(
+            messages=[{"role": "user", "content": "hello"}],
+            schema=StructuredResponse,
+            tools=Tools(tools=[tool]),
+        )
+    )
+
+    assert response.choices[0].finish_reason == "tool_calls"
+    assert response.choices[0].message.tool_calls is not None
+    assert len(cast(list[object], response.choices[0].message.tool_calls)) == 1

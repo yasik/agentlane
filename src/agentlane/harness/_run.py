@@ -64,6 +64,7 @@ def copy_run_state(run_state: RunState | None) -> RunState | None:
     """Return an isolated copy of one run state, or ``None`` passthrough."""
     if run_state is None:
         return None
+
     return RunState(
         original_input=copy_original_input(run_state.original_input),
         continuation_history=[
@@ -82,6 +83,7 @@ def copy_original_input(original_input: str | list[object]) -> str | list[object
     """
     if isinstance(original_input, str):
         return original_input
+
     return [copy_item(item) for item in original_input]
 
 
@@ -93,4 +95,6 @@ def copy_item(item: object) -> object:
     """
     if isinstance(item, list):
         return list(cast(list[object], item))
+    if isinstance(item, dict):
+        return dict(cast(dict[str, object], item))
     return item

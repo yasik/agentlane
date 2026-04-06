@@ -1,7 +1,7 @@
 # Harness Architecture v1
 
 Date: 2026-04-05
-Status: Phase 4 baseline
+Status: Phase 5 implementation ready for review
 
 ## Goal
 
@@ -93,13 +93,28 @@ public harness boundary around runs instead of model messages:
 9. `RunnerHooks.on_agent_start` and `RunnerHooks.on_agent_end` now observe run-level values rather than message-history payloads.
 10. `PromptSpec` remains the developer-facing typed prompt input for both instructions and user-side input items, but only the runner resolves it into model messages.
 11. `Runner` accumulates raw `ModelResponse` values across turns without wrapping them in new harness-specific response models.
-12. Tool-calling responses still fail fast with `ModelBehaviorError` until Phase 5 adds tool execution.
+12. Tool-calling responses remain a runner concern and no longer leak into the public harness boundary.
 13. Runner-level retries are optional and reuse `agentlane.models.retry_on_errors`.
+
+## Phase 5 Additions
+
+Phase 5 adds runner-owned tool execution without expanding the public run-state
+surface:
+
+1. `Runner` now executes tool calls returned in canonical `ModelResponse` values instead of failing fast.
+2. Raw assistant tool-call responses are appended to `RunState.continuation_history` before tool execution so follow-up model turns see the original function-call message.
+3. Tool results are formatted through the shared `agentlane.models.ToolExecutor` and appended to `RunState.continuation_history` as canonical message dicts.
+4. `RunnerHooks.on_tool_call_start` and `RunnerHooks.on_tool_call_end` now observe real tool execution rather than reserved future hook points.
+5. `AgentDescriptor.tools` now uses an inheritance-aware `ToolConfig`:
+   - omitted tools inherit from the parent tool set,
+   - explicit `Tools(...)` overrides the parent, and
+   - explicit `None` disables tools for that agent.
+6. The runner now also owns per-tool visibility limits and maximum tool round-trip limits based on accumulated run responses.
+7. Provider adapters are thin request/response clients: they forward tool definitions to the model and return raw tool-call responses, but they do not execute tools or run their own tool loop.
 
 ## Current Non-Goals
 
-1. No tool loop implementation yet
-2. No handoff implementation yet
-3. No memory persistence semantics yet
-4. No provider-specific harness abstractions beyond the existing `agentlane.models` aliases
-5. No event-log, approval-state, or resumable interruption envelope until a later phase needs them
+1. No handoff implementation yet
+2. No memory persistence semantics yet
+3. No provider-specific harness abstractions beyond the existing `agentlane.models` aliases
+4. No event-log, approval-state, or resumable interruption envelope until a later phase needs them

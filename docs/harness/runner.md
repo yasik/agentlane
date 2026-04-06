@@ -1,21 +1,23 @@
 # Harness Runner
 
 Date: 2026-04-05
-Status: Phase 4 baseline
+Status: Phase 5 implementation ready for review
 
 ## What The Default Runner Owns
 
 The default harness `Runner` is a reusable stateless service object.
 
-For Phase 4 it owns the minimal generic loop needed to execute one terminal model turn:
+For Phase 5 it owns the generic loop needed to execute direct answers and tool turns:
 
 1. build the next model request from `instructions + original_input + continuation_history`,
 2. call the agent's configured `agentlane.models.Model`,
 3. emit lifecycle hooks around the agent run and each LLM attempt,
 4. accumulate the raw `ModelResponse` onto `RunState.responses`,
-5. interpret the response as a direct terminal answer for the current phase,
-6. append the raw `ModelResponse` to `RunState.continuation_history`, and
-7. return a minimal `RunResult`.
+5. append the raw `ModelResponse` to `RunState.continuation_history`,
+6. execute tool calls when the model returns them,
+7. append the resulting tool messages to `RunState.continuation_history`,
+8. continue the loop for the next model turn, and
+9. return a minimal `RunResult` once a terminal assistant answer is produced.
 
 The runner is where model-facing normalization happens. The agent boundary is
 run-oriented, not `MessageDict`-oriented.
@@ -41,8 +43,8 @@ Phase 4 also preserves the broader native call surface exposed by
 3. `agent.tools`
 
 There is only one canonical tool configuration on the agent: `Tools`. The
-runner uses that same value for model visibility now, and later phases will
-reuse it for harness tool-loop behavior.
+runner uses that same value both for model visibility and for actual harness
+tool execution.
 
 ## Run Boundary
 
@@ -76,7 +78,9 @@ For a successful run, the default hook order is:
 2. `on_llm_start`
 3. model call
 4. `on_llm_end`
-5. `on_agent_end`
+5. zero or more `on_tool_call_start` / `on_tool_call_end` pairs
+6. repeat steps 2-5 for additional model turns if tool calls were executed
+7. `on_agent_end`
 
 If a retryable model failure occurs, the runner repeats the `on_llm_start` -> model call
 sequence for the next attempt. The agent-level hooks still wrap the overall run once.
@@ -101,10 +105,12 @@ That result is intentionally minimal:
 2. `responses` is the accumulated list of raw `ModelResponse` objects
 3. `turn_count` is the completed model-turn count for the run
 
-## Phase Boundary
+## Tool Boundary
 
-Phase 4 stops before tool execution and handoffs.
+Phase 5 now owns tool execution, but handoffs are still deferred.
 
-1. If the model returns tool calls, the runner raises `ModelBehaviorError`.
-2. `on_tool_call_start` and `on_tool_call_end` remain reserved hook points for Phase 5.
-3. Sub-agent delegation and handoffs remain out of scope here.
+1. Tool calls returned by the model are executed by the harness runner via the shared `ToolExecutor`.
+2. The runner appends both the raw assistant tool-call response and the formatted tool-result messages back into continuation history before the next LLM turn.
+3. The runner also owns later-turn tool visibility by applying per-tool call limits and maximum tool round-trip limits from accumulated `RunState.responses`.
+4. Provider clients stay thin: they accept tool definitions in the request and return raw tool-call responses, but they do not execute tools or run their own tool loop.
+5. Sub-agent delegation and handoffs remain out of scope here.

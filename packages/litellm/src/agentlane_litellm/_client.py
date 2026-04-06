@@ -20,7 +20,6 @@ from agentlane.models import (
     OutputSchema,
     RetryMetrics,
     ToolCall,
-    ToolExecutor,
     Tools,
     has_escape_sequence_explosion,
     is_retryable_by_status_code,
@@ -164,7 +163,6 @@ class Client(Model[TResponseType]):
         self._rate_limiter = config.rate_limiter
         self._max_retries = config.max_retries
         self._schema_validation_retries = config.schema_validation_retries
-        self._tool_executor = ToolExecutor(tracing=config.tracing)
         # Common parameters for both clients
         # Note: max_retries/num_retries=0 disables litellm's internal retry.
         # We handle retries ourselves via the retry_on_errors decorator.
@@ -192,11 +190,8 @@ class Client(Model[TResponseType]):
         **_kwargs: Any,
     ) -> TResponseType:
         """Asynchronously call the LLM with cancellation, tooling, and schema support."""
-
         conversation: list[MessageDict] = [*messages]
         schema_retry_count = 0
-        tool_round_trips = 0
-        tool_call_counts: dict[str, int] = {}
 
         with generation_span(
             model=self._model,
@@ -212,19 +207,6 @@ class Client(Model[TResponseType]):
                     schema=schema,
                     tools=tools,
                 )
-
-                # Enforce per-tool and global tool call limits by removing
-                # exhausted tools from the API payload.  When no tools
-                # remain, strip them entirely so the model is forced to
-                # produce a text response — this is deterministic and does
-                # not depend on the model obeying "limit reached" messages.
-                if tools is not None:
-                    self._enforce_tool_limits(
-                        call_args=call_args,
-                        tools=tools,
-                        tool_call_counts=tool_call_counts,
-                        tool_round_trips=tool_round_trips,
-                    )
 
                 LOGGER.debug(
                     "LLM call started",
@@ -254,34 +236,14 @@ class Client(Model[TResponseType]):
                 assistant_message = self._extract_assistant_message(result)
                 if assistant_message is not None:
                     conversation.append(assistant_message)
-
-                # Handle tool calls before schema validation. When both
-                # schema and tools are provided the LLM may respond with
-                # tool_use blocks first.  Executing them immediately avoids
-                # orphaned tool_use messages (without matching tool_result)
-                # which the API would reject.
-                tool_calls = self._extract_tool_calls(result)
-                if tool_calls and tools is not None:
-                    tool_round_trips += 1
-                    for tc in tool_calls:
-                        name = tc.function.name or ""
-                        tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
-
-                    tool_messages = await self._tool_executor.execute(
-                        tool_calls=tool_calls,
-                        tools=tools,
-                        parent_span=span_generation,
-                        cancellation_token=cancellation_token,
-                    )
-                    conversation.extend(tool_messages)
-
-                    # If tracing is enabled, we update the input to the conversation
-                    if self._tracing.include_data():
-                        span_generation.span_data.input = conversation
-
-                    continue
-
                 model_response = self._to_model_response(result)
+
+                tool_calls = self._extract_tool_calls(result)
+                if tool_calls:
+                    # Tool calls are returned as raw model output.
+                    self._record_tracing_output(span_generation, result)
+                    self._record_usage(span_generation, result, retry_metrics)
+                    return model_response
 
                 # Check for escape sequence explosion (e.g. Gemini combining char runs)
                 if has_escape_sequence_explosion(model_response):
@@ -344,57 +306,6 @@ class Client(Model[TResponseType]):
     def get_is_enforce_structured_output(self) -> bool:
         """Get the enforce_structured_output flag."""
         return self._enforce_structured_output
-
-    def _enforce_tool_limits(
-        self,
-        call_args: dict[str, Any],
-        tools: Tools,
-        tool_call_counts: dict[str, int],
-        tool_round_trips: int,
-    ) -> None:
-        """Remove exhausted tools from *call_args* in place.
-
-        Two layers of enforcement:
-        1. **Per-tool**: if ``tool_call_limits`` is set, each tool whose
-           call count has reached its limit is dropped from the payload.
-        2. **Global**: if ``tool_round_trips`` has reached
-           ``max_tool_round_trips``, all tools are stripped.
-
-        When *all* tools are exhausted (or the global limit fires), the
-        ``tool_choice`` is set to "none", and the ``parallel_tool_calls`` is
-        removed so the model is unable to make further calls.
-        """
-        all_exhausted = False
-
-        if tools.tool_call_limits:
-            active_names = {
-                t.name
-                for t in tools.tools
-                if t.name not in tools.tool_call_limits
-                or tool_call_counts.get(t.name, 0) < tools.tool_call_limits[t.name]
-            }
-            if not active_names:
-                all_exhausted = True
-            elif len(active_names) < len(tools.tools):
-                call_args["tools"] = [
-                    t
-                    for t in call_args.get("tools", [])
-                    if t.get("function", {}).get("name") in active_names
-                ]
-
-        if tool_round_trips >= tools.max_tool_round_trips:
-            all_exhausted = True
-
-        if all_exhausted:
-            call_args["tool_choice"] = "none"
-            call_args.pop("parallel_tool_calls", None)
-
-            LOGGER.warning(
-                "Tools exhausted, disabling via tool_choice=none",
-                model=self._model,
-                round_trips=tool_round_trips,
-                tool_counts=tool_call_counts,
-            )
 
     def _build_call_args(
         self,
