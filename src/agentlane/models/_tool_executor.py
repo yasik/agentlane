@@ -89,7 +89,7 @@ class ToolExecutor:
         Raises:
             ModelBehaviorError: If a tool is not registered.
         """
-        available_tools = {tool.name: tool for tool in tools.tools}
+        available_tools = {tool.name: tool for tool in tools.normalized_tools}
         token = cancellation_token or CancellationToken()
         timeout = tools.tool_call_timeout
         max_retries = tools.tool_call_max_retries

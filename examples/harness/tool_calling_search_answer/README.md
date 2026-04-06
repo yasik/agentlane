@@ -3,7 +3,7 @@
 This example shows the smallest useful Phase 5 harness flow:
 
 1. define templated agent instructions,
-2. attach one native `Tool`,
+2. attach one typed Python function as a tool,
 3. send one user message, and
 4. let the harness runner execute the tool loop before returning a final answer.
 
@@ -16,6 +16,11 @@ by `gpt-5.4-mini`.
 The main thing to notice is how little framework code is needed:
 
 ```python
+async def search_help_center(question: str, cancellation_token: CancellationToken) -> str:
+    """Search the Acme help center for the current policy answer."""
+    return MOCK_SEARCH_RESULT
+
+
 descriptor = AgentDescriptor(
     name="Acme Policy Assistant",
     model=ResponsesClient(Config(api_key=api_key, model="gpt-5.4-mini")),
@@ -28,7 +33,7 @@ descriptor = AgentDescriptor(
         },
     ),
     tools=Tools(
-        tools=[search_tool],
+        tools=[search_help_center],
         tool_choice="required",
         tool_call_limits={"search_help_center": 1},
     ),
@@ -42,7 +47,8 @@ result = require_run_result(outcome)
 `tool_choice="required"` guarantees the first model turn calls the search tool.
 `tool_call_limits={"search_help_center": 1}` lets the runner remove that tool on
 the next turn so the model answers from the returned search result instead of
-calling the tool forever.
+calling the tool forever. `Tools(...)` accepts the plain typed function directly,
+so the framework derives the tool name, schema, and description for you.
 
 ## Run
 

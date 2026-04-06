@@ -464,13 +464,13 @@ def _limit_tools(
 
     active_tools = tuple(
         tool
-        for tool in tools.tools
+        for tool in tools.normalized_tools
         if tool.name not in tools.tool_call_limits
         or tool_call_counts.get(tool.name, 0) < tools.tool_call_limits[tool.name]
     )
     if not active_tools:
         return None
-    if len(active_tools) == len(tools.tools):
+    if len(active_tools) == len(tools.normalized_tools):
         return tools
 
     # The runner strips exhausted tools from later requests instead of

@@ -49,6 +49,7 @@ def print_intro() -> None:
     CONSOLE.print(
         Panel.fit(
             "This example uses a real OpenAI response plus one mocked search tool.\n"
+            "The tool is declared as a plain typed Python function.\n"
             "The search result is fake on purpose so the harness tool loop is easy to follow.\n"
             "The assistant's answer is generated live from the model.",
             title="What This Proves",

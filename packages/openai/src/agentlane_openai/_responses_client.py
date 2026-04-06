@@ -679,7 +679,7 @@ class ResponsesClient(Model[TResponseType]):
         # Handle tools
         if tools is not None:
             tools_payload: list[dict[str, Any]] = []
-            for tool in tools.tools:
+            for tool in tools.normalized_tools:
                 tools_payload.append(
                     {
                         "type": "function",

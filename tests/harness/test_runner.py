@@ -514,20 +514,15 @@ def test_runner_executes_tool_calls_and_continues_loop() -> None:
         runner = Runner()
         executed: list[str] = []
 
-        async def echo_handler(
-            args: _EchoArgs,
+        async def echo(
+            text: str,
             cancellation_token: CancellationToken,
         ) -> str:
+            """Echo text."""
             del cancellation_token
-            executed.append(args.text)
-            return f"tool:{args.text}"
+            executed.append(text)
+            return f"tool:{text}"
 
-        tool = Tool(
-            name="echo",
-            description="Echo text",
-            args_model=_EchoArgs,
-            handler=echo_handler,
-        )
         model = _SequenceModel(
             [
                 make_assistant_response(
@@ -548,7 +543,7 @@ def test_runner_executes_tool_calls_and_continues_loop() -> None:
             descriptor=AgentDescriptor(
                 name="ToolRunner",
                 model=model,
-                tools=Tools(tools=[tool]),
+                tools=Tools(tools=[echo]),
             ),
         )
         state = RunState(
@@ -753,7 +748,7 @@ def test_runner_filters_exhausted_tools_on_later_turns() -> None:
         assert result.final_output == "done"
         assert model.call_options[0]["tools"] == tools
         second_turn_tools = cast(Tools, model.call_options[1]["tools"])
-        assert [tool.name for tool in second_turn_tools.tools] == ["lookup"]
+        assert [tool.name for tool in second_turn_tools.normalized_tools] == ["lookup"]
 
     asyncio.run(scenario())
 

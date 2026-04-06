@@ -13,7 +13,6 @@ from _demo_utils import (
     require_run_result,
 )
 from agentlane_openai import ResponsesClient
-from pydantic import BaseModel
 
 from agentlane.harness import Agent, AgentDescriptor, Runner
 from agentlane.messaging import AgentId
@@ -22,7 +21,6 @@ from agentlane.models import (
     OutputSchema,
     PromptSpec,
     PromptTemplate,
-    Tool,
     Tools,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
@@ -44,12 +42,6 @@ class AssistantInstructionValues(TypedDict):
     tone: str
 
 
-class SearchHelpCenterArgs(BaseModel):
-    """Arguments for the mocked search tool."""
-
-    question: str
-
-
 INSTRUCTIONS_TEMPLATE = PromptTemplate[AssistantInstructionValues, str](
     system_template="""
 You are {{ company_name }}'s policy assistant.
@@ -65,11 +57,11 @@ result and keep the answer under 80 words.
 
 
 async def search_help_center(
-    args: SearchHelpCenterArgs,
+    question: str,
     cancellation_token: CancellationToken,
 ) -> str:
-    """Return one mocked help-center result string."""
-    _ = args
+    """Search the Acme help center for the current policy answer."""
+    _ = question
     _ = cancellation_token
     return MOCK_SEARCH_RESULT
 
@@ -81,12 +73,6 @@ def build_descriptor(api_key: str) -> AgentDescriptor:
         "knowledge_source": "help-center",
         "tone": "clear and practical",
     }
-    search_tool = Tool(
-        name="search_help_center",
-        description="Search the Acme help center for the current policy answer.",
-        args_model=SearchHelpCenterArgs,
-        handler=search_help_center,
-    )
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
     return AgentDescriptor(
         name="Acme Policy Assistant",
@@ -100,7 +86,9 @@ def build_descriptor(api_key: str) -> AgentDescriptor:
         # Require one search call so the demo always exercises the tool path.
         # After that first call, the runner removes the tool for the answer turn.
         tools=Tools(
-            tools=[search_tool],
+            # The common path is intentionally lightweight: just pass a typed
+            # Python function and let the framework derive the tool schema.
+            tools=[search_help_center],
             tool_choice="required",
             tool_call_limits={"search_help_center": 1},
         ),
