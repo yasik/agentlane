@@ -29,8 +29,8 @@ type ToolDecorator = Callable[[ToolFunction], "Tool[BaseModel, Any]"]
 """Decorator that turns one typed Python callable into a native Tool."""
 
 
-class Tool[ArgsT: BaseModel, ResultT]:
-    """Framework-native tool primitive used by model clients and the harness."""
+class ToolSpec[ArgsT: BaseModel]:
+    """Declarative tool schema shared by model clients and the harness."""
 
     def __init__(
         self,
@@ -38,25 +38,19 @@ class Tool[ArgsT: BaseModel, ResultT]:
         name: str,
         description: str,
         args_model: type[ArgsT],
-        handler: ToolHandler[ArgsT, ResultT],
-        formatter: ToolFormatter[ResultT] | None = None,
         parameters_schema: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize one callable tool definition.
+        """Initialize one model-visible tool schema.
 
         Args:
             name: Stable tool name exposed to the model.
             description: Human-readable tool description for the model.
             args_model: Pydantic arguments model used for validation.
-            handler: Sync or async callable that executes the tool.
-            formatter: Optional formatter for converting return values to text.
             parameters_schema: Optional explicit parameters schema override.
         """
         self.name = name
         self.description = description
         self._args_model = args_model
-        self._handler = handler
-        self._formatter = formatter
         self._parameters_schema = parameters_schema or ensure_strict_json_schema(
             args_model.model_json_schema()
         )
@@ -130,6 +124,30 @@ class Tool[ArgsT: BaseModel, ResultT]:
     def args_type(self) -> type[ArgsT]:
         """Return the pydantic arguments model type for the tool."""
         return self._args_model
+
+
+class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
+    """Framework-native executable tool primitive."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        description: str,
+        args_model: type[ArgsT],
+        handler: ToolHandler[ArgsT, ResultT],
+        formatter: ToolFormatter[ResultT] | None = None,
+        parameters_schema: dict[str, Any] | None = None,
+    ) -> None:
+        """Initialize one callable tool definition."""
+        super().__init__(
+            name=name,
+            description=description,
+            args_model=args_model,
+            parameters_schema=parameters_schema,
+        )
+        self._handler = handler
+        self._formatter = formatter
 
     async def run(
         self,

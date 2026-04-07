@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from ._output_schema import OutputSchema
 from ._rate_limiter import RateLimiter
-from ._tool import Tool, ToolFunction
+from ._tool import Tool, ToolFunction, ToolSpec
 
 type MessageDict = dict[str, Any]
 """Conversation message payload shared across client interfaces."""
@@ -136,19 +136,20 @@ class Config:
         return trace_settings
 
 
-type ToolSource = Tool[Any, Any] | ToolFunction
+type ToolSource = ToolSpec[Any] | ToolFunction
 """Accepted tool input at the developer boundary.
 
-`Tools(...)` accepts either an explicit low-level `Tool` or a normal typed
-Python callable. Plain callables are normalized into native `Tool` instances
-once so the rest of the framework only works with the canonical primitive.
+`Tools(...)` accepts either a declarative `ToolSpec` (including executable
+`Tool` values) or a normal typed Python callable. Plain callables are
+normalized into native `Tool` instances once so the rest of the framework can
+work with one canonical schema surface.
 """
 
 
-def _normalize_tool(tool: ToolSource) -> Tool[Any, Any]:
-    """Return one canonical native tool from the accepted developer input."""
-    if isinstance(tool, Tool):
-        return cast(Tool[Any, Any], tool)
+def _normalize_tool(tool: ToolSource) -> ToolSpec[Any]:
+    """Return one canonical tool schema from the accepted developer input."""
+    if isinstance(tool, ToolSpec):
+        return cast(ToolSpec[Any], tool)
     return Tool.from_function(tool)
 
 
@@ -159,10 +160,10 @@ class Tools:
     tools: Sequence[ToolSource]
     """Collection of available tools that can be invoked by the model.
 
-    Each item may be either a native `Tool` or a typed Python callable. Plain
-    callables are converted into `Tool.from_function(...)` during construction
-    so application code can stay lightweight without widening the internal
-    execution contract.
+    Each item may be either a declarative `ToolSpec` or a typed Python
+    callable. Plain callables are converted into `Tool.from_function(...)`
+    during construction so application code can stay lightweight without
+    widening the internal execution contract.
     """
 
     tool_choice: Literal["auto", "required", "none"] = "auto"
@@ -205,9 +206,18 @@ class Tools:
         object.__setattr__(self, "tools", normalized_tools)
 
     @property
-    def normalized_tools(self) -> tuple[Tool[Any, Any], ...]:
-        """Return the canonical native tools after construction-time normalization."""
-        return cast(tuple[Tool[Any, Any], ...], self.tools)
+    def normalized_tools(self) -> tuple[ToolSpec[Any], ...]:
+        """Return the canonical tool schemas after construction-time normalization."""
+        return cast(tuple[ToolSpec[Any], ...], self.tools)
+
+    @property
+    def executable_tools(self) -> tuple[Tool[Any, Any], ...]:
+        """Return only executable native tools from the normalized tool set."""
+        executable_tools: list[Tool[Any, Any]] = []
+        for tool in self.normalized_tools:
+            if isinstance(tool, Tool):
+                executable_tools.append(cast(Tool[Any, Any], tool))
+        return tuple(executable_tools)
 
     def as_args(self) -> dict[str, Any]:
         """Render the configuration into the kwargs expected by LiteLLM."""

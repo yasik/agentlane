@@ -19,7 +19,7 @@ import asyncio
 from asyncio import Future, get_running_loop
 from collections import deque
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, Self
 
 from pydantic import BaseModel
 
@@ -28,9 +28,17 @@ from agentlane.models import (
     ModelResponse,
     OutputSchema,
     PromptSpec,
+    ToolSpec,
 )
 from agentlane.runtime import CancellationToken
 
+from ._handoff import (
+    DelegatedTaskInput,
+    agent_tool_description,
+    default_agent_tool_instructions,
+    handoff_description,
+    normalize_delegation_tool_name,
+)
 from ._hooks import RunnerHooks
 from ._run import (
     RunInput,
@@ -40,9 +48,40 @@ from ._run import (
     copy_original_input,
     copy_run_state,
 )
-from ._runner import Runner
 from ._task import Task
 from ._tooling import INHERIT_TOOLS, ToolConfig
+
+
+class _EmptyAgentToolArgs(BaseModel):
+    """Default args model for predefined parameterless agent tools."""
+
+
+@dataclass(slots=True)
+class DefaultHandoff:
+    """Configuration for the generic fresh-agent handoff tool."""
+
+    name: str = "handoff"
+    """Model-facing tool name for the generic transfer path."""
+
+    description: str = (
+        "Transfer the conversation to a fresh helper agent and continue there."
+    )
+    """Model-facing tool description for the generic transfer path."""
+
+    instructions: str | PromptSpec[Any] | None = None
+    """Instructions used by the fresh delegated handoff agent."""
+
+    model: Model[ModelResponse] | None = None
+    """Optional model override for the delegated handoff agent."""
+
+    model_args: dict[str, Any] | None = None
+    """Optional model args override for the delegated handoff agent."""
+
+    schema: type[BaseModel] | OutputSchema[Any] | None = None
+    """Optional structured output schema for the delegated handoff agent."""
+
+    tools: ToolConfig = INHERIT_TOOLS
+    """Tool visibility for the delegated handoff agent."""
 
 
 @dataclass(slots=True)
@@ -87,6 +126,133 @@ class AgentDescriptor:
 
     memory: object | None = None
     """Opaque memory reference reserved for later phases."""
+
+    handoffs: tuple[Self, ...] | None = None
+    """Predefined delegated child agents exposed as model-visible tools."""
+
+    default_handoff: DefaultHandoff | None = None
+    """Optional generic handoff configuration for fresh spawned sub-agents."""
+
+    def as_tool(
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        args_model: type[BaseModel] | None = None,
+    ) -> ToolSpec[Any]:
+        """Expose this agent descriptor as declarative agent-as-tool metadata.
+
+        Predefined agent tools no longer reserve a synthetic ``task`` field.
+        The delegated child receives exactly the validated payload described by
+        ``args_model``. When no args model is supplied, the tool is treated as
+        parameterless.
+        """
+        return AgentTool(
+            descriptor=self,
+            name=name,
+            description=description,
+            args_model=args_model or _EmptyAgentToolArgs,
+        )
+
+
+class AgentTool(ToolSpec[Any]):
+    """Declarative tool schema that routes one call to another agent run."""
+
+    def __init__(
+        self,
+        *,
+        descriptor: AgentDescriptor,
+        name: str | None = None,
+        description: str | None = None,
+        args_model: type[BaseModel],
+    ) -> None:
+        tool_name = name or normalize_delegation_tool_name(descriptor.name)
+        tool_description = description or agent_tool_description(
+            descriptor.name,
+            descriptor.description,
+        )
+        super().__init__(
+            name=tool_name,
+            description=tool_description,
+            args_model=args_model,
+        )
+        self.descriptor = descriptor
+
+
+class DefaultAgentTool(ToolSpec[DelegatedTaskInput]):
+    """Declarative tool schema for a generic spawned helper agent."""
+
+    def __init__(
+        self,
+        *,
+        name: str = "delegate",
+        description: str = (
+            "Delegate a focused task to a fresh helper agent and continue with the result."
+        ),
+        instructions: str | None = None,
+        model: Model[ModelResponse] | None = None,
+        model_args: dict[str, Any] | None = None,
+        output_schema: type[BaseModel] | OutputSchema[Any] | None = None,
+        tools: ToolConfig = INHERIT_TOOLS,
+    ) -> None:
+        super().__init__(
+            name=name,
+            description=description,
+            args_model=DelegatedTaskInput,
+        )
+        self.instructions = instructions
+        self.model = model
+        self.model_args = model_args
+        self.output_schema = output_schema
+        self.tools = tools
+
+    def resolved_instructions(self, task: str | None) -> str:
+        """Return instructions for one spawned helper invocation."""
+        if self.instructions is not None:
+            if task:
+                return f"{self.instructions}\n\nDelegated task: {task}"
+            return self.instructions
+        return default_agent_tool_instructions(task)
+
+
+class HandoffTool(ToolSpec[DelegatedTaskInput]):
+    """Declarative tool schema for a predefined first-class handoff target."""
+
+    def __init__(self, *, descriptor: AgentDescriptor) -> None:
+        super().__init__(
+            name=normalize_delegation_tool_name(descriptor.name),
+            description=handoff_description(
+                descriptor.name,
+                descriptor.description,
+            ),
+            args_model=DelegatedTaskInput,
+        )
+        self.descriptor = descriptor
+
+
+class DefaultHandoffTool(ToolSpec[DelegatedTaskInput]):
+    """Declarative tool schema for the generic fresh-agent handoff path."""
+
+    def __init__(self, *, config: DefaultHandoff) -> None:
+        super().__init__(
+            name=config.name,
+            description=config.description,
+            args_model=DelegatedTaskInput,
+        )
+        self.config = config
+
+
+class LifecycleRunner(Protocol):
+    """Structural runner protocol used by the lifecycle queue."""
+
+    async def run(
+        self,
+        agent: Task,
+        state: RunState,
+        *,
+        hooks: RunnerHooks | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunResult: ...
 
 
 @dataclass(slots=True)
@@ -157,7 +323,7 @@ class AgentLifecycle:
         self,
         *,
         agent: Task,
-        runner: Runner,
+        runner: LifecycleRunner,
         hooks: RunnerHooks | None,
         run_input: RunInput,
         cancellation_token: CancellationToken | None = None,
@@ -198,7 +364,7 @@ class AgentLifecycle:
         self,
         *,
         agent: Task,
-        runner: Runner,
+        runner: LifecycleRunner,
         hooks: RunnerHooks | None,
     ) -> None:
         """Drain queued turns sequentially until the queue is empty.
@@ -246,8 +412,11 @@ class AgentLifecycle:
                     _set_future_exception(active_input.future, exc)
                 else:
                     # Commit the working state only after success, ensuring
-                    # the baseline always reflects a completed turn.
-                    self._run_state = working_state
+                    # the baseline always reflects a completed turn. Handoff
+                    # may complete through a delegated child agent, so the
+                    # runner can return a different final run state than the
+                    # local working copy that started the turn.
+                    self._run_state = copy_run_state(result.run_state) or working_state
                     _set_future_result(active_input.future, result)
                 finally:
                     active_input = None

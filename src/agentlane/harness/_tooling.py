@@ -1,9 +1,9 @@
 """Tooling helpers for the harness."""
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
-from agentlane.models import Tools
+from agentlane.models import Tools, ToolSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,3 +33,30 @@ def resolve_tools(
     if tools is INHERIT_TOOLS:
         return parent_tools
     return cast(Tools | None, tools)
+
+
+def merge_tools(
+    primary: Tools | None,
+    extra: tuple[ToolSpec[Any], ...],
+) -> Tools | None:
+    """Merge instance-bound extra tools into one base `Tools` config.
+
+    The returned `Tools` preserves all scheduling and loop-control settings from
+    the base configuration. If the base configuration is absent, the extra tools
+    are exposed with the default `Tools(...)` settings.
+    """
+    if not extra:
+        return primary
+    if primary is None:
+        return Tools(tools=extra)
+
+    merged_tools = tuple(primary.normalized_tools) + extra
+    return Tools(
+        tools=merged_tools,
+        tool_choice=primary.tool_choice,
+        parallel_tool_calls=primary.parallel_tool_calls,
+        tool_call_timeout=primary.tool_call_timeout,
+        tool_call_max_retries=primary.tool_call_max_retries,
+        tool_call_limits=primary.tool_call_limits,
+        max_tool_round_trips=primary.max_tool_round_trips,
+    )

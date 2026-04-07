@@ -1,7 +1,7 @@
 # Harness Agents
 
 Date: 2026-04-05
-Status: Phase 5 implementation ready for review
+Status: Phase 6 implementation ready for review
 
 ## What The Default Agent Owns
 
@@ -11,9 +11,10 @@ The default harness `Agent` builds on `Task` and owns:
 2. the canonical model client used by the default runner,
 3. low-level model call settings via `model_args` and `schema`,
 4. canonical `Tools` configuration shared by model calls and harness tool execution,
-5. persisted run state for multi-turn continuation,
-6. queued inbound run inputs, and
-7. delegation of each turn to a stateless `Runner`.
+5. predefined and default handoff configuration,
+6. persisted run state for multi-turn continuation,
+7. queued inbound run inputs, and
+8. delegation of each turn to a stateless `Runner`.
 
 The static portion of that configuration is grouped into `AgentDescriptor` and
 passed to the `Agent` constructor as one value instead of duplicating the same
@@ -117,7 +118,7 @@ The agent exposes `agent.run_state` as a snapshot suitable for persistence and l
 
 The Phase 3 lifecycle semantics remain unchanged.
 
-Phase 4 and Phase 5 keep the following boundaries explicit:
+Phase 4 through Phase 6 keep the following boundaries explicit:
 
 1. `AgentDescriptor` is the canonical static agent configuration passed into `Agent`.
 2. `agent.model`, `agent.model_args`, `agent.schema`, `agent.tools`, and `agent.instructions` are projections from that descriptor.
@@ -127,4 +128,13 @@ Phase 4 and Phase 5 keep the following boundaries explicit:
    - explicit `Tools(...)` overrides the parent, and
    - explicit `None` disables tools for that agent.
 5. Tool execution behavior now lives in the runner, not in the lifecycle or the public agent boundary.
-6. Handoffs and sub-agent delegation are still not implemented here, so agents do not expose `as_tool` yet.
+6. `AgentDescriptor.as_tool(args_model=...)` exposes an agent descriptor as declarative agent-as-tool metadata that can be placed directly into `Tools(...)`. If `args_model` is omitted, the predefined sub-agent tool is parameterless.
+7. `Agent.as_tool(...)` is the instance convenience wrapper over the same descriptor-level metadata.
+8. `AgentDescriptor.handoffs` defines first-class transfer targets that are also exposed to the model as tool metadata.
+9. `AgentDescriptor.default_handoff` defines one generic `handoff` tool that spawns a fresh transfer target on demand.
+10. `DefaultAgentTool` defines one generic spawned helper-agent tool for arbitrary delegated tasks.
+11. Delegated agent tools and handoffs both route through runtime `send_message`, but the runner applies different semantics:
+    - predefined agent-as-tool gets exactly its validated args-model payload and keeps full prompt isolation,
+    - default agent-as-tool gets a default helper prompt plus the delegated task as user input,
+    - handoff transfers the run to the next agent with full conversation history, including the triggering handoff turn.
+12. Parent tool inheritance remains scoped to the parent's explicit `Tools` configuration. Handoff visibility is rebuilt per concrete agent instance and is not inherited as executable tool state.

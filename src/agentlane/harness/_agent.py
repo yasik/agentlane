@@ -11,22 +11,29 @@ from agentlane.models import (
     OutputSchema,
     PromptSpec,
     Tools,
+    ToolSpec,
 )
 from agentlane.runtime import CancellationToken, Engine, on_message
 
 from ._hooks import RunnerHooks
-from ._lifecycle import AgentDescriptor, AgentLifecycle
+from ._lifecycle import (
+    AgentDescriptor,
+    AgentLifecycle,
+    DefaultHandoff,
+    DefaultHandoffTool,
+    HandoffTool,
+)
 from ._run import RunInput, RunResult, RunState
 from ._runner import Runner
 from ._task import Task
-from ._tooling import resolve_tools
+from ._tooling import merge_tools, resolve_tools
 
 
 class Agent(Task):
     """Default harness agent primitive.
 
     This phase owns resumable run lifecycle, queued run inputs, and the default
-    runner entry. Tool execution and handoffs land in later phases.
+    runner entry. The runner owns tool, sub-agent, and handoff execution.
     """
 
     def __init__(
@@ -97,11 +104,16 @@ class Agent(Task):
 
     @property
     def tools(self) -> Tools | None:
-        """Return the configured tools for this agent."""
-        return resolve_tools(
-            self._descriptor.tools,
-            parent_tools=self._parent_tools,
-        )
+        """Return the configured tools for this agent.
+
+        The model-visible tool set is the descriptor's explicit tool catalog
+        plus declarative handoff schemas. Handoffs are exposed here because
+        the model should discover them exactly like tools, but the runner
+        still intercepts them with transfer semantics instead of normal tool
+        execution.
+        """
+        base_tools = self.base_tools
+        return merge_tools(base_tools, self._handoff_tools())
 
     @property
     def skills(self) -> tuple[object, ...] | None:
@@ -117,6 +129,30 @@ class Agent(Task):
     def memory(self) -> object | None:
         """Return the opaque memory reference for this agent."""
         return self._descriptor.memory
+
+    @property
+    def handoffs(self) -> tuple[AgentDescriptor, ...] | None:
+        """Return predefined delegated child agent descriptors."""
+        return self._descriptor.handoffs
+
+    @property
+    def default_handoff(self) -> DefaultHandoff | None:
+        """Return the optional generic default handoff configuration."""
+        return self._descriptor.default_handoff
+
+    def as_tool(
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        args_model: type[BaseModel] | None = None,
+    ) -> ToolSpec[Any]:
+        """Expose this agent as declarative agent-as-tool metadata."""
+        return self._descriptor.as_tool(
+            name=name,
+            description=description,
+            args_model=args_model,
+        )
 
     @property
     def is_running(self) -> bool:
@@ -147,6 +183,28 @@ class Agent(Task):
             run_input=run_input,
             cancellation_token=cancellation_token,
         )
+
+    @property
+    def base_tools(self) -> Tools | None:
+        """Resolve the descriptor's explicit tool catalog before handoff merge."""
+        return resolve_tools(
+            self._descriptor.tools,
+            parent_tools=self._parent_tools,
+        )
+
+    def _handoff_tools(self) -> tuple[ToolSpec[Any], ...]:
+        """Return declarative handoff schemas visible to the model."""
+        handoff_tools: list[ToolSpec[Any]] = []
+
+        for descriptor in self._descriptor.handoffs or ():
+            handoff_tools.append(HandoffTool(descriptor=descriptor))
+
+        if self._descriptor.default_handoff is not None:
+            handoff_tools.append(
+                DefaultHandoffTool(config=self._descriptor.default_handoff)
+            )
+
+        return tuple(handoff_tools)
 
     @on_message
     async def handle_str(self, payload: str, context: MessageContext) -> object:

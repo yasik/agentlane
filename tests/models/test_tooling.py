@@ -14,6 +14,7 @@ from agentlane.models import (
     ToolCall,
     ToolExecutor,
     Tools,
+    ToolSpec,
     as_tool,
 )
 from agentlane.runtime import CancellationToken
@@ -205,6 +206,29 @@ def test_tools_accept_plain_typed_callables() -> None:
             "function": normalized_tool.schema,
         }
     ]
+
+
+def test_tools_keep_declarative_tool_specs_while_filtering_executable_tools() -> None:
+    """Tools should support schema-only tool definitions cleanly."""
+    tool_spec = ToolSpec(
+        name="delegate_policy",
+        description="Delegate one policy lookup.",
+        args_model=EchoArgs,
+    )
+    executable_tool = Tool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=_echo_handler,
+    )
+
+    tools = Tools(tools=[tool_spec, executable_tool])
+
+    assert [tool.name for tool in tools.normalized_tools] == [
+        "delegate_policy",
+        "echo",
+    ]
+    assert [tool.name for tool in tools.executable_tools] == ["echo"]
 
 
 def test_tool_executor_returns_chat_completion_tool_message() -> None:

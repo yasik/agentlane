@@ -1,7 +1,7 @@
 # Harness Architecture v1
 
 Date: 2026-04-05
-Status: Phase 5 implementation ready for review
+Status: Phase 6 implementation ready for review
 
 ## Goal
 
@@ -35,7 +35,7 @@ Root package:
 5. `src/agentlane/harness/_lifecycle.py`
    Reserved for agent-loop state transitions and queueing behavior.
 6. `src/agentlane/harness/_handoff.py`
-   Reserved for delegation and sub-agent handoffs.
+   Defines delegation payloads and runtime-routing helpers.
 7. `src/agentlane/harness/_tooling.py`
    Reserved for tool visibility and tool-loop behavior.
 8. `src/agentlane/harness/_skills.py`
@@ -89,7 +89,7 @@ public harness boundary around runs instead of model messages:
 5. Recovery now uses `RunState` instead of persisted `message_history`.
 6. `Runner` accepts `RunState`, builds the concrete `list[MessageDict]` request internally, and returns `RunResult`.
 7. `RunState` is intentionally minimal for now: `original_input`, `continuation_history`, `responses`, and `turn_count`.
-8. `RunResult` is intentionally minimal for now: `final_output`, `responses`, and `turn_count`.
+8. `RunResult` is intentionally minimal for now: `final_output`, `responses`, `turn_count`, and `run_state`.
 9. `RunnerHooks.on_agent_start` and `RunnerHooks.on_agent_end` now observe run-level values rather than message-history payloads.
 10. `PromptSpec` remains the developer-facing typed prompt input for both instructions and user-side input items, but only the runner resolves it into model messages.
 11. `Runner` accumulates raw `ModelResponse` values across turns without wrapping them in new harness-specific response models.
@@ -112,9 +112,27 @@ surface:
 6. The runner now also owns per-tool visibility limits and maximum tool round-trip limits based on accumulated run responses.
 7. Provider adapters are thin request/response clients: they forward tool definitions to the model and return raw tool-call responses, but they do not execute tools or run their own tool loop.
 
+## Phase 6 Additions
+
+Phase 6 adds delegated sub-agent execution with two distinct invocation
+contracts:
+
+1. `AgentDescriptor.as_tool(args_model=...)` exposes predefined agent-as-tool metadata that can live in the normal `Tools(...)` catalog.
+2. `DefaultAgentTool` adds the generic spawned-helper agent-as-tool path for arbitrary delegated tasks.
+3. `AgentDescriptor.handoffs` and `AgentDescriptor.default_handoff` define first-class transfer targets that are also exposed to the model as tool metadata.
+4. Agent-as-tool and handoff both route through runtime `send_message`, but the runner applies different semantics:
+   - agent-as-tool gets only structured input and returns a string tool result,
+   - handoff transfers the full conversation history to the next agent and ends the caller.
+5. Predefined agent-as-tool calls preserve full prompt isolation and use only their declared args model. There is no reserved universal `task` field on this path.
+6. Default spawned agent-as-tool calls inject a default helper prompt with the delegated task description and also pass the task as user input.
+7. Handoff preserves the trigger path by transferring the parent assistant handoff-call turn plus a synthetic transfer acknowledgement into downstream history.
+8. Default handoff no longer injects a new system prompt. The downstream agent uses only its own configured `instructions` when present.
+9. Delegated child agents use fresh runtime `AgentId` values per invocation for both subroutine and transfer flows.
+10. `RunResult.run_state` now carries the final delegated run state so lifecycle persistence can continue from the transferred child after handoff.
+11. Explicit parent-tool inheritance remains scoped to the parent's explicit `Tools` value; handoff visibility is added at the model boundary, not inherited as executable tool state.
+
 ## Current Non-Goals
 
-1. No handoff implementation yet
-2. No memory persistence semantics yet
-3. No provider-specific harness abstractions beyond the existing `agentlane.models` aliases
-4. No event-log, approval-state, or resumable interruption envelope until a later phase needs them
+1. No memory persistence semantics yet
+2. No provider-specific harness abstractions beyond the existing `agentlane.models` aliases
+3. No event-log, approval-state, or resumable interruption envelope until a later phase needs them

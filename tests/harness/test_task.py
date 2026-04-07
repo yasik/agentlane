@@ -5,6 +5,7 @@ import agentlane.harness.memory as harness_memory
 from agentlane.harness import (
     Agent,
     AgentDescriptor,
+    DefaultHandoff,
     Runner,
     RunnerHooks,
     RunResult,
@@ -100,6 +101,7 @@ def test_harness_public_exports_are_defined() -> None:
     assert Task is not None
     assert Agent is not None
     assert AgentDescriptor is not None
+    assert DefaultHandoff is not None
     assert RunState is not None
     assert RunResult is not None
     assert Runner is not None

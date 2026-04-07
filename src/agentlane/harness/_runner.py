@@ -13,12 +13,13 @@ stays responsible for model-facing normalization, tool execution, and loop
 control within one run.
 """
 
+import asyncio
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from agentlane.models import (
     MessageDict,
@@ -28,15 +29,33 @@ from agentlane.models import (
     OutputSchema,
     PromptSpec,
     RunErrorDetails,
+    Tool,
     ToolCall,
     ToolExecutor,
     Tools,
+    ToolSpec,
     retry_on_errors,
 )
-from agentlane.runtime import CancellationToken
+from agentlane.runtime import CancellationToken, RuntimeEngine
 
+from ._handoff import (
+    DelegatedTaskInput,
+    default_handoff_task_message,
+    default_handoff_tool_result,
+    delegated_agent_id,
+    delegated_agent_type,
+    delegated_result_text,
+    require_handoff_result,
+)
 from ._hooks import RunnerHooks
-from ._run import RunResult, RunState
+from ._lifecycle import (
+    AgentDescriptor,
+    AgentTool,
+    DefaultAgentTool,
+    DefaultHandoffTool,
+    HandoffTool,
+)
+from ._run import RunResult, RunState, copy_original_input, copy_run_state
 from ._task import Task
 
 
@@ -59,6 +78,9 @@ class RunnerTask(Protocol):
 
     @property
     def tools(self) -> Tools | None: ...
+
+    @property
+    def base_tools(self) -> Tools | None: ...
 
     @property
     def instructions(self) -> str | PromptSpec[Any] | None: ...
@@ -152,15 +174,31 @@ class Runner:
                 )
 
                 state.responses.append(response)
-                state.continuation_history.append(response)
-
-                # The raw assistant turn is committed before tool execution
-                # so the next request includes the function-call message that
-                # produced the tool results.
                 tool_calls = _extract_tool_calls(response)
                 if tool_calls:
+                    handoff_call = _extract_handoff_call(
+                        tools=visible_tools,
+                        tool_calls=tool_calls,
+                    )
+                    if handoff_call is not None:
+                        return await self._execute_handoff(
+                            agent=agent,
+                            runner_task=runner_task,
+                            state=state,
+                            response=response,
+                            handoff_call=handoff_call,
+                            hooks=resolved_hooks,
+                            cancellation_token=cancellation_token,
+                        )
+
+                    # Tool and sub-agent calls continue the same loop, so the
+                    # raw assistant turn is committed before execution and fed
+                    # back into the next model request together with the tool
+                    # result messages.
+                    state.continuation_history.append(response)
                     tool_messages = await self._execute_tool_calls(
                         agent=agent,
+                        runner_task=runner_task,
                         tools=visible_tools,
                         tool_calls=tool_calls,
                         response=response,
@@ -177,11 +215,13 @@ class Runner:
 
                     continue
 
+                state.continuation_history.append(response)
                 _validate_terminal_response(response)
                 result = RunResult(
                     final_output=_extract_direct_answer(response),
                     responses=list(state.responses),
                     turn_count=state.turn_count,
+                    run_state=copy_run_state(state),
                 )
                 return result
         finally:
@@ -238,6 +278,7 @@ class Runner:
         self,
         *,
         agent: Task,
+        runner_task: RunnerTask | None,
         tools: Tools | None,
         tool_calls: list[ToolCall],
         response: ModelResponse,
@@ -256,18 +297,547 @@ class Runner:
                 raw_response=response,
             )
 
-        tool_messages = await self._tool_executor.execute(
-            tool_calls=tool_calls,
-            tools=tools,
+        tool_definitions = {tool.name: tool for tool in tools.normalized_tools}
+        for tool_call in tool_calls:
+            if (tool_call.function.name or "") not in tool_definitions:
+                raise _model_behavior_error(
+                    "Runner received a tool call for an unknown tool.",
+                    raw_response=response,
+                )
+
+        # Execute a tool call batch in parallel and return aggregated result
+        if tools.parallel_tool_calls and len(tool_calls) > 1:
+            return await asyncio.gather(
+                *[
+                    self._execute_one_tool_call(
+                        agent=agent,
+                        runner_task=runner_task,
+                        tools=tools,
+                        tool_call=tool_call,
+                        tool_definition=tool_definitions[tool_call.function.name or ""],
+                        hooks=hooks,
+                        cancellation_token=cancellation_token,
+                    )
+                    for tool_call in tool_calls
+                ]
+            )
+
+        tool_messages: list[MessageDict] = []
+        for tool_call in tool_calls:
+            tool_messages.append(
+                await self._execute_one_tool_call(
+                    agent=agent,
+                    runner_task=runner_task,
+                    tools=tools,
+                    tool_call=tool_call,
+                    tool_definition=tool_definitions[tool_call.function.name or ""],
+                    hooks=hooks,
+                    cancellation_token=cancellation_token,
+                )
+            )
+        return tool_messages
+
+    async def _execute_one_tool_call(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        tools: Tools,
+        tool_call: ToolCall,
+        tool_definition: ToolSpec[Any],
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> MessageDict:
+        """Execute one tool or delegated-agent call and return its tool message."""
+        if isinstance(tool_definition, AgentTool):
+            return await self._execute_agent_tool_call(
+                agent=agent,
+                runner_task=runner_task,
+                tool_call=tool_call,
+                tool_definition=tool_definition,
+                hooks=hooks,
+                cancellation_token=cancellation_token,
+            )
+
+        if isinstance(tool_definition, DefaultAgentTool):
+            return await self._execute_default_agent_tool_call(
+                agent=agent,
+                runner_task=runner_task,
+                tool_call=tool_call,
+                tool_definition=tool_definition,
+                hooks=hooks,
+                cancellation_token=cancellation_token,
+            )
+
+        if isinstance(tool_definition, Tool):
+            tool_config = replace(tools, tools=(tool_definition,))
+            tool_messages = await self._tool_executor.execute(
+                tool_calls=[tool_call],
+                tools=tool_config,
+                cancellation_token=cancellation_token,
+                on_tool_start=lambda started_call: hooks.on_tool_call_start(
+                    agent,
+                    started_call,
+                ),
+                on_tool_end=lambda ended_call, result: hooks.on_tool_call_end(
+                    agent,
+                    ended_call,
+                    result,
+                ),
+            )
+            return tool_messages[0]
+
+        raise _model_behavior_error(
+            (
+                "Runner received a non-executable tool call that "
+                "it does not know how to execute."
+            ),
+            raw_response=None,
+        )
+
+    async def _execute_agent_tool_call(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        tool_call: ToolCall,
+        tool_definition: AgentTool,
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> MessageDict:
+        """Execute one agent-as-tool call through runtime messaging."""
+        parsed_input = _parse_delegated_tool_args(
+            tool_call=tool_call,
+            args_model=tool_definition.args_type(),
+        )
+        await hooks.on_tool_call_start(agent, tool_call)
+        delegated_result = await self._run_delegated_sub_agent(
+            agent=agent,
+            runner_task=runner_task,
+            tool_name=tool_definition.name,
+            descriptor=tool_definition.descriptor,
+            run_input=_agent_tool_run_input(parsed_input),
             cancellation_token=cancellation_token,
-            on_tool_start=lambda tool_call: hooks.on_tool_call_start(agent, tool_call),
-            on_tool_end=lambda tool_call, result: hooks.on_tool_call_end(
-                agent,
-                tool_call,
-                result,
+        )
+
+        await hooks.on_tool_call_end(agent, tool_call, delegated_result)
+        return _tool_result_message(
+            tool_call=tool_call,
+            tool_name=tool_definition.name,
+            content=delegated_result,
+        )
+
+    async def _execute_default_agent_tool_call(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        tool_call: ToolCall,
+        tool_definition: DefaultAgentTool,
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> MessageDict:
+        """Execute one default spawned agent-as-tool call."""
+        parsed_input = _parse_delegated_tool_args(
+            tool_call=tool_call,
+            args_model=tool_definition.args_type(),
+        )
+        await hooks.on_tool_call_start(agent, tool_call)
+        delegated_result = await self._run_default_agent_tool(
+            agent=agent,
+            runner_task=runner_task,
+            tool_name=tool_definition.name,
+            tool_definition=tool_definition,
+            parsed_input=parsed_input,
+            cancellation_token=cancellation_token,
+        )
+
+        await hooks.on_tool_call_end(agent, tool_call, delegated_result)
+        return _tool_result_message(
+            tool_call=tool_call,
+            tool_name=tool_definition.name,
+            content=delegated_result,
+        )
+
+    async def _execute_handoff(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        state: RunState,
+        response: ModelResponse,
+        handoff_call: ToolCall,
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> RunResult:
+        """Transfer control to another agent and return its final result."""
+        visible_tools = _tools(runner_task)
+        if visible_tools is None:
+            raise _model_behavior_error(
+                "Runner received a handoff call, but the agent exposes no tools.",
+                raw_response=response,
+            )
+
+        tool_definition = _require_handoff_tool_definition(
+            tools=visible_tools,
+            tool_call=handoff_call,
+            response=response,
+        )
+        parsed_input = _parse_delegated_task_input(
+            tool_call=handoff_call,
+            args_model=tool_definition.args_type(),
+        )
+        await hooks.on_tool_call_start(agent, handoff_call)
+
+        transferred_state = replace(
+            state,
+            continuation_history=list(state.continuation_history),
+            responses=list(state.responses),
+        )
+        # Handoff is a control-transfer primitive. The downstream agent should
+        # see why control moved, so we preserve the parent assistant tool-call
+        # turn, add a synthetic tool acknowledgement, and then add the optional
+        # user-side delegation message.
+        transferred_state.continuation_history.append(response)
+        transferred_state.continuation_history.append(
+            _tool_result_message(
+                tool_call=handoff_call,
+                tool_name=tool_definition.name,
+                content=default_handoff_tool_result(tool_definition.name),
+            )
+        )
+        transferred_state.continuation_history.append(
+            parsed_input.task or default_handoff_task_message()
+        )
+
+        handoff_descriptor = _resolved_handoff_descriptor(
+            runner_task=runner_task,
+            tool_definition=tool_definition,
+        )
+        handoff_result = await self._deliver_handoff(
+            agent=agent,
+            runner_task=runner_task,
+            tool_name=tool_definition.name,
+            descriptor=handoff_descriptor,
+            transferred_state=transferred_state,
+            cancellation_token=cancellation_token,
+        )
+
+        if handoff_result.run_state is not None:
+            _overwrite_run_state(state, handoff_result.run_state)
+
+        await hooks.on_tool_call_end(agent, handoff_call, handoff_result.final_output)
+        return handoff_result
+
+    async def _run_delegated_sub_agent(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        tool_name: str,
+        descriptor: AgentDescriptor,
+        run_input: str | list[object],
+        cancellation_token: CancellationToken | None,
+    ) -> str:
+        """Run one delegated sub-agent as a subroutine and return text output."""
+        runtime = _require_runtime_engine(agent)
+        child_descriptor = _resolved_child_descriptor(
+            runner_task=runner_task,
+            descriptor=descriptor,
+        )
+        runtime.register_factory(
+            delegated_agent_type(agent.id, tool_name, kind="tool"),
+            type(agent).create_factory(
+                runner=self,
+                descriptor=child_descriptor,
+                parent_tools=_base_tools(runner_task),
             ),
         )
-        return tool_messages
+        outcome = await agent.send_message(
+            run_input,
+            recipient=delegated_agent_id(agent.id, tool_name, kind="tool"),
+            cancellation_token=cancellation_token,
+        )
+        return delegated_result_text(outcome)
+
+    async def _run_default_agent_tool(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        tool_name: str,
+        tool_definition: DefaultAgentTool,
+        parsed_input: BaseModel,
+        cancellation_token: CancellationToken | None,
+    ) -> str:
+        """Run one generic spawned helper agent as a subroutine."""
+        runtime = _require_runtime_engine(agent)
+        task_text = _delegated_task_text(parsed_input)
+        child_descriptor = AgentDescriptor(
+            name="Delegated Agent",
+            description="Fresh delegated helper agent.",
+            model=tool_definition.model or _require_model(runner_task),
+            instructions=tool_definition.resolved_instructions(task_text),
+            model_args=(
+                dict(tool_definition.model_args)
+                if tool_definition.model_args is not None
+                else _model_args(runner_task)
+            ),
+            schema=tool_definition.output_schema,
+            tools=tool_definition.tools,
+        )
+        runtime.register_factory(
+            delegated_agent_type(agent.id, tool_name, kind="tool"),
+            type(agent).create_factory(
+                runner=self,
+                descriptor=child_descriptor,
+                parent_tools=_base_tools(runner_task),
+            ),
+        )
+        outcome = await agent.send_message(
+            _default_agent_tool_run_input(parsed_input),
+            recipient=delegated_agent_id(agent.id, tool_name, kind="tool"),
+            cancellation_token=cancellation_token,
+        )
+        return delegated_result_text(outcome)
+
+    async def _deliver_handoff(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        tool_name: str,
+        descriptor: AgentDescriptor,
+        transferred_state: RunState,
+        cancellation_token: CancellationToken | None,
+    ) -> RunResult:
+        """Transfer the run to another agent and wait for its final result."""
+        runtime = _require_runtime_engine(agent)
+        runtime.register_factory(
+            delegated_agent_type(agent.id, tool_name, kind="handoff"),
+            type(agent).create_factory(
+                runner=self,
+                descriptor=descriptor,
+                parent_tools=_base_tools(runner_task),
+            ),
+        )
+        outcome = await agent.send_message(
+            transferred_state,
+            recipient=delegated_agent_id(agent.id, tool_name, kind="handoff"),
+            cancellation_token=cancellation_token,
+        )
+        return require_handoff_result(outcome)
+
+
+def _extract_handoff_call(
+    *,
+    tools: Tools | None,
+    tool_calls: list[ToolCall],
+) -> ToolCall | None:
+    """Return the handoff call when the model requested one."""
+    if tools is None:
+        return None
+
+    handoff_calls = [
+        tool_call
+        for tool_call in tool_calls
+        if isinstance(
+            _tool_definition_by_name(tools, tool_call.function.name or ""),
+            (HandoffTool, DefaultHandoffTool),
+        )
+    ]
+    if not handoff_calls:
+        return None
+
+    if len(handoff_calls) > 1 or len(tool_calls) > 1:
+        raise ModelBehaviorError(
+            "Runner received a handoff together with additional tool calls. "
+            "First-class handoff must be the only tool call in the turn."
+        )
+
+    return handoff_calls[0]
+
+
+def _tool_definition_by_name(
+    tools: Tools,
+    tool_name: str,
+) -> ToolSpec[Any] | None:
+    """Return one visible tool definition by name."""
+    for tool in tools.normalized_tools:
+        if tool.name == tool_name:
+            return tool
+    return None
+
+
+def _require_handoff_tool_definition(
+    *,
+    tools: Tools,
+    tool_call: ToolCall,
+    response: ModelResponse,
+) -> HandoffTool | DefaultHandoffTool:
+    """Return the handoff tool definition for the intercepted tool call."""
+    tool_definition = _tool_definition_by_name(tools, tool_call.function.name or "")
+    if isinstance(tool_definition, (HandoffTool, DefaultHandoffTool)):
+        return tool_definition
+    raise _model_behavior_error(
+        "Runner expected the intercepted handoff call to resolve to a handoff tool.",
+        raw_response=response,
+    )
+
+
+def _resolved_handoff_descriptor(
+    *,
+    runner_task: RunnerTask | None,
+    tool_definition: HandoffTool | DefaultHandoffTool,
+) -> AgentDescriptor:
+    """Return the resolved descriptor for one intercepted handoff tool."""
+    if isinstance(tool_definition, HandoffTool):
+        return _resolved_child_descriptor(
+            runner_task=runner_task,
+            descriptor=tool_definition.descriptor,
+        )
+
+    config = tool_definition.config
+    return AgentDescriptor(
+        name="Delegated Agent",
+        description="Fresh delegated handoff agent.",
+        model=config.model or _require_model(runner_task),
+        instructions=config.instructions,
+        model_args=(
+            dict(config.model_args)
+            if config.model_args is not None
+            else _model_args(runner_task)
+        ),
+        schema=config.schema,
+        tools=config.tools,
+    )
+
+
+def _resolved_child_descriptor(
+    *,
+    runner_task: RunnerTask | None,
+    descriptor: AgentDescriptor,
+) -> AgentDescriptor:
+    """Fill child descriptor model defaults from the current agent."""
+    model = descriptor.model or _require_model(runner_task)
+    model_args = (
+        dict(descriptor.model_args)
+        if descriptor.model_args is not None
+        else _model_args(runner_task)
+    )
+    return replace(
+        descriptor,
+        model=model,
+        model_args=model_args,
+    )
+
+
+def _base_tools(runner_task: RunnerTask | None) -> Tools | None:
+    """Return the explicit parent tool catalog before handoff merge."""
+    if runner_task is None:
+        return None
+    return runner_task.base_tools
+
+
+def _overwrite_run_state(target: RunState, source: RunState) -> None:
+    """Replace one working run state in place with another completed state."""
+    target.original_input = copy_original_input(source.original_input)
+    target.continuation_history = list(source.continuation_history)
+    target.responses = list(source.responses)
+    target.turn_count = source.turn_count
+
+
+def _parse_delegated_tool_args(
+    *,
+    tool_call: ToolCall,
+    args_model: type[BaseModel],
+) -> BaseModel:
+    """Validate one delegated-agent tool call into structured task input."""
+    raw_arguments = tool_call.function.arguments or "{}"
+    try:
+        parsed_arguments = json.loads(raw_arguments)
+    except json.JSONDecodeError as exc:
+        raise ModelBehaviorError(
+            f"Invalid arguments for delegated tool '{tool_call.function.name}': {exc}"
+        ) from exc
+
+    try:
+        return args_model(**parsed_arguments)
+    except ValidationError as exc:
+        raise ModelBehaviorError(
+            f"Invalid arguments for delegated tool '{tool_call.function.name}': {exc}"
+        ) from exc
+
+
+def _parse_delegated_task_input(
+    *,
+    tool_call: ToolCall,
+    args_model: type[DelegatedTaskInput],
+) -> DelegatedTaskInput:
+    """Validate one task-based delegation tool call."""
+    parsed_input = _parse_delegated_tool_args(
+        tool_call=tool_call,
+        args_model=args_model,
+    )
+    if not isinstance(parsed_input, DelegatedTaskInput):
+        raise AssertionError("Delegated task parsing returned the wrong model type.")
+    return parsed_input
+
+
+def _agent_tool_run_input(parsed_input: BaseModel) -> str | list[object]:
+    """Build the downstream run input for a predefined agent-as-tool call.
+
+    Predefined sub-agents receive exactly the validated tool-args payload.
+    The harness does not reserve or strip any special `task` field here.
+    """
+    payload = parsed_input.model_dump(mode="json", exclude_none=True)
+    if payload:
+        return [payload]
+    return []
+
+
+def _default_agent_tool_run_input(parsed_input: BaseModel) -> str | list[object]:
+    """Build the downstream run input for a default spawned agent tool."""
+    task_text = _delegated_task_text(parsed_input)
+    if task_text:
+        return task_text
+    return "Complete the delegated task."
+
+
+def _delegated_task_text(parsed_input: BaseModel) -> str | None:
+    """Extract the optional `task` field from one delegated args model."""
+    task_value = getattr(parsed_input, "task", None)
+    if isinstance(task_value, str):
+        stripped_task = task_value.strip()
+        if stripped_task:
+            return stripped_task
+    return None
+
+
+def _tool_result_message(
+    *,
+    tool_call: ToolCall,
+    tool_name: str,
+    content: object,
+) -> MessageDict:
+    """Return the canonical tool-result message for one completed call."""
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "name": tool_name,
+        "content": _normalize_content(content),
+    }
+
+
+def _require_runtime_engine(agent: Task) -> RuntimeEngine:
+    """Return the runtime engine required for delegated agent routing."""
+    engine = getattr(agent, "_engine", None)
+    if isinstance(engine, RuntimeEngine):
+        return engine
+    raise RuntimeError(
+        "Harness sub-agent delegation requires an engine that supports "
+        "runtime factory registration."
+    )
 
 
 def _build_request(

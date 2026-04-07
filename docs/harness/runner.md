@@ -1,22 +1,22 @@
 # Harness Runner
 
 Date: 2026-04-05
-Status: Phase 5 implementation ready for review
+Status: Phase 6 implementation ready for review
 
 ## What The Default Runner Owns
 
 The default harness `Runner` is a reusable stateless service object.
 
-For Phase 5 it owns the generic loop needed to execute direct answers and tool turns:
+For Phase 6 it owns the generic loop needed to execute direct answers, tool turns, first-class handoffs, and agent-as-tool subroutine calls:
 
 1. build the next model request from `instructions + original_input + continuation_history`,
 2. call the agent's configured `agentlane.models.Model`,
 3. emit lifecycle hooks around the agent run and each LLM attempt,
 4. accumulate the raw `ModelResponse` onto `RunState.responses`,
-5. append the raw `ModelResponse` to `RunState.continuation_history`,
+5. append the right continuation items back into `RunState.continuation_history`,
 6. execute tool calls when the model returns them,
-7. append the resulting tool messages to `RunState.continuation_history`,
-8. continue the loop for the next model turn, and
+7. intercept handoffs specially and transfer the run when needed,
+8. continue the loop for the next model turn when the caller remains active, and
 9. return a minimal `RunResult` once a terminal assistant answer is produced.
 
 The runner is where model-facing normalization happens. The agent boundary is
@@ -66,9 +66,10 @@ The public runner boundary for this phase is intentionally small:
 1. `final_output`
 2. `responses`
 3. `turn_count`
+4. `run_state`
 
-Future concerns such as event logs, resumable interruption status, and handoff
-state are deferred until they are actually needed.
+Future concerns such as event logs and resumable interruption status are still
+deferred until they are actually needed.
 
 ## Hook Order
 
@@ -104,13 +105,19 @@ That result is intentionally minimal:
 1. `final_output` is the direct answer extracted from the terminal assistant turn
 2. `responses` is the accumulated list of raw `ModelResponse` objects
 3. `turn_count` is the completed model-turn count for the run
+4. `run_state` is the final resumable run state when the runner completed successfully
 
 ## Tool Boundary
 
-Phase 5 now owns tool execution, but handoffs are still deferred.
+Phase 5 and Phase 6 keep the tool boundary simple.
 
-1. Tool calls returned by the model are executed by the harness runner via the shared `ToolExecutor`.
-2. The runner appends both the raw assistant tool-call response and the formatted tool-result messages back into continuation history before the next LLM turn.
-3. The runner also owns later-turn tool visibility by applying per-tool call limits and maximum tool round-trip limits from accumulated `RunState.responses`.
-4. Provider clients stay thin: they accept tool definitions in the request and return raw tool-call responses, but they do not execute tools or run their own tool loop.
-5. Sub-agent delegation and handoffs remain out of scope here.
+1. Tool calls returned by the model are executed by the harness runner, not by provider clients.
+2. Native executable tools still go through the shared `ToolExecutor`.
+3. Predefined agent-as-tool calls are routed through runtime `send_message`, receive exactly the validated args-model payload for that tool, and return a tool result string to the caller loop.
+4. `DefaultAgentTool` is the generic spawned-helper path. It injects a default helper prompt and also sends the delegated task as user input.
+5. First-class handoffs are also model-visible tool choices, but the runner intercepts them specially instead of treating them as normal tool results.
+6. On handoff, the runner transfers the full conversation history, preserves the triggering handoff turn as downstream history, adds a synthetic transfer acknowledgement, and then appends the optional delegation message.
+7. Handoff does not inject a new default system prompt. The downstream agent uses only its own configured `instructions` when present.
+8. `RunResult.run_state` is carried through so lifecycle persistence can continue from the delegated child after a transfer.
+9. The runner also owns later-turn tool visibility by applying per-tool call limits and maximum tool round-trip limits from accumulated `RunState.responses`.
+10. Provider clients stay thin: they accept tool definitions in the request and return raw tool-call responses, but they do not execute tools or run their own tool loop.

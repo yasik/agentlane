@@ -59,6 +59,9 @@ class RunResult:
     turn_count: int
     """Number of model turns completed for this run."""
 
+    run_state: RunState | None = None
+    """Final resumable run state for this completed run when available."""
+
 
 def copy_run_state(run_state: RunState | None) -> RunState | None:
     """Return an isolated copy of one run state, or ``None`` passthrough."""

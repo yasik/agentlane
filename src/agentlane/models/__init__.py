@@ -41,7 +41,7 @@ from ._retry import (
     wait_with_retry_after,
 )
 from ._strict_schema import ensure_strict_json_schema
-from ._tool import Tool, as_tool
+from ._tool import Tool, ToolSpec, as_tool
 from ._tool_executor import ToolExecutor
 from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapter
 from ._types import (
@@ -83,6 +83,7 @@ __all__ = [
     "Factory",
     "MessageDict",
     "ModelTracing",
+    "ToolSpec",
     "Tool",
     "as_tool",
     "Tools",
