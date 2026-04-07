@@ -1,124 +1,263 @@
 # Harness Runner
 
-Date: 2026-04-05
-Status: Phase 6 implementation ready for review
+## What The Runner Owns
 
-## What The Default Runner Owns
+`Runner` is the stateless default loop engine for harness agents.
 
-The default harness `Runner` is a reusable stateless service object.
+For one run it owns:
 
-For Phase 6 it owns the generic loop needed to execute direct answers, tool turns, first-class handoffs, and agent-as-tool subroutine calls:
+1. building the next model request from `RunState`
+2. calling the configured model
+3. recording raw `ModelResponse` values
+4. executing tools
+5. intercepting handoffs
+6. routing delegated sub-agents
+7. enforcing loop and tool limits
+8. returning the final `RunResult`
 
-1. build the next model request from `instructions + original_input + continuation_history`,
-2. call the agent's configured `agentlane.models.Model`,
-3. emit lifecycle hooks around the agent run and each LLM attempt,
-4. accumulate the raw `ModelResponse` onto `RunState.responses`,
-5. append the right continuation items back into `RunState.continuation_history`,
-6. execute tool calls when the model returns them,
-7. intercept handoffs specially and transfer the run when needed,
-8. continue the loop for the next model turn when the caller remains active, and
-9. return a minimal `RunResult` once a terminal assistant answer is produced.
+The runner is reusable. It holds configuration, not per-conversation state.
 
-The runner is where model-facing normalization happens. The agent boundary is
-run-oriented, not `MessageDict`-oriented.
+## Runner And Lifecycle Flow
+
+```text
+queued run input
+      |
+      v
++---------------------------+
+| AgentLifecycle            |
+| passes working RunState   |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| Runner.run                |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| turn += 1                 |
+| enforce max_turns         |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| build request             |
+| instructions + history    |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| call model                |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| append ModelResponse      |
+| to RunState.responses     |
++-------------+-------------+
+              |
+              v
+      +-------+--------+------------------+
+      |                |                  |
+      v                v                  v
++-------------+ +--------------+ +----------------+
+| tool calls? | | handoff call?| | final answer?  |
++------+------+ +------+-------+ +--------+-------+
+       |               |                  |
+      yes             yes                yes
+       |               |                  |
+       v               v                  v
++--------------+ +----------------+ +----------------+
+| execute tool  | | transfer state | | extract final  |
+| batch         | | to child agent | | output         |
++------+-------+ +-------+--------+ +--------+-------+
+       |                 |                   |
+       v                 v                   v
++--------------+ +----------------+ +----------------+
+| append tool   | | child returns  | | return         |
+| result msgs   | | RunResult      | | RunResult      |
++------+-------+ +----------------+ +----------------+
+       |
+       v
+   next turn
+```
+
+## Loop Shape
+
+At a high level the loop is:
+
+1. increment `turn_count`
+2. build the next model request from `instructions + original_input + continuation_history`
+3. call the model
+4. append the raw response to `RunState.responses`
+5. inspect the response
+6. if it contains tool calls, execute them and continue
+7. if it contains a handoff, transfer the run
+8. otherwise extract the final answer and return
+
+The lifecycle owns queueing and persistence. The runner owns the loop inside one
+working run state.
+
+```text
+continuation_history
+        |
+        v
++---------------------------+
+| build canonical messages  |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| model response            |
++-------------+-------------+
+              |
+              v
+ assistant tool calls?
+      |
+   +--+-----------------------------+
+   |                                |
+  no                               yes
+   |                                |
+   v                                v
++----------------------+   +-----------------------+
+| final assistant turn |   | append assistant turn |
+| -> final_output      |   | execute tools         |
++----------------------+   | append tool results   |
+                           +-----------+-----------+
+                                       |
+                                       v
+                                  next model turn
+```
 
 ## Model Boundary
 
-The runner does not introduce a second client abstraction.
+The runner uses the shared `agentlane.models` contract directly.
 
-It expects the task being run to expose a configured `model` compatible with:
+It expects the current agent to expose:
 
-1. `agentlane.models.Model`
-2. canonical `MessageDict` request input at call time
-3. canonical `ModelResponse` output
+1. `model`
+2. `model_args`
+3. `schema`
+4. `tools`
+5. `instructions`
 
-The default `Agent` now exposes that model directly as `agent.model`, but the
-underlying static configuration lives in `AgentDescriptor`.
+On each model call the runner forwards:
 
-Phase 4 also preserves the broader native call surface exposed by
-`agentlane.models.Model`. When present, the runner forwards:
+1. canonical request messages
+2. `model_args` through the model call surface
+3. `schema`
+4. the visible `Tools` configuration for that turn
 
-1. `agent.model_args` via the model interface's `extra_call_args` seam
-2. `agent.schema`
-3. `agent.tools`
+The runner is also where request normalization happens. `MessageDict` stays an
+internal model-call detail, not a public harness input type.
 
-There is only one canonical tool configuration on the agent: `Tools`. The
-runner uses that same value both for model visibility and for actual harness
-tool execution.
+## Result Boundary
 
-## Run Boundary
-
-The public runner boundary for this phase is intentionally small:
-
-1. input state is `RunState`
-2. final return value is `RunResult`
-3. the model-call request `list[MessageDict]` is built internally by the runner
-
-`RunState` currently contains only:
-
-1. `original_input`
-2. `continuation_history`
-3. `responses`
-4. `turn_count`
-
-`RunResult` currently contains only:
+The runner returns `RunResult`:
 
 1. `final_output`
 2. `responses`
 3. `turn_count`
 4. `run_state`
 
-Future concerns such as event logs and resumable interruption status are still
-deferred until they are actually needed.
+The result stays intentionally small. The harness does not currently expose a
+larger event log or approval envelope.
 
-## Hook Order
+## Tool Execution
 
-For a successful run, the default hook order is:
+When the model returns tool calls:
+
+1. the raw assistant response is appended to continuation history
+2. each tool call is executed
+3. each tool result is appended back into continuation history
+4. the next model turn sees both the original tool-call response and the tool
+   result messages
+
+Normal executable tools run through `ToolExecutor`.
+
+The runner also enforces tool visibility policy:
+
+1. per-tool call limits
+2. maximum tool round trips
+
+Provider clients do not own that logic.
+
+## Delegated Agent Tools
+
+Agent-as-tool uses the same model-facing contract as any other tool:
+
+1. the model sees a tool name and a JSON schema
+2. it returns a tool call with arguments
+3. the runner validates those arguments into a Pydantic model
+4. the structured payload is sent to a delegated child agent
+5. the child result is converted into a tool-result string
+6. the caller agent continues its own loop
+
+The two agent-as-tool variants are:
+
+1. predefined agent tools via `AgentDescriptor.as_tool(...)`
+2. the generic spawned-helper tool via `DefaultAgentTool`
+
+Predefined agent tools receive exactly their declared payload shape. The generic
+`agent` tool uses its own default schema with `name`, optional `description`,
+and optional `task`.
+
+## Handoffs
+
+Handoff is different from agent-as-tool even though the model still sees it as
+a tool-like choice.
+
+When the runner intercepts a handoff call:
+
+1. it resolves the target agent descriptor
+2. it copies the current run state
+3. it preserves the triggering handoff turn in transferred history
+4. it appends a synthetic transfer acknowledgement
+5. it appends the optional delegation message, or a default one if empty
+6. it sends the transferred `RunState` to the next agent
+7. it returns that downstream `RunResult`
+
+The original agent does not resume after a handoff.
+
+The two handoff variants are:
+
+1. predefined transfer targets through `AgentDescriptor.handoffs`
+2. the generic fresh-agent path through `DefaultHandoff`
+
+## Hooks
+
+`RunnerHooks` observes runner lifecycle events:
 
 1. `on_agent_start`
 2. `on_llm_start`
-3. model call
-4. `on_llm_end`
-5. zero or more `on_tool_call_start` / `on_tool_call_end` pairs
-6. repeat steps 2-5 for additional model turns if tool calls were executed
-7. `on_agent_end`
+3. `on_llm_end`
+4. `on_tool_call_start`
+5. `on_tool_call_end`
+6. `on_agent_end`
 
-If a retryable model failure occurs, the runner repeats the `on_llm_start` -> model call
-sequence for the next attempt. The agent-level hooks still wrap the overall run once.
+For successful runs, tool hooks may repeat across multiple turns while the
+agent-level hooks still wrap the overall run once.
 
-## Retry Boundary
+## Retry Policy
 
-Runner retries are intentionally narrow in Phase 4.
+The runner adds only an optional outer retry layer.
 
-1. Provider clients may still perform their own transport or schema retries internally.
-2. The harness runner adds an optional outer retry policy via `Runner(max_attempts=...)`.
-3. That outer retry policy reuses `agentlane.models.retry_on_errors` instead of adding new retry infrastructure.
+Rules:
 
-The default `max_attempts` is `1`, so the runner does not add an extra retry layer unless explicitly configured.
+1. `Runner(max_attempts=1)` means no extra runner retry
+2. higher values reuse `agentlane.models.retry_on_errors`
+3. provider clients may still perform their own transport-level retries
 
-## Result Shape
+This keeps retry behavior narrow and explicit.
 
-The runner returns `RunResult`.
+## Thin Provider Boundary
 
-That result is intentionally minimal:
+Provider adapters should remain thin:
 
-1. `final_output` is the direct answer extracted from the terminal assistant turn
-2. `responses` is the accumulated list of raw `ModelResponse` objects
-3. `turn_count` is the completed model-turn count for the run
-4. `run_state` is the final resumable run state when the runner completed successfully
+1. accept canonical request input
+2. return canonical model responses
+3. do not execute tools
+4. do not run a client-side tool loop
+5. do not own handoff behavior
 
-## Tool Boundary
-
-Phase 5 and Phase 6 keep the tool boundary simple.
-
-1. Tool calls returned by the model are executed by the harness runner, not by provider clients.
-2. Native executable tools still go through the shared `ToolExecutor`.
-3. Predefined agent-as-tool calls are routed through runtime `send_message`, receive exactly the validated args-model payload for that tool, and return a tool result string to the caller loop.
-4. `DefaultAgentTool` is the generic spawned-helper path exposed as one model-visible `agent` tool with `name`, optional `description`, and optional `task` arguments.
-5. Predefined and default agent-as-tool calls share the same mechanics: the runner validates the tool-call arguments into a Pydantic model and forwards that structured payload to the delegated child agent as its user-side input.
-6. First-class handoffs are also model-visible tool choices, but the runner intercepts them specially instead of treating them as normal tool results.
-7. On handoff, the runner transfers the full conversation history, preserves the triggering handoff turn as downstream history, adds a synthetic transfer acknowledgement, and then appends the optional delegation message.
-8. Handoff does not inject a new default system prompt. The downstream agent uses only its own configured `instructions` when present.
-9. `RunResult.run_state` is carried through so lifecycle persistence can continue from the delegated child after a transfer.
-10. The runner also owns later-turn tool visibility by applying per-tool call limits and maximum tool round-trip limits from accumulated `RunState.responses`.
-11. Provider clients stay thin: they accept tool definitions in the request and return raw tool-call responses, but they do not execute tools or run their own tool loop.
+That orchestration belongs in the harness runner.

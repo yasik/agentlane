@@ -1,8 +1,5 @@
 # Harness Tasks
 
-Date: 2026-04-02
-Status: Phase 2 baseline
-
 ## What A Task Is
 
 `Task` is the top-level harness primitive for application work that sits
@@ -15,16 +12,16 @@ Use a task when you need orchestration logic that:
 3. may call databases, webhooks, filesystems, or service clients, and
 4. should not itself imply an LLM loop.
 
-The harness `Agent` type builds on top of `Task` in later phases.
+The default harness `Agent` builds directly on top of `Task`.
 
 ## Runtime Model
 
 Tasks reuse the existing runtime model directly:
 
-1. A task extends `agentlane.runtime.BaseAgent`.
-2. Message handlers are still declared with `@on_message`.
-3. Orchestration still uses `send_message` and `publish_message`.
-4. Runtime instance reuse is still keyed by `AgentId`.
+1. a task extends `agentlane.runtime.BaseAgent`
+2. message handlers are still declared with `@on_message`
+3. orchestration still uses `send_message` and `publish_message`
+4. runtime instance reuse is still keyed by `AgentId`
 
 There is no second task-specific execution engine.
 
@@ -32,8 +29,8 @@ There is no second task-specific execution engine.
 
 ### Lazy factory registration
 
-Use `Task.register(runtime, agent_type, ...)` when the runtime should create task
-instances on demand.
+Use `Task.register(runtime, agent_type, ...)` when the runtime should create
+task instances on demand.
 
 This is the right default when:
 
@@ -54,16 +51,22 @@ This is the right choice when:
 
 ## Stateful vs Stateless Guidance
 
-Tasks may be either stateful or effectively stateless depending on how they are addressed.
+Tasks may be either stateful or effectively stateless depending on how they are
+addressed.
 
-1. Reusing the same `AgentId` means the runtime will reuse the same task instance.
+1. Reusing the same `AgentId` means the runtime will reuse the same task
+   instance.
 2. Using a new `AgentId` creates an isolated task instance for that key.
-3. A task registered via factory can still behave statefully if callers reuse the same `AgentId`.
-4. A task bound as one explicit instance is intentionally stateful for that exact `AgentId`.
+3. A task registered via factory can still behave statefully if callers reuse
+   the same `AgentId`.
+4. A task bound as one explicit instance is intentionally stateful for that
+   exact `AgentId`.
 
-The runtime semantics stay explicit: statefulness is driven by instance reuse, not hidden task logic.
+The runtime semantics stay explicit: statefulness is driven by instance reuse,
+not hidden task logic.
 
 ## Design Constraint
 
-Tasks remain intentionally thin. They add semantic clarity and small registration helpers,
-but they do not replace or wrap the runtime’s routing, scheduler, or dispatcher contracts.
+Tasks remain intentionally thin. They add semantic clarity and small
+registration helpers, but they do not replace or wrap the runtime's routing,
+scheduler, or dispatcher contracts.

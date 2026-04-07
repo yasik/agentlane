@@ -1,4 +1,4 @@
-"""Real OpenAI-backed harness demo showing the Phase 5 tool loop."""
+"""Real OpenAI-backed harness demo showing the tool loop."""
 
 import asyncio
 import logging

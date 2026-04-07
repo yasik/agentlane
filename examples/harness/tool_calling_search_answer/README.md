@@ -1,6 +1,6 @@
 # Tool-Calling Search Answer
 
-This example shows the smallest useful Phase 5 harness flow:
+This example shows the smallest useful harness tool-calling flow:
 
 1. define templated agent instructions,
 2. decorate one typed Python function with `@as_tool`,
