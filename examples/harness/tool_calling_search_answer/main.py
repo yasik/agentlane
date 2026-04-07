@@ -1,25 +1,21 @@
 """Real OpenAI-backed harness demo showing the Phase 5 tool loop."""
 
 import asyncio
+import logging
 import os
-from typing import TypedDict
+from typing import TypedDict, cast
 
-from _demo_utils import (
-    configure_demo_logging,
-    print_intro,
-    print_summary,
-    print_turn,
-    require_run_result,
-)
+import structlog
 from agentlane_openai import ResponsesClient
 
-from agentlane.harness import Agent, AgentDescriptor, Runner
-from agentlane.messaging import AgentId
+from agentlane.harness import Agent, AgentDescriptor, Runner, RunResult
+from agentlane.messaging import AgentId, DeliveryStatus
 from agentlane.models import (
     Config,
     OutputSchema,
     PromptSpec,
     PromptTemplate,
+    ToolCall,
     Tools,
     as_tool,
 )
@@ -61,65 +57,93 @@ async def search_help_center(question: str) -> str:
     return MOCK_SEARCH_RESULT
 
 
-def build_descriptor(api_key: str) -> AgentDescriptor:
-    """Construct one policy-assistant descriptor for the live demo."""
+async def run_demo() -> None:
+    """Run the real tool-calling demo."""
+    logging.basicConfig(level=logging.WARNING)
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
+    )
+    api_key = os.environ["OPENAI_API_KEY"]
+    runner = Runner(max_attempts=2)
+    runtime = SingleThreadedRuntimeEngine()
+    agent_id = AgentId.from_values("policy-agent", "tool-demo")
     instruction_values: AssistantInstructionValues = {
         "company_name": "Acme",
         "knowledge_source": "help-center",
         "tone": "clear and practical",
     }
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
-    return AgentDescriptor(
-        name="Acme Policy Assistant",
-        description="Answers customer policy questions with a search tool",
-        model=model,
-        model_args={"reasoning_effort": "low"},
-        instructions=PromptSpec(
-            template=INSTRUCTIONS_TEMPLATE,
-            values=instruction_values,
-        ),
-        # Require one search call so the demo always exercises the tool path.
-        # After that first call, the runner removes the tool for the answer turn.
-        tools=Tools(
-            # The most explicit ergonomic path is to decorate the function once
-            # and then pass the resulting native Tool directly into the harness.
-            tools=[search_help_center],
-            tool_choice="required",
-            tool_call_limits={"search_help_center": 1},
-        ),
-    )
-
-
-async def run_demo() -> None:
-    """Run the real tool-calling demo."""
-    configure_demo_logging()
-    api_key = os.environ["OPENAI_API_KEY"]
-    runner = Runner(max_attempts=2)
-    runtime = SingleThreadedRuntimeEngine()
-    agent_id = AgentId.from_values("policy-agent", "tool-demo")
-    descriptor = build_descriptor(api_key)
-
-    print_intro()
 
     agent = Agent.bind(
         runtime,
         agent_id,
         runner=runner,
-        descriptor=descriptor,
+        descriptor=AgentDescriptor(
+            name="Acme Policy Assistant",
+            description="Answers customer policy questions with a search tool",
+            model=model,
+            model_args={"reasoning_effort": "low"},
+            instructions=PromptSpec(
+                template=INSTRUCTIONS_TEMPLATE,
+                values=instruction_values,
+            ),
+            # Require one search call so the example always exercises the tool
+            # loop before the assistant answers.
+            tools=Tools(
+                tools=[search_help_center],
+                tool_choice="required",
+                tool_call_limits={"search_help_center": 1},
+            ),
+        ),
     )
     question = (
         "If I opened my Acme UltraBook yesterday, can I still return it next week?"
     )
 
     outcome = await runtime.send_message(question, recipient=agent_id)
-    result = require_run_result(outcome)
-    print_turn(question, result.final_output)
+    await runtime.stop_when_idle()
+
+    if outcome.status != DeliveryStatus.DELIVERED:
+        raise RuntimeError(f"Expected delivered outcome, got {outcome.status.value}.")
+    if not isinstance(outcome.response_payload, RunResult):
+        raise RuntimeError("Expected a RunResult response payload.")
 
     run_state = agent.run_state
-    await runtime.stop_when_idle()
     if run_state is None:
         raise RuntimeError("Expected the harness agent to expose persisted run state.")
-    print_summary(MODEL_NAME, run_state)
+
+    tool_name = "not found"
+    tool_arguments = "not found"
+    for response in run_state.responses:
+        tool_calls = cast(list[ToolCall], response.choices[0].message.tool_calls or [])
+        if not tool_calls:
+            continue
+        tool_name = tool_calls[0].function.name or "not found"
+        tool_arguments = tool_calls[0].function.arguments or "not found"
+        break
+
+    tool_output = "not found"
+    for item in run_state.continuation_history:
+        if not isinstance(item, dict):
+            continue
+        message = cast(dict[str, object], item)
+        if message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        tool_output = content if isinstance(content, str) else str(content)
+        break
+
+    print("Example: tool-calling search answer")
+    print(f"Model: {MODEL_NAME}")
+    print()
+    print(f"User: {question}")
+    print()
+    print(f"Assistant: {outcome.response_payload.final_output}")
+    print()
+    print(f"Tool called: {tool_name}")
+    print(f"Tool arguments: {tool_arguments}")
+    print(f"Mocked tool result: {tool_output}")
+    print(f"Turns completed: {run_state.turn_count}")
 
 
 def main() -> None:

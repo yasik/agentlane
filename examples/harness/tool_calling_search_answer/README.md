@@ -13,7 +13,8 @@ by `gpt-5.4-mini`.
 
 ## Why This Example Exists
 
-The main thing to notice is how little framework code is needed:
+The main thing to notice is how little framework code is needed in the main
+script itself:
 
 ```python
 @as_tool
@@ -23,9 +24,10 @@ async def search_help_center(question: str) -> str:
     return MOCK_SEARCH_RESULT
 
 
+model = ResponsesClient(config=Config(api_key=api_key, model="gpt-5.4-mini"))
 descriptor = AgentDescriptor(
     name="Acme Policy Assistant",
-    model=ResponsesClient(Config(api_key=api_key, model="gpt-5.4-mini")),
+    model=model,
     instructions=PromptSpec(
         template=INSTRUCTIONS_TEMPLATE,
         values={
@@ -43,7 +45,8 @@ descriptor = AgentDescriptor(
 
 agent = Agent.bind(runtime, agent_id, runner=Runner(max_attempts=2), descriptor=descriptor)
 outcome = await runtime.send_message(question, recipient=agent_id)
-result = require_run_result(outcome)
+if outcome.status != DeliveryStatus.DELIVERED:
+    raise RuntimeError(...)
 ```
 
 `tool_choice="required"` guarantees the first model turn calls the search tool.
@@ -72,7 +75,7 @@ uv run python examples/harness/tool_calling_search_answer/main.py
 
 1. one user policy question,
 2. one real assistant answer,
-3. a summary panel showing:
+3. a short summary showing:
    - the tool name,
    - the tool arguments chosen by the model, and
    - the mocked search result that the harness fed back into the loop.
