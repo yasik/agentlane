@@ -10,7 +10,10 @@ harness directly.
 
 ## Run
 
+Both demos require `OPENAI_API_KEY` in the environment:
+
 ```bash
+export OPENAI_API_KEY=sk-...
 uv run python examples/harness/customer_support_conversation/main.py
 uv run python examples/harness/tool_calling_search_answer/main.py
 ```

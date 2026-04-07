@@ -55,9 +55,16 @@ for you without extra boilerplate.
 
 ## Run
 
-The example reads `OPENAI_API_KEY` from the repository `.env` file.
+The example requires `OPENAI_API_KEY` in the environment.
 
 ```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/tool_calling_search_answer/main.py
+```
+
+Or export it once and run without the prefix:
+
+```bash
+export OPENAI_API_KEY=sk-...
 uv run python examples/harness/tool_calling_search_answer/main.py
 ```
 

@@ -17,8 +17,7 @@ It demonstrates:
 3. real assistant replies returned through the harness runner
 4. simulated process restart by carrying `RunState` into a new agent instance
 
-The demo loads `OPENAI_API_KEY` from the repository `.env` file automatically
-when the variable is not already present in the environment.
+The demo requires `OPENAI_API_KEY` in the environment.
 
 ## Why This Example Matters
 
@@ -54,5 +53,12 @@ which will eventually replace the mocked follow-up turns used by this demo.
 ## Run
 
 ```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/customer_support_conversation/main.py
+```
+
+Or export it once and run without the prefix:
+
+```bash
+export OPENAI_API_KEY=sk-...
 uv run python examples/harness/customer_support_conversation/main.py
 ```

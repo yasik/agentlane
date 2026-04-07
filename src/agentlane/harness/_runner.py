@@ -121,6 +121,15 @@ class Runner:
         resolved_hooks = hooks or RunnerHooks()
         result: RunResult | None = None
 
+        # Narrow the agent to the runner protocol once per run. All helper
+        # functions receive the narrowed value instead of re-checking.
+        runner_task = _narrow_runner_task(agent)
+
+        # Incremental tool-usage counters — updated after each tool batch
+        # so we never re-scan all prior responses.
+        tool_call_counts: dict[str, int] = {}
+        tool_round_trips = 0
+
         # Hook receives the same working copy — safe because the lifecycle
         # already isolated it before calling us.
         await resolved_hooks.on_agent_start(agent, state)
@@ -128,21 +137,20 @@ class Runner:
             while True:
                 state.turn_count += 1
                 _check_turn_limit(state.turn_count, self._max_turns)
-                visible_tools = _visible_tools(agent, state)
+                visible_tools = _visible_tools(
+                    runner_task, tool_call_counts, tool_round_trips
+                )
 
-                # 1. Build the full message list from instructions + history
-                messages = _build_request(agent, state)
-
-                # 2. Call the model (with retry if configured)
+                messages = _build_request(runner_task, state)
                 response = await self._run_with_retry(
                     agent=agent,
+                    runner_task=runner_task,
                     messages=messages,
                     tools=visible_tools,
                     hooks=resolved_hooks,
                     cancellation_token=cancellation_token,
                 )
 
-                # 3. Record the raw response on the working state
                 state.responses.append(response)
                 state.continuation_history.append(response)
 
@@ -160,9 +168,15 @@ class Runner:
                         cancellation_token=cancellation_token,
                     )
                     state.continuation_history.extend(tool_messages)
+
+                    # Update incremental counters from this batch
+                    tool_round_trips += 1
+                    for tc in tool_calls:
+                        name = tc.function.name or ""
+                        tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+
                     continue
 
-                # 4. Validate the terminal assistant answer and return it.
                 _validate_terminal_response(response)
                 result = RunResult(
                     final_output=_extract_direct_answer(response),
@@ -178,18 +192,16 @@ class Runner:
         self,
         *,
         agent: Task,
+        runner_task: RunnerTask | None,
         messages: list[MessageDict],
         tools: Tools | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> ModelResponse:
-        """Execute one model turn under the configured retry policy.
-
-        Uses the pre-cached ``self._retryable_run_once`` wrapper so the
-        retry decorator is not re-created per turn.
-        """
+        """Execute one model turn under the configured retry policy."""
         retry_result = await self._retryable_run_once(
             agent=agent,
+            runner_task=runner_task,
             messages=messages,
             tools=tools,
             hooks=hooks,
@@ -201,19 +213,20 @@ class Runner:
         self,
         *,
         agent: Task,
+        runner_task: RunnerTask | None,
         messages: list[MessageDict],
         tools: Tools | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> ModelResponse:
         """Execute one single model attempt (no retry logic here)."""
-        model = _require_model(agent)
+        model = _require_model(runner_task)
 
         await hooks.on_llm_start(agent, messages)
         response = await model(
             messages,
-            extra_call_args=_model_args(agent),
-            schema=_schema(agent),
+            extra_call_args=_model_args(runner_task),
+            schema=_schema(runner_task),
             tools=tools,
             cancellation_token=cancellation_token,
         )
@@ -257,21 +270,17 @@ class Runner:
         return tool_messages
 
 
-def _build_request(agent: Task, state: RunState) -> list[MessageDict]:
+def _build_request(
+    runner_task: RunnerTask | None,
+    state: RunState,
+) -> list[MessageDict]:
     """Build the full model request from agent config and run state."""
-    runner_task = _as_runner_task(agent)
-
     messages: list[MessageDict] = []
 
-    # System instructions (if any) always come first
     messages.extend(
         _instruction_messages(runner_task.instructions if runner_task else None)
     )
-
-    # Original input — the first user message(s) that started this run
     messages.extend(_input_to_messages(state.original_input))
-
-    # Continuation history — alternating assistant/user turns
     for item in state.continuation_history:
         messages.extend(_history_item_to_messages(item))
 
@@ -331,12 +340,7 @@ def _prompt_messages(
     role: Literal["system", "user"],
     prompt_spec: PromptSpec[Any],
 ) -> list[MessageDict]:
-    """Render a ``PromptSpec`` and keep only messages matching ``role``.
-
-    A single template may render both system and user messages. The runner
-    calls this once per role so that instruction-only templates produce
-    system messages and user-only templates produce user messages.
-    """
+    """Render a ``PromptSpec`` and keep only messages matching ``role``."""
     messages = [
         _normalize_message(message)
         for message in prompt_spec.template.render_messages(prompt_spec.values)
@@ -393,30 +397,26 @@ def _as_message_dict(item: object) -> dict[str, object] | None:
     return None
 
 
-def _as_runner_task(agent: Task) -> RunnerTask | None:
-    """Narrow a ``Task`` to ``RunnerTask`` if it exposes runner properties."""
+def _narrow_runner_task(agent: Task) -> RunnerTask | None:
+    """Narrow a ``Task`` to ``RunnerTask`` once per run."""
     if isinstance(agent, RunnerTask):
         return agent
     return None
 
 
-def _require_model(agent: Task) -> Model[ModelResponse]:
+def _require_model(runner_task: RunnerTask | None) -> Model[ModelResponse]:
     """Return the agent's model client, or raise if unconfigured."""
-    runner_task = _as_runner_task(agent)
     if runner_task is not None and runner_task.model is not None:
         return runner_task.model
-
     raise RuntimeError(
         "Runner requires the task to expose a configured 'model' client."
     )
 
 
-def _model_args(agent: Task) -> dict[str, object] | None:
+def _model_args(runner_task: RunnerTask | None) -> dict[str, object] | None:
     """Return a defensive copy of the agent's model-call arguments."""
-    runner_task = _as_runner_task(agent)
     if runner_task is None:
         return None
-
     model_args = runner_task.model_args
     if model_args is None:
         return None
@@ -425,36 +425,38 @@ def _model_args(agent: Task) -> dict[str, object] | None:
     return dict(model_args)
 
 
-def _schema(agent: Task) -> type[BaseModel] | OutputSchema[Any] | None:
+def _schema(
+    runner_task: RunnerTask | None,
+) -> type[BaseModel] | OutputSchema[Any] | None:
     """Return the structured-output schema exposed by the agent, if any."""
-    runner_task = _as_runner_task(agent)
     return runner_task.schema if runner_task else None
 
 
-def _tools(agent: Task) -> Tools | None:
+def _tools(runner_task: RunnerTask | None) -> Tools | None:
     """Return the tool configuration exposed by the agent, if any."""
-    runner_task = _as_runner_task(agent)
     return runner_task.tools if runner_task else None
 
 
-def _visible_tools(agent: Task, state: RunState) -> Tools | None:
+def _visible_tools(
+    runner_task: RunnerTask | None,
+    tool_call_counts: dict[str, int],
+    tool_round_trips: int,
+) -> Tools | None:
     """Return the effective tools visible for the next model turn."""
-    tools = _tools(agent)
+    tools = _tools(runner_task)
     if tools is None:
         return None
-
-    return _limit_tools(tools, state.responses)
+    return _limit_tools(tools, tool_call_counts, tool_round_trips)
 
 
 def _limit_tools(
     tools: Tools,
-    responses: list[ModelResponse],
+    tool_call_counts: dict[str, int],
+    tool_round_trips: int,
 ) -> Tools | None:
-    """Apply tool visibility limits to the next model request."""
+    """Apply tool visibility limits using incremental counters."""
     if tools.tool_choice == "none":
         return tools
-
-    tool_call_counts, tool_round_trips = _tool_usage_from_responses(responses)
 
     if tool_round_trips >= tools.max_tool_round_trips:
         return None
@@ -473,29 +475,8 @@ def _limit_tools(
     if len(active_tools) == len(tools.normalized_tools):
         return tools
 
-    # The runner strips exhausted tools from later requests instead of
-    # delegating that policy to model adapters.
+    # Strip exhausted tools from later requests.
     return replace(tools, tools=active_tools)
-
-
-def _tool_usage_from_responses(
-    responses: list[ModelResponse],
-) -> tuple[dict[str, int], int]:
-    """Summarize prior tool usage from accumulated run responses."""
-    tool_call_counts: dict[str, int] = {}
-    tool_round_trips = 0
-
-    for response in responses:
-        tool_calls = _extract_tool_calls(response)
-        if not tool_calls:
-            continue
-
-        tool_round_trips += 1
-        for tool_call in tool_calls:
-            tool_name = tool_call.function.name or ""
-            tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
-
-    return tool_call_counts, tool_round_trips
 
 
 def _check_turn_limit(turn_count: int, max_turns: int) -> None:

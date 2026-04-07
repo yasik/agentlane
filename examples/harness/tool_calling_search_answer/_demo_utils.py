@@ -1,8 +1,6 @@
 """Small utilities that keep the tool-calling demo focused on the harness API."""
 
 import logging
-import os
-from pathlib import Path
 from typing import Any, cast
 
 import structlog
@@ -13,8 +11,6 @@ from agentlane.harness import RunResult, RunState
 from agentlane.messaging import DeliveryOutcome, DeliveryStatus
 from agentlane.models import MessageDict
 
-CONSOLE = Console()
-
 
 def configure_demo_logging() -> None:
     """Mute provider debug logs so the transcript stays readable."""
@@ -23,26 +19,7 @@ def configure_demo_logging() -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
 
-
-def load_openai_api_key(env_file: Path) -> str:
-    """Return `OPENAI_API_KEY`, loading it from `.env` when needed."""
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            key, value = stripped.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
-
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if api_key:
-        return api_key
-    raise RuntimeError(
-        "OPENAI_API_KEY is required. Add it to the repository .env file or the environment."
-    )
+CONSOLE = Console()
 
 
 def print_intro() -> None:

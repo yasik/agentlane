@@ -1,8 +1,9 @@
 """Real OpenAI-backed harness demo with templated instructions and run resume."""
 
 import asyncio
-from pathlib import Path
+import os
 from typing import TypedDict
+
 
 from agentlane_openai import ResponsesClient
 
@@ -12,7 +13,6 @@ from agentlane.models import Config, OutputSchema, PromptSpec, PromptTemplate
 from agentlane.runtime import SingleThreadedRuntimeEngine
 from _demo_utils import (
     configure_demo_logging,
-    load_openai_api_key,
     print_intro,
     print_restart,
     print_summary,
@@ -21,8 +21,6 @@ from _demo_utils import (
 )
 
 MODEL_NAME = "gpt-5.4-mini"
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ENV_FILE = REPO_ROOT / ".env"
 
 
 class SupportInstructionValues(TypedDict):
@@ -102,7 +100,7 @@ def _build_descriptor(api_key: str) -> AgentDescriptor:
 async def run_demo() -> None:
     """Run the real multi-turn support demo."""
     configure_demo_logging()
-    api_key = load_openai_api_key(ENV_FILE)
+    api_key = os.environ["OPENAI_API_KEY"]
     runner = Runner(max_attempts=2)
     descriptor = _build_descriptor(api_key)
     agent_id = AgentId.from_values("support-agent", "customer-88421")

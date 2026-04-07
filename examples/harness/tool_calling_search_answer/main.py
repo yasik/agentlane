@@ -1,12 +1,11 @@
 """Real OpenAI-backed harness demo showing the Phase 5 tool loop."""
 
 import asyncio
-from pathlib import Path
+import os
 from typing import TypedDict
 
 from _demo_utils import (
     configure_demo_logging,
-    load_openai_api_key,
     print_intro,
     print_summary,
     print_turn,
@@ -27,8 +26,6 @@ from agentlane.models import (
 from agentlane.runtime import SingleThreadedRuntimeEngine
 
 MODEL_NAME = "gpt-5.4-mini"
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ENV_FILE = REPO_ROOT / ".env"
 MOCK_SEARCH_RESULT = (
     "Acme Help Center: Opened laptops may be returned within 30 days of delivery. "
     "Standard returns do not cover devices with accidental damage."
@@ -96,7 +93,7 @@ def build_descriptor(api_key: str) -> AgentDescriptor:
 async def run_demo() -> None:
     """Run the real tool-calling demo."""
     configure_demo_logging()
-    api_key = load_openai_api_key(ENV_FILE)
+    api_key = os.environ["OPENAI_API_KEY"]
     runner = Runner(max_attempts=2)
     runtime = SingleThreadedRuntimeEngine()
     agent_id = AgentId.from_values("policy-agent", "tool-demo")

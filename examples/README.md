@@ -22,16 +22,16 @@ Run the runtime multi-agent workflow demo:
 uv run python examples/runtime/multi_agent_workflow/main.py
 ```
 
-Run the harness customer-support demo:
+Run the harness customer-support demo (requires `OPENAI_API_KEY`):
 
 ```bash
-uv run python examples/harness/customer_support_conversation/main.py
+OPENAI_API_KEY=sk-... uv run python examples/harness/customer_support_conversation/main.py
 ```
 
-Run the harness tool-calling demo:
+Run the harness tool-calling demo (requires `OPENAI_API_KEY`):
 
 ```bash
-uv run python examples/harness/tool_calling_search_answer/main.py
+OPENAI_API_KEY=sk-... uv run python examples/harness/tool_calling_search_answer/main.py
 ```
 
 Run the distributed publish fan-out / fan-in demo:
