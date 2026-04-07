@@ -1084,7 +1084,7 @@ def test_runner_executes_agent_as_tool_and_resumes_caller_loop() -> None:
         assert child_model.calls == [
             [
                 _message("system", "You answer policy questions."),
-                _message("user", '{"order_id": "A-42"}'),
+                _message("user", '{"order_id":"A-42"}'),
             ]
         ]
         assert parent_model.calls == [
@@ -1143,7 +1143,7 @@ def test_delegated_result_text_serializes_structured_run_result_output() -> None
     assert delegated_result_text(outcome) == '{"value":"covered"}'
 
 
-def test_runner_executes_parameterless_agent_tool_without_synthetic_task_input() -> (
+def test_runner_executes_parameterless_agent_tool_with_empty_structured_payload() -> (
     None
 ):
     async def scenario() -> None:
@@ -1190,7 +1190,10 @@ def test_runner_executes_parameterless_agent_tool_without_synthetic_task_input()
         assert result.final_output == "parent complete"
         child_model = cast(_SequenceModel, child_descriptor.model)
         assert child_model.calls == [
-            [_message("system", "You inspect policy requests.")]
+            [
+                _message("system", "You inspect policy requests."),
+                _message("user", "{}"),
+            ]
         ]
 
     asyncio.run(scenario())
@@ -1368,8 +1371,12 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
                     tool_calls=[
                         _make_tool_call(
                             tool_id="call_1",
-                            name="delegate",
-                            arguments='{"task":"Research the refund exception."}',
+                            name="agent",
+                            arguments=(
+                                '{"name":"Refund Exception Research",'
+                                '"description":"Investigate the refund exception policy.",'
+                                '"task":"Research the refund exception."}'
+                            ),
                         )
                     ],
                 ),
@@ -1405,9 +1412,12 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
             [
                 _message(
                     "system",
-                    "You are a delegated helper agent working on one focused task for another agent. Complete only that task and return a concise useful result. Delegated task: Research the refund exception.",
+                    "You are a delegated helper agent working on one focused task for another agent. Delegated helper name: Refund Exception Research. Delegated helper description: Investigate the refund exception policy. Delegated task: Research the refund exception. Complete only that task and return a concise useful result.",
                 ),
-                _message("user", "Research the refund exception."),
+                _message(
+                    "user",
+                    '{"name":"Refund Exception Research","description":"Investigate the refund exception policy.","task":"Research the refund exception."}',
+                ),
             ]
         ]
 

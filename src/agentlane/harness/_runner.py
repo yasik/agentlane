@@ -39,6 +39,7 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken, RuntimeEngine
 
 from ._handoff import (
+    DefaultAgentToolInput,
     DelegatedTaskInput,
     default_handoff_task_message,
     default_handoff_tool_result,
@@ -438,7 +439,7 @@ class Runner:
         cancellation_token: CancellationToken | None,
     ) -> MessageDict:
         """Execute one default spawned agent-as-tool call."""
-        parsed_input = _parse_delegated_tool_args(
+        parsed_input = _parse_default_agent_tool_input(
             tool_call=tool_call,
             args_model=tool_definition.args_type(),
         )
@@ -536,7 +537,7 @@ class Runner:
         runner_task: RunnerTask | None,
         tool_name: str,
         descriptor: AgentDescriptor,
-        run_input: str | list[object],
+        run_input: list[object],
         cancellation_token: CancellationToken | None,
     ) -> str:
         """Run one delegated sub-agent as a subroutine and return text output."""
@@ -567,17 +568,16 @@ class Runner:
         runner_task: RunnerTask | None,
         tool_name: str,
         tool_definition: DefaultAgentTool,
-        parsed_input: BaseModel,
+        parsed_input: DefaultAgentToolInput,
         cancellation_token: CancellationToken | None,
     ) -> str:
         """Run one generic spawned helper agent as a subroutine."""
         runtime = _require_runtime_engine(agent)
-        task_text = _delegated_task_text(parsed_input)
         child_descriptor = AgentDescriptor(
-            name="Delegated Agent",
-            description="Fresh delegated helper agent.",
+            name=parsed_input.name,
+            description=parsed_input.description,
             model=tool_definition.model or _require_model(runner_task),
-            instructions=tool_definition.resolved_instructions(task_text),
+            instructions=tool_definition.resolved_instructions(parsed_input),
             model_args=(
                 dict(tool_definition.model_args)
                 if tool_definition.model_args is not None
@@ -595,7 +595,7 @@ class Runner:
             ),
         )
         outcome = await agent.send_message(
-            _default_agent_tool_run_input(parsed_input),
+            _agent_tool_run_input(parsed_input),
             recipient=delegated_agent_id(agent.id, tool_name, kind="tool"),
             cancellation_token=cancellation_token,
         )
@@ -784,34 +784,36 @@ def _parse_delegated_task_input(
     return parsed_input
 
 
-def _agent_tool_run_input(parsed_input: BaseModel) -> str | list[object]:
+def _parse_default_agent_tool_input(
+    *,
+    tool_call: ToolCall,
+    args_model: type[DefaultAgentToolInput],
+) -> DefaultAgentToolInput:
+    """Validate one generic spawned-agent tool call.
+
+    This follows the same path as predefined agent tools: parse the model's
+    tool-call arguments into the declared Pydantic schema, then pass that
+    structured payload downstream.
+    """
+    parsed_input = _parse_delegated_tool_args(
+        tool_call=tool_call,
+        args_model=args_model,
+    )
+    if not isinstance(parsed_input, DefaultAgentToolInput):
+        raise AssertionError(
+            "Default agent tool parsing returned the wrong model type."
+        )
+    return parsed_input
+
+
+def _agent_tool_run_input(parsed_input: BaseModel) -> list[object]:
     """Build the downstream run input for a predefined agent-as-tool call.
 
-    Predefined sub-agents receive exactly the validated tool-args payload.
-    The harness does not reserve or strip any special `task` field here.
+    Agent-as-tool always forwards the validated structured payload that the
+    model already produced for the tool schema. This keeps predefined and
+    generic spawned helper agents aligned with normal tool-call mechanics.
     """
-    payload = parsed_input.model_dump(mode="json", exclude_none=True)
-    if payload:
-        return [payload]
-    return []
-
-
-def _default_agent_tool_run_input(parsed_input: BaseModel) -> str | list[object]:
-    """Build the downstream run input for a default spawned agent tool."""
-    task_text = _delegated_task_text(parsed_input)
-    if task_text:
-        return task_text
-    return "Complete the delegated task."
-
-
-def _delegated_task_text(parsed_input: BaseModel) -> str | None:
-    """Extract the optional `task` field from one delegated args model."""
-    task_value = getattr(parsed_input, "task", None)
-    if isinstance(task_value, str):
-        stripped_task = task_value.strip()
-        if stripped_task:
-            return stripped_task
-    return None
+    return [parsed_input]
 
 
 def _tool_result_message(

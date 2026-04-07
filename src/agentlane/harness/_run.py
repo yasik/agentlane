@@ -7,6 +7,8 @@ lifecycle and the runner.
 from dataclasses import dataclass
 from typing import cast
 
+from pydantic import BaseModel
+
 from agentlane.models import ModelResponse
 
 
@@ -93,11 +95,14 @@ def copy_original_input(original_input: str | list[object]) -> str | list[object
 def copy_item(item: object) -> object:
     """Copy one generic run item when shallow ownership is needed.
 
-    Only mutable containers (lists) are copied. Everything else —
-    strings, ``ModelResponse``, ``PromptSpec`` — is treated as immutable.
+    Mutable containers and structured ``BaseModel`` payloads are copied.
+    Everything else — strings, ``ModelResponse``, ``PromptSpec`` — is treated
+    as immutable.
     """
     if isinstance(item, list):
         return list(cast(list[object], item))
     if isinstance(item, dict):
         return dict(cast(dict[str, object], item))
+    if isinstance(item, BaseModel):
+        return item.model_copy(deep=True)
     return item

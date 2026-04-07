@@ -33,8 +33,10 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 
 from ._handoff import (
+    DefaultAgentToolInput,
     DelegatedTaskInput,
     agent_tool_description,
+    default_agent_tool_details,
     default_agent_tool_instructions,
     handoff_description,
     normalize_delegation_tool_name,
@@ -179,15 +181,22 @@ class AgentTool(ToolSpec[Any]):
         self.descriptor = descriptor
 
 
-class DefaultAgentTool(ToolSpec[DelegatedTaskInput]):
-    """Declarative tool schema for a generic spawned helper agent."""
+class DefaultAgentTool(ToolSpec[DefaultAgentToolInput]):
+    """Declarative tool schema for one generic spawned helper agent.
+
+    The model sees one normal tool, typically named ``agent``. Its arguments
+    define the delegated helper's name and optional task metadata. The runner
+    parses those arguments into ``DefaultAgentToolInput`` and forwards that
+    structured payload to the spawned child agent exactly like any other
+    agent-as-tool call.
+    """
 
     def __init__(
         self,
         *,
-        name: str = "delegate",
+        name: str = "agent",
         description: str = (
-            "Delegate a focused task to a fresh helper agent and continue with the result."
+            "Spawn a focused helper agent by name and optional task, then continue with the result."
         ),
         instructions: str | None = None,
         model: Model[ModelResponse] | None = None,
@@ -198,7 +207,7 @@ class DefaultAgentTool(ToolSpec[DelegatedTaskInput]):
         super().__init__(
             name=name,
             description=description,
-            args_model=DelegatedTaskInput,
+            args_model=DefaultAgentToolInput,
         )
         self.instructions = instructions
         self.model = model
@@ -206,13 +215,23 @@ class DefaultAgentTool(ToolSpec[DelegatedTaskInput]):
         self.output_schema = output_schema
         self.tools = tools
 
-    def resolved_instructions(self, task: str | None) -> str:
+    def resolved_instructions(
+        self,
+        parsed_input: DefaultAgentToolInput,
+    ) -> str:
         """Return instructions for one spawned helper invocation."""
         if self.instructions is not None:
-            if task:
-                return f"{self.instructions}\n\nDelegated task: {task}"
-            return self.instructions
-        return default_agent_tool_instructions(task)
+            return f"{self.instructions}\n\n" + default_agent_tool_details(
+                name=parsed_input.name,
+                description=parsed_input.description,
+                task=parsed_input.task,
+            )
+
+        return default_agent_tool_instructions(
+            name=parsed_input.name,
+            description=parsed_input.description,
+            task=parsed_input.task,
+        )
 
 
 class HandoffTool(ToolSpec[DelegatedTaskInput]):

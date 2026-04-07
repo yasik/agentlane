@@ -118,13 +118,13 @@ Phase 6 adds delegated sub-agent execution with two distinct invocation
 contracts:
 
 1. `AgentDescriptor.as_tool(args_model=...)` exposes predefined agent-as-tool metadata that can live in the normal `Tools(...)` catalog.
-2. `DefaultAgentTool` adds the generic spawned-helper agent-as-tool path for arbitrary delegated tasks.
+2. `DefaultAgentTool` adds the generic spawned-helper agent-as-tool path as one model-visible `agent` tool with `name`, optional `description`, and optional `task` fields.
 3. `AgentDescriptor.handoffs` and `AgentDescriptor.default_handoff` define first-class transfer targets that are also exposed to the model as tool metadata.
 4. Agent-as-tool and handoff both route through runtime `send_message`, but the runner applies different semantics:
    - agent-as-tool gets only structured input and returns a string tool result,
    - handoff transfers the full conversation history to the next agent and ends the caller.
 5. Predefined agent-as-tool calls preserve full prompt isolation and use only their declared args model. There is no reserved universal `task` field on this path.
-6. Default spawned agent-as-tool calls inject a default helper prompt with the delegated task description and also pass the task as user input.
+6. Default spawned agent-as-tool calls use the same validated structured payload as predefined agent tools, but they synthesize a fresh child descriptor from that payload and inject a default helper prompt built from it.
 7. Handoff preserves the trigger path by transferring the parent assistant handoff-call turn plus a synthetic transfer acknowledgement into downstream history.
 8. Default handoff no longer injects a new system prompt. The downstream agent uses only its own configured `instructions` when present.
 9. Delegated child agents use fresh runtime `AgentId` values per invocation for both subroutine and transfer flows.

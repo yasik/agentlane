@@ -21,6 +21,23 @@ class DelegatedTaskInput(BaseModel):
     )
 
 
+class DefaultAgentToolInput(BaseModel):
+    """Structured input for one generic spawned agent-as-tool call."""
+
+    name: str = Field(
+        min_length=1,
+        description="Short role-like name for the delegated helper agent.",
+    )
+    description: str | None = Field(
+        default=None,
+        description="Optional short description of what this delegated helper should focus on.",
+    )
+    task: str | None = Field(
+        default=None,
+        description="Optional focused task for the delegated helper agent.",
+    )
+
+
 def normalize_delegation_tool_name(value: str) -> str:
     """Return a tool-safe name derived from one human-readable label."""
     normalized = re.sub(r"[^0-9A-Za-z_]+", "_", value.strip()).strip("_").lower()
@@ -62,15 +79,39 @@ def default_handoff_tool_result(tool_name: str) -> str:
     return f"Handoff accepted by {tool_name}. Control transfers now."
 
 
-def default_agent_tool_instructions(task: str | None) -> str:
-    """Return the default prompt for one generic spawned agent-as-tool call."""
-    task_suffix = ""
+def default_agent_tool_details(
+    *,
+    name: str,
+    description: str | None,
+    task: str | None,
+) -> str:
+    """Return the dynamic details injected into one generic helper agent."""
+    details: list[str] = [f"Delegated helper name: {_terminal_sentence(name)}"]
+    if description:
+        details.append(
+            f"Delegated helper description: {_terminal_sentence(description)}"
+        )
     if task:
-        task_suffix = f" Delegated task: {task}"
+        details.append(f"Delegated task: {_terminal_sentence(task)}")
+    return " ".join(details)
+
+
+def default_agent_tool_instructions(
+    *,
+    name: str,
+    description: str | None,
+    task: str | None,
+) -> str:
+    """Return the default prompt for one generic spawned agent-as-tool call."""
     return (
         "You are a delegated helper agent working on one focused task for "
-        "another agent. Complete only that task and return a concise useful "
-        f"result.{task_suffix}"
+        "another agent. "
+        + default_agent_tool_details(
+            name=name,
+            description=description,
+            task=task,
+        )
+        + " Complete only that task and return a concise useful result."
     )
 
 
@@ -155,3 +196,11 @@ def _delegated_value_as_text(value: object) -> str:
         return json.dumps(value)
     except TypeError:
         return str(value)
+
+
+def _terminal_sentence(value: str) -> str:
+    """Return one string guaranteed to end like a sentence."""
+    stripped = value.strip()
+    if stripped.endswith((".", "!", "?")):
+        return stripped
+    return f"{stripped}."

@@ -132,9 +132,9 @@ Phase 4 through Phase 6 keep the following boundaries explicit:
 7. `Agent.as_tool(...)` is the instance convenience wrapper over the same descriptor-level metadata.
 8. `AgentDescriptor.handoffs` defines first-class transfer targets that are also exposed to the model as tool metadata.
 9. `AgentDescriptor.default_handoff` defines one generic `handoff` tool that spawns a fresh transfer target on demand.
-10. `DefaultAgentTool` defines one generic spawned helper-agent tool for arbitrary delegated tasks.
+10. `DefaultAgentTool` defines one generic spawned helper-agent tool exposed as one model-visible `agent` tool with `name`, optional `description`, and optional `task` arguments.
 11. Delegated agent tools and handoffs both route through runtime `send_message`, but the runner applies different semantics:
     - predefined agent-as-tool gets exactly its validated args-model payload and keeps full prompt isolation,
-    - default agent-as-tool gets a default helper prompt plus the delegated task as user input,
+    - default agent-as-tool uses the same validated-payload transport, but synthesizes a fresh child agent descriptor from the payload and gives that child a default helper prompt,
     - handoff transfers the run to the next agent with full conversation history, including the triggering handoff turn.
 12. Parent tool inheritance remains scoped to the parent's explicit `Tools` configuration. Handoff visibility is rebuilt per concrete agent instance and is not inherited as executable tool state.

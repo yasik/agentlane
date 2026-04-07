@@ -114,10 +114,11 @@ Phase 5 and Phase 6 keep the tool boundary simple.
 1. Tool calls returned by the model are executed by the harness runner, not by provider clients.
 2. Native executable tools still go through the shared `ToolExecutor`.
 3. Predefined agent-as-tool calls are routed through runtime `send_message`, receive exactly the validated args-model payload for that tool, and return a tool result string to the caller loop.
-4. `DefaultAgentTool` is the generic spawned-helper path. It injects a default helper prompt and also sends the delegated task as user input.
-5. First-class handoffs are also model-visible tool choices, but the runner intercepts them specially instead of treating them as normal tool results.
-6. On handoff, the runner transfers the full conversation history, preserves the triggering handoff turn as downstream history, adds a synthetic transfer acknowledgement, and then appends the optional delegation message.
-7. Handoff does not inject a new default system prompt. The downstream agent uses only its own configured `instructions` when present.
-8. `RunResult.run_state` is carried through so lifecycle persistence can continue from the delegated child after a transfer.
-9. The runner also owns later-turn tool visibility by applying per-tool call limits and maximum tool round-trip limits from accumulated `RunState.responses`.
-10. Provider clients stay thin: they accept tool definitions in the request and return raw tool-call responses, but they do not execute tools or run their own tool loop.
+4. `DefaultAgentTool` is the generic spawned-helper path exposed as one model-visible `agent` tool with `name`, optional `description`, and optional `task` arguments.
+5. Predefined and default agent-as-tool calls share the same mechanics: the runner validates the tool-call arguments into a Pydantic model and forwards that structured payload to the delegated child agent as its user-side input.
+6. First-class handoffs are also model-visible tool choices, but the runner intercepts them specially instead of treating them as normal tool results.
+7. On handoff, the runner transfers the full conversation history, preserves the triggering handoff turn as downstream history, adds a synthetic transfer acknowledgement, and then appends the optional delegation message.
+8. Handoff does not inject a new default system prompt. The downstream agent uses only its own configured `instructions` when present.
+9. `RunResult.run_state` is carried through so lifecycle persistence can continue from the delegated child after a transfer.
+10. The runner also owns later-turn tool visibility by applying per-tool call limits and maximum tool round-trip limits from accumulated `RunState.responses`.
+11. Provider clients stay thin: they accept tool definitions in the request and return raw tool-call responses, but they do not execute tools or run their own tool loop.
