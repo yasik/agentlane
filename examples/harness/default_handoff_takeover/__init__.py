@@ -1,0 +1,1 @@
+"""Default handoff harness example."""

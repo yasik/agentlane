@@ -34,6 +34,30 @@ Run the harness tool-calling demo (requires `OPENAI_API_KEY`):
 OPENAI_API_KEY=sk-... uv run python examples/harness/tool_calling_search_answer/main.py
 ```
 
+Run the harness predefined agent-as-tool demo (requires `OPENAI_API_KEY`):
+
+```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/agent_as_tool_policy_specialist/main.py
+```
+
+Run the harness generic `agent` tool demo (requires `OPENAI_API_KEY`):
+
+```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_tool_note_writer/main.py
+```
+
+Run the harness predefined handoff demo (requires `OPENAI_API_KEY`):
+
+```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/handoff_to_returns_specialist/main.py
+```
+
+Run the harness default handoff demo (requires `OPENAI_API_KEY`):
+
+```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/default_handoff_takeover/main.py
+```
+
 Run the distributed publish fan-out / fan-in demo:
 
 ```bash
