@@ -1,6 +1,6 @@
 [project]
 name = "agentlane"
-version = "0.2.0"
+version = "0.3.0"
 description = "AI agent runtime and messaging framework"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -35,7 +35,7 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/yasik/agentlane-py"
+Repository = "https://github.com/yasik/agentlane"
 
 [tool.mypy]
 strict = true

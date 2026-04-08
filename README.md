@@ -23,7 +23,32 @@ boundary, and a cleaner path from local execution to distributed messaging.
   <a href="https://img.shields.io/badge/python-3.12-blue?style=flat-square"><img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square" alt="Python 3.12"></a>
 </p>
 
-## What Ships Today
+## Key Differentiators
+
+Many agent frameworks stop at an in-process agent loop. AgentLane is built
+around a runtime and messaging model first, then layers model primitives and a
+default harness on top of that foundation.
+
+1. **Runtime-first, not loop-first**: agents communicate through explicit
+   messaging and routing primitives instead of assuming everything is a local
+   function call inside one process.
+2. **Same mental model from local to distributed**: the same `send_message(...)`
+   and `publish_message(...)` semantics work in single-threaded and distributed
+   runtime setups.
+3. **Clear delivery guarantees**: per-recipient FIFO ordering, fair scheduling,
+   explicit delivery outcomes, and durable instance identity are part of the
+   framework contract.
+4. **Harness built on the runtime**: handoffs and delegated
+   sub-agents route through the same runtime messaging model as everything else,
+   which keeps local and future distributed behavior aligned.
+6. **Run-oriented public API**: developers work with descriptors, tools,
+   prompts, `RunState`, and `RunResult` instead of assembling low-level model
+   wire payloads by hand.
+7. **Framework flexibility**: you can use only the
+   runtime, only the model layer, or the full harness, instead of being forced
+   into one monolithic abstraction stack.
+
+## Key Concepts
 
 ### Runtime
 
@@ -57,14 +82,6 @@ The runtime is the foundation:
 6. first-class handoffs
 7. agent-as-tool subroutines
 8. resumable `RunState` and final `RunResult`
-
-### Workspace Packages
-
-The repository also includes focused extension packages:
-
-1. `agentlane-openai`: OpenAI Responses API client utilities
-2. `agentlane-litellm`: LiteLLM client utilities
-3. `agentlane-braintrust`: Braintrust tracing processor
 
 ## Why AgentLane
 
