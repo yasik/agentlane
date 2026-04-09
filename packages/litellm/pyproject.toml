@@ -1,6 +1,6 @@
 [project]
 name = "agentlane-litellm"
-version = "0.2.0"
+version = "0.3.0"
 description = "LiteLLM client utilities for AgentLane"
 requires-python = ">=3.12"
 dependencies = [

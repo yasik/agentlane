@@ -1,6 +1,6 @@
 [project]
 name = "agentlane-braintrust"
-version = "0.2.0"
+version = "0.3.0"
 description = "Braintrust tracing processor for AgentLane"
 requires-python = ">=3.12"
 dependencies = [
