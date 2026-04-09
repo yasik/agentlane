@@ -69,7 +69,8 @@ dev = [
   "pytest>=8.2",
   "pyright>=1.1.408",
   "ruff>=0.14.14",
-  "yamllint>=1.37.0"
+  "yamllint>=1.37.0",
+  "vulture>=2.16",
 ]
 
 [build-system]
