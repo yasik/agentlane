@@ -1,0 +1,4 @@
+interface:
+  display_name: "Docs Sync"
+  short_description: "Audit public docs coverage and propose concise updates"
+  default_prompt: "Use $docs-sync to review AgentLane public docs under docs/ against the current implementation, then propose concise documentation updates."

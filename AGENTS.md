@@ -335,8 +335,6 @@ pkgname/
 
 ## Pull request expectations
 
-PRs should use the template located at `.github/PULL_REQUEST_TEMPLATE/pull_request_template.md`. Provide a summary, test plan and issue number if applicable, then check that:
-
 - New tests are added when needed.
 - Documentation is updated.
 - `/usr/bin/make lint` and `/usr/bin/make format` have been run.

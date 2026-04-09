@@ -6,10 +6,8 @@ requires-python = "==3.12.*"
 members = [
     "agentlane",
     "agentlane-braintrust",
-    "agentlane-cli",
     "agentlane-litellm",
     "agentlane-openai",
-    "agentlane-transport",
 ]
 
 [[package]]
@@ -91,17 +89,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "agentlane-cli"
-version = "0.2.0"
-source = { editable = "packages/cli" }
-dependencies = [
-    { name = "rich" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "rich", specifier = ">=13.0.0" }]
-
-[[package]]
 name = "agentlane-litellm"
 version = "0.2.0"
 source = { editable = "packages/litellm" }
@@ -137,21 +124,6 @@ requires-dist = [
     { name = "openai", specifier = ">=1.68.2" },
     { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
     { name = "structlog", specifier = ">=25.1.0,<26.0.0" },
-]
-
-[[package]]
-name = "agentlane-transport"
-version = "0.2.0"
-source = { editable = "packages/transport" }
-dependencies = [
-    { name = "protobuf" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "protobuf", specifier = ">=5.29.0,<6.0.0" },
-    { name = "pydantic", specifier = ">=2.8.0,<3.0.0" },
 ]
 
 [[package]]

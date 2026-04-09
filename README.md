@@ -279,5 +279,4 @@ uv run pytest -s -k <test_name>
 1. Keep changes small and focused.
 2. Add or update tests when behavior changes.
 3. Update public docs and examples when the developer-facing surface changes.
-4. Use the PR template at `.github/PULL_REQUEST_TEMPLATE/pull_request_template.md`.
-5. Ensure formatting, linting, type-checking, and tests pass before opening a PR.
+4. Ensure formatting, linting, type-checking, and tests pass before opening a PR.

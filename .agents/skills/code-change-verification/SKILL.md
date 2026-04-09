@@ -11,10 +11,9 @@ Ensure work is only marked complete after formatting, linting, type checking, an
 
 ## Quick start
 
-1. Keep this skill at `./.agents/skills/code-change-verification` so it loads automatically for the repository.
-2. macOS/Linux: `bash .agents/skills/code-change-verification/scripts/run.sh`.
-3. If any command fails, fix the issue, rerun the script, and report the failing output.
-4. Confirm completion only when all commands succeed with no remaining issues.
+1. macOS/Linux: `bash .agents/skills/code-change-verification/scripts/run.sh`.
+2. If any command fails, fix the issue, rerun the script, and report the failing output.
+3. Confirm completion only when all commands succeed with no remaining issues.
 
 ## Manual workflow
 
