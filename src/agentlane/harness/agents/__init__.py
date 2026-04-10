@@ -1,9 +1,9 @@
-"""High-level stateful harness agent wrappers.
+"""High-level stateful agent interfaces.
 
-This package exposes the broad wrapper layer that sits above the
-runtime-facing harness agents. These wrappers keep the lower-level runtime
-execution model canonical while adding higher-level state and lifecycle
-conveniences such as persisted run state and conversation branching.
+This package exposes the primary local agent-building surface that sits above
+the runtime-facing harness agents. These agent types keep the lower-level
+runtime execution model canonical while adding higher-level state and
+lifecycle conveniences.
 """
 
 from ._base import AgentBase

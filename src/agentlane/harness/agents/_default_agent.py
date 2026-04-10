@@ -1,8 +1,8 @@
-"""Default high-level wrapper for stateful harness agent execution.
+"""Default high-level agent for stateful harness execution.
 
-This module provides the standard wrapper that layers persisted run state,
-optional runtime and runner provisioning, and branch execution on top of the
-runtime-facing harness ``Agent``.
+This module provides the standard agent implementation that
+layers persisted run state, optional runtime and runner provisioning, and
+branch execution on top of the runtime-facing harness ``Agent``.
 """
 
 import asyncio
@@ -25,9 +25,9 @@ from ._base import AgentBase
 
 
 class DefaultAgent(AgentBase):
-    """High-level stateful wrapper around the runtime-facing harness agent.
+    """Default high-level stateful agent interface.
 
-    This wrapper owns higher-level orchestration concerns:
+    This agent owns higher-level orchestration concerns:
 
     1. descriptor resolution,
     2. optional automatic runtime provisioning,
@@ -36,7 +36,7 @@ class DefaultAgent(AgentBase):
 
     It does not replace the runtime-facing harness ``Agent``. Each execution
     still binds and routes through the existing runtime model so the lower-level
-    behavior stays canonical. The wrapper adds a stable primary conversation
+    behavior stays canonical. The implementation adds a stable primary conversation
     line plus explicit forked branch runs on top of that lower-level contract.
     """
 
@@ -52,11 +52,11 @@ class DefaultAgent(AgentBase):
         agent_id: AgentId | None = None,
         run_state: RunState | None = None,
     ) -> None:
-        """Initialize one stateful default agent wrapper.
+        """Initialize one stateful default agent.
 
         Args:
             descriptor: Optional instance-level descriptor override. When
-                omitted, the wrapper uses ``type(self).descriptor``.
+                omitted, the agent uses ``type(self).descriptor``.
             runtime: Optional runtime to reuse across runs.
             runner: Optional runner to reuse across runs.
             hooks: Optional runner hooks forwarded to the low-level agent.
@@ -73,8 +73,8 @@ class DefaultAgent(AgentBase):
         self._agent_id = agent_id or _default_agent_id(self._descriptor)
         self._run_state = copy_run_state(run_state)
 
-        # The wrapper persists one resumable state value and one stable runtime
-        # identity locally. Concurrent ``run(...)`` calls on the same wrapper
+        # The agent persists one resumable state value and one stable runtime
+        # identity locally. Concurrent ``run(...)`` calls on the same agent
         # therefore cannot safely overlap:
         #
         # 1. both calls would otherwise fork from the same baseline
@@ -82,17 +82,17 @@ class DefaultAgent(AgentBase):
         # 2. both calls would bind the same runtime ``AgentId`` while one
         #    logical conversation is meant to continue in order.
         #
-        # The full-run lock is intentional for one stateful wrapper instance.
+        # The full-run lock is intentional for one stateful agent instance.
         self._run_lock = asyncio.Lock()
 
     @property
     def resolved_descriptor(self) -> AgentDescriptor:
-        """Return the resolved static descriptor for this wrapper."""
+        """Return the resolved static descriptor for this agent."""
         return self._descriptor
 
     @property
     def agent_id(self) -> AgentId:
-        """Return the stable runtime id used by this wrapper instance."""
+        """Return the stable runtime id used by this agent instance."""
         return self._agent_id
 
     @property
@@ -111,7 +111,7 @@ class DefaultAgent(AgentBase):
         Args:
             input: Raw run input or an explicit ``RunState`` resume payload.
                 When a ``RunState`` is provided directly, it takes precedence
-                over the wrapper's stored baseline for that call.
+                over the agent's stored baseline for that call.
             cancellation_token: Optional shared cancellation token.
 
         Returns:
@@ -151,7 +151,7 @@ class DefaultAgent(AgentBase):
         *,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
-        """Run one branch without mutating the wrapper's persisted state.
+        """Run one branch without mutating the agent's persisted main state.
 
         This method snapshots the current persisted baseline, if any, runs the
         branch under a fresh runtime agent id, and returns the branch result
@@ -160,7 +160,7 @@ class DefaultAgent(AgentBase):
         Args:
             input: Raw run input or an explicit ``RunState`` resume payload.
                 When a ``RunState`` is provided directly, it takes precedence
-                over the wrapper's stored baseline for that call.
+                over the agent's stored baseline for that call.
             cancellation_token: Optional shared cancellation token.
 
         Returns:
@@ -170,7 +170,7 @@ class DefaultAgent(AgentBase):
             # Wait for any active primary run to commit its latest baseline,
             # then capture one coherent snapshot for this branch. The lock is
             # released before the branch executes because forked runs do not
-            # write back into the wrapper's primary conversation line.
+            # write back into the agent's primary conversation line.
             effective_runner = self._resolved_runner()
             initial_state = (
                 None if isinstance(input, RunState) else copy_run_state(self._run_state)
@@ -202,7 +202,7 @@ class DefaultAgent(AgentBase):
     def reset(self) -> None:
         """Clear the stored primary-line run state for future runs.
 
-        This resets only the wrapper's persisted ``RunState`` baseline. It does
+        This resets only the agent's persisted ``RunState`` baseline. It does
         not replace the resolved descriptor, stable ``agent_id``, configured
         runtime, runner, or hooks.
         """
@@ -257,7 +257,7 @@ def _resolve_descriptor(
     descriptor: AgentDescriptor | None,
     class_descriptor: AgentDescriptor | None,
 ) -> AgentDescriptor:
-    """Resolve the wrapper descriptor from instance or class configuration."""
+    """Resolve the agent descriptor from instance or class configuration."""
     if descriptor is not None:
         return descriptor
     if class_descriptor is not None:
@@ -269,7 +269,7 @@ def _resolve_descriptor(
 
 
 def _default_agent_id(descriptor: AgentDescriptor) -> AgentId:
-    """Create one stable local runtime id for a wrapper instance."""
+    """Create one stable local runtime id for an agent instance."""
     return AgentId.from_values(descriptor.name, uuid4().hex)
 
 

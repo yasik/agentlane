@@ -1,4 +1,4 @@
-# Harness Default Agents
+# Default Agents
 
 `agentlane.harness.agents.DefaultAgent` is the high-level local harness entry
 point for straightforward agent usage.
@@ -9,8 +9,9 @@ Use it when you want to:
 2. call `run(...)` directly, and
 3. let the framework manage the local runtime and default runner for you.
 
-This layer is ergonomic by design. It wraps the runtime-facing
-`agentlane.harness.Agent`; it does not replace it.
+This is the primary local agent-building interface. Internally it uses the
+runtime-facing `agentlane.harness.Agent`, but from the developer standpoint it
+is a first-class agent type, not a secondary adapter.
 
 ## Import Path
 
@@ -19,7 +20,7 @@ from agentlane.harness.agents import AgentBase, DefaultAgent
 ```
 
 `AgentBase` is the abstract base contract for future high-level harness agent
-wrappers. It defines two execution methods:
+types. It defines three shared execution controls:
 
 1. `run(...)`
 2. `fork(...)`
@@ -65,7 +66,7 @@ result = await agent.run("My order arrived damaged.")
 
 ## What `DefaultAgent` Owns
 
-`DefaultAgent` owns only local developer ergonomics:
+`DefaultAgent` owns the high-level local agent experience:
 
 1. descriptor resolution
 2. optional runtime provisioning
@@ -98,7 +99,7 @@ If a runtime is supplied:
 If no runner is supplied:
 
 1. `DefaultAgent` creates one default `Runner()`
-2. reuses it on later `run(...)` calls for that wrapper instance
+2. reuses it on later `run(...)` calls for that agent instance
 
 If a runner is supplied:
 
@@ -107,7 +108,7 @@ If a runner is supplied:
 
 ## Repeated Runs
 
-Repeated `run(...)` calls on the same wrapper instance continue the same
+Repeated `run(...)` calls on the same agent instance continue the same
 conversation by default.
 
 ```python
@@ -123,7 +124,7 @@ itself so its local `RunState` stays coherent.
 
 ## Fork
 
-`DefaultAgent.fork(...)` runs one branch without mutating the wrapper's
+`DefaultAgent.fork(...)` runs one branch without mutating the agent's
 persisted primary conversation line.
 
 Simple current behavior:
@@ -149,19 +150,19 @@ After that call:
 
 `DefaultAgent.run(...)` also accepts `RunState` directly.
 
-That path is an explicit resume request. The wrapper does not combine the
-passed `RunState` with its stored baseline. It resumes from the provided state
-only, then stores the returned updated state afterward.
+That path is an explicit resume request. The agent does not combine the passed
+`RunState` with its stored baseline. It resumes from the provided state only,
+then stores the returned updated state afterward.
 
 `DefaultAgent.fork(...)` also accepts `RunState`. That creates a branch from
 the provided state and still does not write the branch result back into the
-wrapper's stored primary state.
+agent's stored primary state.
 
 ## Reset
 
-`DefaultAgent.reset()` clears the wrapper's locally persisted `RunState`.
+`DefaultAgent.reset()` clears the agent's locally persisted `RunState`.
 
-Use it when the same wrapper instance should start a new conversation instead
+Use it when the same agent instance should start a new conversation instead
 of continuing the previous one.
 
 ## Boundary
