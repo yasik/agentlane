@@ -23,6 +23,7 @@ wrappers. It defines two execution methods:
 
 1. `run(...)`
 2. `fork(...)`
+3. `reset()`
 
 ## Two Authoring Styles
 

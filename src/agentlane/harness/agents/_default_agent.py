@@ -1,4 +1,9 @@
-"""High-level ergonomic default agent wrapper."""
+"""Default high-level wrapper for stateful harness agent execution.
+
+This module provides the standard wrapper that layers persisted run state,
+optional runtime and runner provisioning, and branch execution on top of the
+runtime-facing harness ``Agent``.
+"""
 
 import asyncio
 from uuid import uuid4
@@ -20,18 +25,19 @@ from ._base import AgentBase
 
 
 class DefaultAgent(AgentBase):
-    """Developer-facing local wrapper around the runtime-facing harness agent.
+    """High-level stateful wrapper around the runtime-facing harness agent.
 
-    This wrapper owns local developer ergonomics only:
+    This wrapper owns higher-level orchestration concerns:
 
     1. descriptor resolution,
     2. optional automatic runtime provisioning,
     3. optional automatic runner provisioning, and
     4. persisted ``RunState`` across repeated ``run(...)`` calls.
 
-    It does not replace the runtime-facing harness ``Agent``. Each call binds
-    and routes through the existing runtime model so the lower-level behavior
-    stays canonical.
+    It does not replace the runtime-facing harness ``Agent``. Each execution
+    still binds and routes through the existing runtime model so the lower-level
+    behavior stays canonical. The wrapper adds a stable primary conversation
+    line plus explicit forked branch runs on top of that lower-level contract.
     """
 
     descriptor: AgentDescriptor | None = None
@@ -46,7 +52,7 @@ class DefaultAgent(AgentBase):
         agent_id: AgentId | None = None,
         run_state: RunState | None = None,
     ) -> None:
-        """Initialize one developer-facing default agent wrapper.
+        """Initialize one stateful default agent wrapper.
 
         Args:
             descriptor: Optional instance-level descriptor override. When
@@ -100,10 +106,12 @@ class DefaultAgent(AgentBase):
         *,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
-        """Execute one agent run and persist the resulting run state.
+        """Execute one primary-line run and persist the resulting state.
 
         Args:
-            input: Raw run input or explicit ``RunState`` resume payload.
+            input: Raw run input or an explicit ``RunState`` resume payload.
+                When a ``RunState`` is provided directly, it takes precedence
+                over the wrapper's stored baseline for that call.
             cancellation_token: Optional shared cancellation token.
 
         Returns:
@@ -145,12 +153,18 @@ class DefaultAgent(AgentBase):
     ) -> RunResult:
         """Run one branch without mutating the wrapper's persisted state.
 
-        For now this is a simple stateless branch:
+        This method snapshots the current persisted baseline, if any, runs the
+        branch under a fresh runtime agent id, and returns the branch result
+        without storing it back onto internal run state.
 
-        1. it snapshots the current persisted baseline, if any,
-        2. runs the branch under a fresh runtime agent id, and
-        3. returns the resulting `RunResult` without storing it back onto
-           `self._run_state`.
+        Args:
+            input: Raw run input or an explicit ``RunState`` resume payload.
+                When a ``RunState`` is provided directly, it takes precedence
+                over the wrapper's stored baseline for that call.
+            cancellation_token: Optional shared cancellation token.
+
+        Returns:
+            RunResult: Final result for the forked branch run.
         """
         async with self._run_lock:
             # Wait for any active primary run to commit its latest baseline,
@@ -186,7 +200,12 @@ class DefaultAgent(AgentBase):
             )
 
     def reset(self) -> None:
-        """Forget the locally persisted run state for future runs."""
+        """Clear the stored primary-line run state for future runs.
+
+        This resets only the wrapper's persisted ``RunState`` baseline. It does
+        not replace the resolved descriptor, stable ``agent_id``, configured
+        runtime, runner, or hooks.
+        """
         self._run_state = None
 
     def _resolved_runner(self) -> Runner:

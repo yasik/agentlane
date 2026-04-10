@@ -1,4 +1,17 @@
-"""Abstract base contract for developer-facing harness agents."""
+"""Shared contract for high-level harness agent wrappers.
+
+This module defines the minimal public execution surface for stateful agent
+wrappers that sit above the runtime-facing harness agent. Concrete wrappers
+may add their own configuration or lifecycle conveniences, but they should
+preserve the same two core execution paths:
+
+1. continue the primary conversation line with ``run(...)``, and
+2. create a non-mutating branch with ``fork(...)``.
+
+Stateful wrappers also need one shared lifecycle control:
+
+3. clear the persisted primary conversation line with ``reset()``.
+"""
 
 import abc
 
@@ -8,13 +21,20 @@ from .._run import RunInput, RunResult
 
 
 class AgentBase(abc.ABC):
-    """Abstract base class for ergonomic harness agent wrappers.
+    """Abstract base class for high-level harness agent wrappers.
 
-    This contract is intentionally small. Future high-level agent wrappers
-    should expose at least two execution paths:
+    This contract is intentionally small. Implementations represent stateful
+    conversation wrappers that preserve one primary execution line and may also
+    expose one-off branches from that line.
 
-    1. ``run(...)`` for the main stateful conversation line
-    2. ``fork(...)`` for a one-off branch that does not mutate that line
+    Future high-level agent wrappers should expose at least two execution
+    paths:
+
+    1. ``run(...)`` for the main stateful conversation line, and
+    2. ``fork(...)`` for a one-off branch that does not mutate that line.
+
+    Stateful wrappers should also expose ``reset()`` so callers can discard
+    the persisted primary-line state explicitly.
     """
 
     @abc.abstractmethod
@@ -24,7 +44,15 @@ class AgentBase(abc.ABC):
         *,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
-        """Run or continue the primary conversation line."""
+        """Run or continue the primary conversation line.
+
+        Args:
+            input: Raw run input or an explicit ``RunState`` resume payload.
+            cancellation_token: Optional shared cancellation token for the run.
+
+        Returns:
+            RunResult: The final result for the primary conversation line.
+        """
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -34,5 +62,18 @@ class AgentBase(abc.ABC):
         *,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
-        """Run one branch without mutating the primary conversation line."""
+        """Run one branch without mutating the primary conversation line.
+
+        Args:
+            input: Raw run input or an explicit ``RunState`` resume payload.
+            cancellation_token: Optional shared cancellation token for the run.
+
+        Returns:
+            RunResult: The final result for the forked branch.
+        """
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def reset(self) -> None:
+        """Clear the persisted primary conversation line for future runs."""
         raise NotImplementedError
