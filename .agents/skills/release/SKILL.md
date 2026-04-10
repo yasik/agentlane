@@ -109,6 +109,9 @@ Format rules:
 3. group them into short sections such as `Added`, `Changed`, and `Fixed`
 4. attach commit links or short commit references for each bullet
 5. omit low-signal internal churn unless it materially affects users
+6. do not hard-wrap or reflow the release notes to fit an 80-column line limit
+7. keep each summary paragraph on one physical line
+8. keep each bullet on one physical line
 
 The template shape is intentionally short, closer to:
 

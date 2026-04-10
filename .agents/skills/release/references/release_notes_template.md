@@ -2,8 +2,7 @@
 
 ## Summary
 
-One or two short sentences describing what changed in this release and why it
-matters to users.
+One or two short sentences describing what changed in this release and why it matters to users.
 
 ## Added
 
@@ -23,3 +22,6 @@ matters to users.
 - Include only notable user-facing changes.
 - Prefer commit links over issue taxonomy unless an issue number adds real value.
 - For an initial release, say so in the summary.
+- Do not hard-wrap or reflow lines to fit an 80-column limit.
+- Keep each summary paragraph on one physical line.
+- Keep each bullet on one physical line.
