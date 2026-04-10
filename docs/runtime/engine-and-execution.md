@@ -1,13 +1,27 @@
 # Runtime: Engine and Execution
 
-This document explains how AgentLane runtime executes message deliveries, including ordering, concurrency, lifecycle, and extension points.
+This page explains how the runtime accepts work, turns that work into
+deliveries, and decides when deliveries run. The goal is to describe the moving
+parts in practical terms: what
+[`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) owns, how
+[`AgentRegistry`](../../src/agentlane/runtime/_registry.py) and
+[`PerAgentMailboxScheduler`](../../src/agentlane/runtime/_scheduler.py) shape
+execution, and how the in-process
+[`SingleThreadedRuntimeEngine`](../../src/agentlane/runtime/_runtime.py) and
+distributed
+[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py)
+relate to one another.
 
 ## TL;DR
 
-1. `RuntimeEngine` is the orchestration entrypoint (`send_message`, `publish_message`).
-2. `SingleThreadedRuntimeEngine` is the simplest in-process implementation.
-3. `DistributedRuntimeEngine` is implemented in core v1 as a managed host plus one primary worker.
-4. Scheduling guarantees in-order execution per `AgentId`.
+1. [`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) is the
+   orchestration entrypoint (`send_message`, `publish_message`).
+2. [`SingleThreadedRuntimeEngine`](../../src/agentlane/runtime/_runtime.py) is
+   the simplest in-process implementation.
+3. [`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py)
+   is implemented in core v1 as a managed host plus one primary worker.
+4. Scheduling guarantees in-order execution per
+   [`AgentId`](../../src/agentlane/messaging/_identity.py).
 5. Concurrency happens across different `AgentId` values; in distributed mode,
    the effective bound is per worker runtime rather than one global
    `worker_count`.
@@ -16,13 +30,13 @@ This document explains how AgentLane runtime executes message deliveries, includ
 
 A delivery flows through:
 
-1. `RuntimeEngine` (API + envelope construction),
-2. `RoutingEngine` (publish route resolution),
-3. `PerAgentMailboxScheduler` (queueing and fairness),
+1. [`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) (API + envelope construction),
+2. [`RoutingEngine`](../../src/agentlane/messaging/_routing.py) (publish route resolution),
+3. [`PerAgentMailboxScheduler`](../../src/agentlane/runtime/_scheduler.py) (queueing and fairness),
 4. `Dispatcher` (instance lookup + handler invocation),
-5. `AgentRegistry` (factory/instance lifecycle).
+5. [`AgentRegistry`](../../src/agentlane/runtime/_registry.py) (factory/instance lifecycle).
 
-## Agent Lifecycle
+## Runtime Lifecycle
 
 ### Registration Modes
 
@@ -77,7 +91,7 @@ Use this for event fan-out where caller only needs enqueue confirmation.
 
 ## Lifecycle Management
 
-`RuntimeEngine` lifecycle methods are idempotent:
+[`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) lifecycle methods are idempotent:
 
 1. `start()`
 2. `stop()` (immediate shutdown, cancels in-flight/queued work)
@@ -93,7 +107,8 @@ These helpers start runtime on entry and stop/stop-when-idle on exit depending o
 
 ## Distributed Mode Status
 
-`DistributedRuntimeEngine` is implemented as the distributed entrypoint in core v1.
+[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py) is
+implemented as the distributed entrypoint in core v1.
 
 Current shape:
 

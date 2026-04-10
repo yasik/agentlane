@@ -1,20 +1,34 @@
 # Runtime: Distributed Runtime Usage
 
-This guide shows how to use the distributed runtime that is implemented in core today.
+This guide shows how the current distributed runtime is used in practice. It is
+meant to answer two questions quickly: when the convenience entrypoint is
+enough, and when you should work with hosts and workers directly. The main
+entrypoints are
+[`distributed_runtime(...)`](../../src/agentlane/runtime/_context.py), which
+creates a managed
+[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py),
+and the explicit
+[`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py) and
+[`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py)
+types for multi-worker topologies.
 
 ## When To Use Which Entry Point
 
-Use `distributed_runtime()` when you want the same runtime API as the
+Use [`distributed_runtime()`](../../src/agentlane/runtime/_context.py) when you
+want the same runtime API as the
 single-threaded engine, but backed by an in-process host plus one primary worker
 with no network setup.
 
-Use `WorkerAgentRuntimeHost` and `WorkerAgentRuntime` directly when you want to
-model an explicit multi-worker topology yourself.
+Use
+[`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py)
+and [`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py)
+directly when you want to model an explicit multi-worker topology yourself.
 
 ## Zero-Config Example
 
-`distributed_runtime()` manages the host lifecycle for you and yields a
-`DistributedRuntimeEngine`.
+[`distributed_runtime()`](../../src/agentlane/runtime/_context.py) manages the
+host lifecycle for you and yields a
+[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py).
 
 ```python
 from agentlane.messaging import AgentId, MessageContext

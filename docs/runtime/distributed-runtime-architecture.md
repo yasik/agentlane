@@ -3,6 +3,13 @@
 This document explains the current distributed runtime architecture in core v1:
 what runs where, how messages flow, which responsibilities belong to the host
 versus workers, and which simplifying decisions shape the implementation.
+The key runtime types are
+[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py),
+[`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py), and
+[`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py).
+Messages still move through the canonical
+[`MessageEnvelope`](../../src/agentlane/messaging/_envelope.py) shape even when
+they cross workers.
 
 See also:
 
@@ -11,13 +18,15 @@ See also:
 
 ## TL;DR
 
-1. `DistributedRuntimeEngine` is the zero-config distributed entrypoint.
+1. [`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py)
+   is the zero-config distributed entrypoint.
 2. It manages one in-process `WorkerAgentRuntimeHost` plus one primary
    `WorkerAgentRuntime`.
-3. `WorkerAgentRuntimeHost` is the routing and session service, not an agent
-   execution runtime.
-4. `WorkerAgentRuntime` executes agents locally and forwards distributed traffic
-   through the host over gRPC.
+3. [`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py)
+   is the routing and session service, not an agent execution runtime.
+4. [`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py)
+   executes agents locally and forwards distributed traffic through the host
+   over gRPC.
 5. v1 placement is intentionally simple: one worker owns a given `AgentType`.
 6. Direct RPC returns terminal `DeliveryOutcome`; publish returns enqueue-only
    `PublishAck`.
@@ -67,7 +76,7 @@ while workers decide how that work is executed locally.
 
 ## Core Components
 
-### `DistributedRuntimeEngine`
+### [`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py)
 
 `DistributedRuntimeEngine` is the convenience wrapper used by
 `distributed_runtime()`.
@@ -82,7 +91,7 @@ Current behavior:
 This keeps the common case zero-config without hiding the underlying host and
 worker model.
 
-### `WorkerAgentRuntimeHost`
+### [`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py)
 
 The host is the control plane and routing plane.
 
@@ -97,7 +106,7 @@ Responsibilities:
 
 The host does not execute user agents.
 
-### `WorkerAgentRuntime`
+### [`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py)
 
 The worker is the execution node.
 

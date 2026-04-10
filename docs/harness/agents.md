@@ -1,8 +1,20 @@
 # Harness Agents
 
+This page describes the default harness agent as a runtime-backed object that
+owns state, exposes tools to the model, and hands each turn to the runner.
+
+The main pieces are
+[`Agent`](../../src/agentlane/harness/_agent.py),
+[`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py),
+[`RunState`](../../src/agentlane/harness/_run.py),
+[`Runner`](../../src/agentlane/harness/_runner.py), and
+[`RunnerHooks`](../../src/agentlane/harness/_hooks.py).
+
 ## What The Default Agent Owns
 
-The default harness `Agent` builds on `Task` and owns:
+The default harness
+[`Agent`](../../src/agentlane/harness/_agent.py) builds on
+[`Task`](../../src/agentlane/harness/_task.py) and owns:
 
 1. one static `AgentDescriptor`
 2. one `AgentLifecycle` for queued input and persisted `RunState`
@@ -15,7 +27,8 @@ delegation wiring; the runner owns the model loop.
 
 ## `AgentDescriptor`
 
-`AgentDescriptor` is the canonical static specification for one agent.
+[`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py) is the
+canonical static specification for one agent.
 
 It includes:
 
@@ -38,7 +51,7 @@ This separation matters:
 
 ## Input Surface
 
-The default agent accepts `RunInput`:
+The default agent accepts [`RunInput`](../../src/agentlane/harness/_run.py):
 
 1. `str`
 2. `list[object]`
@@ -70,7 +83,8 @@ not batch all pending inputs into one larger run.
 
 ## Run State And Recovery
 
-`Agent.run_state` returns a snapshot of the current resumable state.
+[`Agent.run_state`](../../src/agentlane/harness/_agent.py) returns a snapshot
+of the current resumable state.
 
 That state currently includes:
 
@@ -84,7 +98,8 @@ To resume after a crash or restart, bind or construct the agent with
 
 ## Tool Surface
 
-`Agent.tools` is the model-visible tool catalog for the current instance.
+[`Agent.tools`](../../src/agentlane/harness/_agent.py) is the model-visible
+tool catalog for the current instance.
 
 It is composed from:
 

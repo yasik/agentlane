@@ -1,9 +1,18 @@
 # Harness Tasks
 
+This page explains the smallest harness abstraction. A task is useful when you
+want runtime-oriented orchestration code with a clearer name and a few helper
+methods, but without opting into the default LLM loop.
+
+[`Task`](../../src/agentlane/harness/_task.py) itself is a thin layer over
+[`BaseAgent`](../../src/agentlane/runtime/_base_agent.py), so it keeps the
+runtime model intact while adding a clearer place for application orchestration
+code.
+
 ## What A Task Is
 
-`Task` is the top-level harness primitive for application work that sits
-upstream of LLM-driven agents.
+[`Task`](../../src/agentlane/harness/_task.py) is the top-level harness
+primitive for application work that sits upstream of LLM-driven agents.
 
 Use a task when you need orchestration logic that:
 

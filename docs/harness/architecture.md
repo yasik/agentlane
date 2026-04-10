@@ -2,9 +2,18 @@
 
 ## Overview
 
-The harness is the higher-level orchestration layer built on top of the
-runtime. It keeps runtime delivery semantics intact while adding a reusable
-agent loop, tool execution, delegation, and resumable multi-turn state.
+The harness is the layer you reach for when message delivery alone is not
+enough and you want a reusable agent loop on top of the runtime. It keeps the
+runtime's delivery rules in place, then adds model calls, tool execution,
+handoffs, and resumable state around those rules.
+
+At its core, the harness is built from
+[`Task`](../../src/agentlane/harness/_task.py),
+[`Agent`](../../src/agentlane/harness/_agent.py),
+[`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py),
+[`Runner`](../../src/agentlane/harness/_runner.py), and the run data types
+[`RunState`](../../src/agentlane/harness/_run.py) and
+[`RunResult`](../../src/agentlane/harness/_run.py).
 
 At a high level:
 
@@ -118,12 +127,12 @@ without changing the current harness boundary.
 
 ## Core Contracts
 
-### `Task`
+### [`Task`](../../src/agentlane/harness/_task.py)
 
 `Task` is a thin wrapper over the existing runtime model. It does not introduce
 its own scheduler or dispatcher.
 
-### `AgentDescriptor`
+### [`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py)
 
 `AgentDescriptor` is the canonical static configuration for one agent. It owns:
 
@@ -139,7 +148,7 @@ its own scheduler or dispatcher.
 
 The descriptor is static. Mutable conversation state is kept in `RunState`.
 
-### `RunInput`
+### [`RunInput`](../../src/agentlane/harness/_run.py)
 
 The default harness agent accepts:
 
@@ -150,7 +159,7 @@ The default harness agent accepts:
 That keeps the public input surface simple while still allowing rich prompt
 input, replay, and resume.
 
-### `RunState`
+### [`RunState`](../../src/agentlane/harness/_run.py)
 
 `RunState` is the minimal resumable state for one agent run:
 
@@ -162,7 +171,7 @@ input, replay, and resume.
 It is intentionally small. The harness does not currently expose a larger event
 log, approval state, or actor graph.
 
-### `RunResult`
+### [`RunResult`](../../src/agentlane/harness/_run.py)
 
 `RunResult` is the minimal final result returned by the default runner:
 

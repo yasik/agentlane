@@ -1,8 +1,21 @@
 # Harness Runner
 
+This page focuses on the part of the harness that actually runs a conversation.
+The runner is where instructions, history, schemas, tools, and handoffs are
+turned into model calls and follow-up actions.
+The central types here are
+[`Runner`](../../src/agentlane/harness/_runner.py),
+[`RunState`](../../src/agentlane/harness/_run.py),
+[`RunResult`](../../src/agentlane/harness/_run.py),
+[`RunnerHooks`](../../src/agentlane/harness/_hooks.py), and the generic
+delegation helpers
+[`DefaultAgentTool`](../../src/agentlane/harness/_lifecycle.py) and
+[`DefaultHandoff`](../../src/agentlane/harness/_lifecycle.py).
+
 ## What The Runner Owns
 
-`Runner` is the stateless default loop engine for harness agents.
+[`Runner`](../../src/agentlane/harness/_runner.py) is the stateless default
+loop engine for harness agents.
 
 For one run it owns:
 
@@ -153,7 +166,7 @@ internal model-call detail, not a public harness input type.
 
 ## Result Boundary
 
-The runner returns `RunResult`:
+The runner returns [`RunResult`](../../src/agentlane/harness/_run.py):
 
 1. `final_output`
 2. `responses`
@@ -173,7 +186,8 @@ When the model returns tool calls:
 4. the next model turn sees both the original tool-call response and the tool
    result messages
 
-Normal executable tools run through `ToolExecutor`.
+Normal executable tools run through
+[`ToolExecutor`](../../src/agentlane/models/_tool_executor.py).
 
 The runner also enforces tool visibility policy:
 
@@ -226,7 +240,8 @@ The two handoff variants are:
 
 ## Hooks
 
-`RunnerHooks` observes runner lifecycle events:
+[`RunnerHooks`](../../src/agentlane/harness/_hooks.py) observes runner
+lifecycle events:
 
 1. `on_agent_start`
 2. `on_llm_start`

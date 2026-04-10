@@ -1,6 +1,17 @@
 # Transport Serialization
 
-This document describes how Agentlane serializes payloads at transport boundaries.
+This page explains how AgentLane turns Python values into wire-safe payloads.
+Most application code can ignore these details because the defaults cover the
+common cases. The transport layer matters when messages cross process
+boundaries, when types need stable schema identifiers, or when you want custom
+serialization behavior.
+The main transport types are
+[`SerializerRegistry`](../../src/agentlane/transport/_registry.py), which keeps
+track of serializer selection and type metadata,
+[`MessageSerializer`](../../src/agentlane/transport/_serializer.py), which
+defines the serializer contract, and
+[`WirePayload`](../../src/agentlane/transport/_wire_payload.py), which is the
+transport-safe payload shape exchanged across boundaries.
 
 ## TL;DR
 
@@ -22,7 +33,9 @@ Manual registry/serializer wiring is optional and only for advanced customizatio
 
 ## Default Behavior (Recommended)
 
-Every runtime owns a default `SerializerRegistry` with auto-inference enabled.
+Every runtime owns a default
+[`SerializerRegistry`](../../src/agentlane/transport/_registry.py) with
+auto-inference enabled.
 For dataclass, pydantic, protobuf, and generic JSON-compatible payloads, no manual serializer registration is required.
 
 ```python
@@ -68,7 +81,8 @@ registry = SerializerRegistry()
 registry.register_type(TaskModel)
 ```
 
-Manual serializer classes are still supported as an escape hatch.
+Manual [`MessageSerializer`](../../src/agentlane/transport/_serializer.py)
+implementations are still supported as an escape hatch.
 
 ## Boundary Conversion
 
