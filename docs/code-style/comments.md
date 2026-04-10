@@ -2,6 +2,16 @@
 
 Thoughtful comments explain why code exists, how to use it, and capture non-obvious decisions; they do not restate what the code already says.
 
+## Python specific:
+- Use Google-style docstrings for public functions, classes, and methods.
+- Dataclass and Pydantic field comments must use this exact style when inline
+  field documentation is needed:
+
+```python
+field: FieldType
+"""Comment ..."""
+```
+
 ## Guiding principles
 
 - Prefer clear code over comments; comments do not excuse poor naming or structure.  
