@@ -4,6 +4,12 @@
 
 `Runner` is the stateless default loop engine for harness agents.
 
+The runner is used both by:
+
+1. the runtime-facing `agentlane.harness.Agent`, and
+2. the higher-level local `agentlane.harness.agents.DefaultAgent`, which wraps
+   that lower-level agent for a simpler `run(...)` surface.
+
 For one run it owns:
 
 1. building the next model request from `RunState`
@@ -23,6 +29,12 @@ The runner is reusable. It holds configuration, not per-conversation state.
 queued run input
       |
       v
++---------------------------+
+| DefaultAgent.run(...)     |
+| optional local wrapper    |
++-------------+-------------+
+              |
+              v
 +---------------------------+
 | AgentLifecycle            |
 | passes working RunState   |

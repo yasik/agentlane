@@ -1,8 +1,13 @@
 # Harness Agents
 
-## What The Default Agent Owns
+This page documents the runtime-facing `agentlane.harness.Agent`.
 
-The default harness `Agent` builds on `Task` and owns:
+For the higher-level local wrapper, see
+[Harness Default Agents](./default-agents.md).
+
+## What The Runtime-Facing Agent Owns
+
+The runtime-facing harness `Agent` builds on `Task` and owns:
 
 1. one static `AgentDescriptor`
 2. one `AgentLifecycle` for queued input and persisted `RunState`

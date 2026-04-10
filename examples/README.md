@@ -28,6 +28,12 @@ Run the harness customer-support demo (requires `OPENAI_API_KEY`):
 OPENAI_API_KEY=sk-... uv run python examples/harness/customer_support_conversation/main.py
 ```
 
+Run the harness default-agent quickstart (requires `OPENAI_API_KEY`):
+
+```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
+```
+
 Run the harness tool-calling demo (requires `OPENAI_API_KEY`):
 
 ```bash

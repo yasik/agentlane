@@ -8,11 +8,12 @@ agent loop, tool execution, delegation, and resumable multi-turn state.
 
 At a high level:
 
-1. `Task` is the top-level unit of work.
-2. `Agent` builds on `Task` and owns per-agent lifecycle state.
-3. `Runner` executes the generic LLM loop for one run.
-4. `agentlane.models` remains the model-facing foundation.
-5. Provider packages stay thin and adapt request and response traffic into the
+1. `agentlane.harness.agents.DefaultAgent` is the ergonomic local wrapper.
+2. `Task` is the top-level unit of work.
+3. `Agent` builds on `Task` and owns per-agent lifecycle state.
+4. `Runner` executes the generic LLM loop for one run.
+5. `agentlane.models` remains the model-facing foundation.
+6. Provider packages stay thin and adapt request and response traffic into the
    shared model contract.
 
 The key design choice is to keep the public harness boundary run-oriented.
@@ -23,9 +24,15 @@ decides how those values become canonical model messages.
 
 ```text
 Application / caller
-        |
-        | send_message(run_input)
         v
++---------------------------+
+| harness.agents.          |
+| DefaultAgent             |
+| local run(...) wrapper   |
++-------------+-------------+
+              |
+              | send_message(run_input)
+              v
 +---------------------------+
 | RuntimeEngine             |
 | routing + instance reuse  |
@@ -108,6 +115,10 @@ Core modules:
 7. `_hooks.py`: runner lifecycle hooks.
 8. `_run.py`: minimal run-state and result contracts.
 
+Public subpackages:
+
+1. `agents/`: developer-facing local wrappers such as `DefaultAgent`
+
 Reserved subpackages:
 
 1. `context/`
@@ -122,6 +133,19 @@ without changing the current harness boundary.
 
 `Task` is a thin wrapper over the existing runtime model. It does not introduce
 its own scheduler or dispatcher.
+
+### `agents.DefaultAgent`
+
+`agentlane.harness.agents.DefaultAgent` is the ergonomic local wrapper.
+
+It owns:
+
+1. descriptor resolution
+2. optional local runtime provisioning
+3. optional runner provisioning
+4. persisted `RunState` across repeated `run(...)` calls
+
+It does not replace the runtime-facing `Agent`. It binds and routes through it.
 
 ### `AgentDescriptor`
 
@@ -180,11 +204,13 @@ The public harness boundary is not `MessageDict`-oriented.
 
 Instead:
 
-1. `Agent` accepts `RunInput`.
-2. `AgentLifecycle` persists and queues `RunState`.
-3. `Runner` converts `instructions + original_input + continuation_history`
+1. `agents.DefaultAgent` accepts local `run(...)` calls and forwards them into
+   the runtime-facing harness.
+2. `Agent` accepts `RunInput`.
+3. `AgentLifecycle` persists and queues `RunState`.
+4. `Runner` converts `instructions + original_input + continuation_history`
    into canonical model requests.
-4. Provider clients receive canonical model messages and return canonical
+5. Provider clients receive canonical model messages and return canonical
    `ModelResponse` values.
 
 This keeps message normalization inside the runner and prevents low-level model

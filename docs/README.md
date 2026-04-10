@@ -23,7 +23,8 @@
 1. [Harness Architecture](./harness/architecture.md)
 2. [Harness Tasks](./harness/tasks.md)
 3. [Harness Agents](./harness/agents.md)
-4. [Harness Runner](./harness/runner.md)
+4. [Harness Default Agents](./harness/default-agents.md)
+5. [Harness Runner](./harness/runner.md)
 
 ## Tracing
 

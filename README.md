@@ -76,12 +76,14 @@ The runtime is the foundation:
 
 1. `Task` for top-level units of work
 2. `AgentDescriptor` for static agent configuration
-3. `Agent` for per-agent lifecycle and resumable state
-4. `Runner` for the generic LLM loop
-5. runner-owned tool execution
-6. first-class handoffs
-7. agent-as-tool subroutines
-8. resumable `RunState` and final `RunResult`
+3. `agentlane.harness.agents.DefaultAgent` for the smallest local `run(...)`
+   developer surface
+4. `Agent` for the runtime-facing lifecycle primitive
+5. `Runner` for the generic LLM loop
+6. runner-owned tool execution
+7. first-class handoffs
+8. agent-as-tool subroutines
+9. resumable `RunState` and final `RunResult`
 
 ## Why AgentLane
 
@@ -106,7 +108,7 @@ Application code
       |                           |
       v                           v
 Runtime-first usage         Harness usage
-send_message / publish      Task / Agent / Runner
+send_message / publish      DefaultAgent / Agent / Runner
       |                           |
       +-------------+-------------+
                     |
@@ -212,14 +214,16 @@ asyncio.run(main())
 
 The harness examples show the newer orchestration surface:
 
-1. multi-turn conversation plus `RunState` resume
-2. tool calling with a native `@as_tool` function
-3. predefined and generic agent-as-tool flows
-4. predefined and generic handoff flows
+1. `DefaultAgent` quickstart with direct `run(...)`
+2. multi-turn conversation plus `RunState` resume
+3. tool calling with a native `@as_tool` function
+4. predefined and generic agent-as-tool flows
+5. predefined and generic handoff flows
 
 These examples use `agentlane-openai` and require `OPENAI_API_KEY`.
 
 ```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
 OPENAI_API_KEY=sk-... uv run python examples/harness/customer_support_conversation/main.py
 OPENAI_API_KEY=sk-... uv run python examples/harness/tool_calling_search_answer/main.py
 OPENAI_API_KEY=sk-... uv run python examples/harness/agent_as_tool_policy_specialist/main.py
@@ -256,9 +260,10 @@ uv run python examples/runtime/simple/distributed_scatter_gather.py
 1. [Harness Architecture](./docs/harness/architecture.md)
 2. [Harness Tasks](./docs/harness/tasks.md)
 3. [Harness Agents](./docs/harness/agents.md)
-4. [Harness Runner](./docs/harness/runner.md)
-5. [Examples Index](./examples/README.md)
-6. [Models Layer Overview](./src/agentlane/models/README.md)
+4. [Harness Default Agents](./docs/harness/default-agents.md)
+5. [Harness Runner](./docs/harness/runner.md)
+6. [Examples Index](./examples/README.md)
+7. [Models Layer Overview](./src/agentlane/models/README.md)
 
 ## Local Development
 
