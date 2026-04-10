@@ -10,7 +10,7 @@ from agentlane.harness import (
     Task,
 )
 from agentlane.harness._run import copy_run_state
-from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.agents import AgentBase, DefaultAgent
 from agentlane.models import MessageDict, Model, ModelResponse
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
@@ -234,5 +234,69 @@ def test_default_agent_supports_subclass_descriptor_and_explicit_run_state_resum
         assert (
             second.run_state.responses[-1].choices[0].message.content == "Support:first"
         )
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_implements_agent_base_contract() -> None:
+    agent = DefaultAgent(descriptor=AgentDescriptor(name="Support"))
+
+    assert isinstance(agent, AgentBase)
+
+
+def test_default_agent_fork_branches_without_mutating_persisted_state() -> None:
+    async def scenario() -> None:
+        runner = _RecordingRunner()
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(name="Support"),
+            runner=runner,
+        )
+
+        first = await agent.run("first")
+        persisted_after_run = copy_run_state(agent.run_state)
+        if persisted_after_run is None:
+            raise AssertionError("Expected persisted state after first run.")
+
+        branch = await agent.fork("branch")
+
+        if branch.run_state is None:
+            raise AssertionError("Expected fork result to expose branch run state.")
+        assert first.run_state is not None
+        assert branch.final_output == "Support:branch"
+        assert branch.run_state.turn_count == 2
+        assert agent.run_state == persisted_after_run
+        assert agent.run_state is not None
+        assert agent.run_state.turn_count == 1
+        assert len(runner.calls) == 2
+        assert runner.calls[1].original_input == "first"
+        assert runner.calls[1].turn_count == 1
+        assert runner.calls[1].continuation_history[1] == "branch"
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_fork_supports_explicit_run_state_without_persisting_it() -> None:
+    async def scenario() -> None:
+        runner = _RecordingRunner()
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(name="Support"),
+            runner=runner,
+        )
+
+        first = await agent.run("first")
+        saved_state = first.run_state
+        if saved_state is None:
+            raise AssertionError("Expected saved run state from first run.")
+
+        branch = await agent.fork(saved_state)
+
+        assert branch.final_output == "Support:first"
+        assert branch.run_state is not None
+        assert branch.run_state.turn_count == 2
+        assert agent.run_state is not None
+        assert agent.run_state.turn_count == 1
+        assert len(runner.calls) == 2
+        assert runner.calls[1].original_input == "first"
+        assert runner.calls[1].turn_count == 1
 
     asyncio.run(scenario())

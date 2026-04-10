@@ -16,9 +16,10 @@ from .._hooks import RunnerHooks
 from .._lifecycle import AgentDescriptor
 from .._run import RunInput, RunResult, RunState, copy_run_state
 from .._runner import Runner
+from ._base import AgentBase
 
 
-class DefaultAgent:
+class DefaultAgent(AgentBase):
     """Developer-facing local wrapper around the runtime-facing harness agent.
 
     This wrapper owns local developer ergonomics only:
@@ -119,6 +120,7 @@ class DefaultAgent:
                         runner=effective_runner,
                         input=input,
                         initial_state=initial_state,
+                        agent_id=self._agent_id,
                         cancellation_token=cancellation_token,
                     )
             else:
@@ -128,11 +130,60 @@ class DefaultAgent:
                         runner=effective_runner,
                         input=input,
                         initial_state=initial_state,
+                        agent_id=self._agent_id,
                         cancellation_token=cancellation_token,
                     )
 
             self._run_state = copy_run_state(result.run_state)
             return result
+
+    async def fork(
+        self,
+        input: RunInput,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunResult:
+        """Run one branch without mutating the wrapper's persisted state.
+
+        For now this is a simple stateless branch:
+
+        1. it snapshots the current persisted baseline, if any,
+        2. runs the branch under a fresh runtime agent id, and
+        3. returns the resulting `RunResult` without storing it back onto
+           `self._run_state`.
+        """
+        async with self._run_lock:
+            # Wait for any active primary run to commit its latest baseline,
+            # then capture one coherent snapshot for this branch. The lock is
+            # released before the branch executes because forked runs do not
+            # write back into the wrapper's primary conversation line.
+            effective_runner = self._resolved_runner()
+            initial_state = (
+                None if isinstance(input, RunState) else copy_run_state(self._run_state)
+            )
+
+        fork_agent_id = _fork_agent_id(self._agent_id)
+
+        if self._runtime is None:
+            async with single_threaded_runtime() as runtime:
+                return await self._run_once(
+                    runtime=runtime,
+                    runner=effective_runner,
+                    input=input,
+                    initial_state=initial_state,
+                    agent_id=fork_agent_id,
+                    cancellation_token=cancellation_token,
+                )
+
+        async with runtime_scope(self._runtime) as runtime:
+            return await self._run_once(
+                runtime=runtime,
+                runner=effective_runner,
+                input=input,
+                initial_state=initial_state,
+                agent_id=fork_agent_id,
+                cancellation_token=cancellation_token,
+            )
 
     def reset(self) -> None:
         """Forget the locally persisted run state for future runs."""
@@ -151,12 +202,13 @@ class DefaultAgent:
         runner: Runner,
         input: RunInput,
         initial_state: RunState | None,
+        agent_id: AgentId,
         cancellation_token: CancellationToken | None,
     ) -> RunResult:
         """Bind the low-level harness agent, route one input, and unwrap result."""
         runtime_agent = RuntimeAgent.bind(
             runtime,
-            self._agent_id,
+            agent_id,
             runner=runner,
             descriptor=self._descriptor,
             run_state=initial_state,
@@ -164,7 +216,7 @@ class DefaultAgent:
         )
         outcome = await runtime.send_message(
             input,
-            recipient=self._agent_id,
+            recipient=agent_id,
             cancellation_token=cancellation_token,
         )
         result = _require_run_result(outcome)
@@ -200,6 +252,14 @@ def _resolve_descriptor(
 def _default_agent_id(descriptor: AgentDescriptor) -> AgentId:
     """Create one stable local runtime id for a wrapper instance."""
     return AgentId.from_values(descriptor.name, uuid4().hex)
+
+
+def _fork_agent_id(agent_id: AgentId) -> AgentId:
+    """Create a fresh runtime id for one forked branch run."""
+    return AgentId.from_values(
+        agent_id.type.value,
+        f"{agent_id.key.value}-fork-{uuid4().hex}",
+    )
 
 
 def _require_run_result(outcome: DeliveryOutcome) -> RunResult:

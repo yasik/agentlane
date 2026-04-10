@@ -15,8 +15,14 @@ This layer is ergonomic by design. It wraps the runtime-facing
 ## Import Path
 
 ```python
-from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.agents import AgentBase, DefaultAgent
 ```
+
+`AgentBase` is the abstract base contract for future high-level harness agent
+wrappers. It defines two execution methods:
+
+1. `run(...)`
+2. `fork(...)`
 
 ## Two Authoring Styles
 
@@ -114,6 +120,30 @@ call.
 One `DefaultAgent` instance also serializes concurrent `run(...)` calls on
 itself so its local `RunState` stays coherent.
 
+## Fork
+
+`DefaultAgent.fork(...)` runs one branch without mutating the wrapper's
+persisted primary conversation line.
+
+Simple current behavior:
+
+1. snapshot the current persisted baseline
+2. run the branch under a fresh runtime agent id
+3. return the branch `RunResult`
+4. keep `DefaultAgent.run_state` unchanged
+
+Example:
+
+```python
+await agent.run("My order arrived damaged.")
+branch = await agent.fork("Draft a more formal reply.")
+```
+
+After that call:
+
+1. `branch.run_state` contains the branch result
+2. `agent.run_state` still points at the original main conversation line
+
 ## Explicit Resume
 
 `DefaultAgent.run(...)` also accepts `RunState` directly.
@@ -121,6 +151,10 @@ itself so its local `RunState` stays coherent.
 That path is an explicit resume request. The wrapper does not combine the
 passed `RunState` with its stored baseline. It resumes from the provided state
 only, then stores the returned updated state afterward.
+
+`DefaultAgent.fork(...)` also accepts `RunState`. That creates a branch from
+the provided state and still does not write the branch result back into the
+wrapper's stored primary state.
 
 ## Reset
 
