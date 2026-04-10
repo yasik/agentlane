@@ -1,4 +1,4 @@
-.PHONY: init sync sync-upgrade format lint lint-python lint-static tests tree
+.PHONY: init sync sync-upgrade format lint lint-python lint-static tests tree release
 
 init:
 	uv sync --all-extras
@@ -56,3 +56,49 @@ tests:
 
 tree:
 	find . -maxdepth 4 -type d | sort
+
+release:
+	@set -eu; \
+		branch=$$(git branch --show-current); \
+		if [ "$$branch" != "main" ]; then \
+			echo "Release must be cut from main. Current branch: $$branch"; \
+			exit 1; \
+		fi; \
+		if [ -n "$$(git status --short)" ]; then \
+			echo "Release requires a clean working tree."; \
+			git status --short; \
+			exit 1; \
+		fi; \
+		if ! command -v gh >/dev/null 2>&1; then \
+			echo "GitHub CLI (gh) is required for make release."; \
+			exit 1; \
+		fi; \
+		if [ -n "$${TAG:-}" ]; then \
+			tag="$$TAG"; \
+		else \
+			tag=$$(git tag --list --sort=-creatordate | head -n 1); \
+			if [ -z "$$tag" ]; then \
+				echo "No local tags found. Pass TAG=vX.Y.Z."; \
+				exit 1; \
+			fi; \
+		fi; \
+		notes_file="docs/releases/$${tag}.md"; \
+		if ! git rev-parse "$$tag" >/dev/null 2>&1; then \
+			echo "Local tag not found: $$tag"; \
+			exit 1; \
+		fi; \
+		if [ ! -f "$$notes_file" ]; then \
+			echo "Release notes file not found: $$notes_file"; \
+			exit 1; \
+		fi; \
+		if gh release view "$$tag" >/dev/null 2>&1; then \
+			echo "GitHub release already exists for $$tag"; \
+			exit 1; \
+		fi; \
+		echo "Pushing tag $$tag to origin..."; \
+		git push origin "$$tag"; \
+		echo "Creating GitHub release $$tag from $$notes_file..."; \
+		gh release create "$$tag" \
+			--verify-tag \
+			--title "$$tag" \
+			--notes-file "$$notes_file"

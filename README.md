@@ -268,6 +268,15 @@ uv run python examples/runtime/simple/distributed_scatter_gather.py
 /usr/bin/make tests
 ```
 
+For maintainers, publish an existing local release tag and GitHub release with:
+
+```bash
+/usr/bin/make release
+```
+
+Set `TAG=vX.Y.Z` to override the default. When `TAG` is omitted, the target uses
+the newest local tag.
+
 Run a single test with:
 
 ```bash
