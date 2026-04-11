@@ -1,42 +1,33 @@
 # Transport Serialization
 
-This page explains how AgentLane turns Python values into wire-safe payloads.
-Most application code can ignore these details because the defaults cover the
-common cases. The transport layer matters when messages cross process
-boundaries, when types need stable schema identifiers, or when you want custom
-serialization behavior.
-The main transport types are
-[`SerializerRegistry`](../../src/agentlane/transport/_registry.py), which keeps
-track of serializer selection and type metadata,
-[`MessageSerializer`](../../src/agentlane/transport/_serializer.py), which
-defines the serializer contract, and
-[`WirePayload`](../../src/agentlane/transport/_wire_payload.py), which is the
-transport-safe payload shape exchanged across boundaries.
+Most AgentLane code does not need to think about serialization at all. If you
+send dataclasses, Pydantic models, protobuf messages, or plain JSON-compatible
+values, the runtime usually has enough information to do the right thing.
 
-## TL;DR
+Transport becomes important when work crosses a process boundary, when you need
+stable schema identifiers, or when you want to take control of how values are
+encoded and decoded.
 
-Default path requires no serializer setup:
+When that boundary matters, the runtime leans on
+[`SerializerRegistry`](../../src/agentlane/transport/_registry.py) to choose a
+[`MessageSerializer`](../../src/agentlane/transport/_serializer.py), and the
+encoded value travels as a
+[`WirePayload`](../../src/agentlane/transport/_wire_payload.py).
 
-```python
-runtime = SingleThreadedRuntimeEngine()
-result = await runtime.send_message(MyMessage(...), recipient)
-```
-
-Manual registry/serializer wiring is optional and only for advanced customization.
-
-## Key Principles
-
-1. Serialization is a transport concern, not core routing logic.
-2. Runtime defaults should work out of the box for common payload types.
-3. Explicit serializer wiring is optional and only for advanced customization.
-4. Schema identifiers remain globally namespaced strings.
-
-## Default Behavior (Recommended)
+## The Default Path
 
 Every runtime owns a default
-[`SerializerRegistry`](../../src/agentlane/transport/_registry.py) with
-auto-inference enabled.
-For dataclass, pydantic, protobuf, and generic JSON-compatible payloads, no manual serializer registration is required.
+[`SerializerRegistry`](../../src/agentlane/transport/_registry.py). That
+registry can infer a serializer from the Python value you send.
+
+In the common case, the runtime figures out:
+
+1. a schema id for the value's type
+2. the content type for the payload
+3. which serializer should handle that combination
+
+That means most application code can simply send a value and let the transport
+layer do the rest.
 
 ```python
 from pydantic import BaseModel
@@ -54,18 +45,17 @@ recipient = AgentId(type=AgentType("planner"), key="default")
 result = await runtime.send_message(TaskModel(name="compile"), recipient)
 ```
 
-The runtime/transport layer infers and caches:
+## When Explicit Registration Helps
 
-1. `schema_id` from Python type (`module.qualname`, normalized).
-2. `content_type` from payload kind.
-3. concrete serializer implementation for that `(schema_id, content_type)`.
+Explicit registration is useful when you need stricter control than the default
+inference path gives you.
 
-Note:
-Typed decode for payloads that arrive without prior local registration (for example remote protobuf payloads) still requires explicit serializer registration. JSON payloads can fall back to plain `dict`/`list` values.
+Typical reasons include:
 
-## Optional Explicit Configuration
-
-Use explicit configuration only when you need strict schema contracts or non-default content types.
+1. remote decode should reconstruct a typed value instead of falling back to a
+   plain dict or list
+2. a custom content type or serializer is part of your contract
+3. the payload type is uncommon enough that you do not want to rely on inference
 
 ```python
 from pydantic import BaseModel
@@ -81,19 +71,25 @@ registry = SerializerRegistry()
 registry.register_type(TaskModel)
 ```
 
-Manual [`MessageSerializer`](../../src/agentlane/transport/_serializer.py)
-implementations are still supported as an escape hatch.
+If you need full control, implement the
+[`MessageSerializer`](../../src/agentlane/transport/_serializer.py) protocol
+directly and register that serializer yourself.
 
-## Boundary Conversion
+## Wire Payloads
 
-Use runtime hooks (or transport helpers) to convert between messaging payloads and wire payloads:
+At the transport boundary, runtime payloads become
+[`WirePayload`](../../src/agentlane/transport/_wire_payload.py) values. Most
+code never needs to construct them directly, but the runtime exposes helpers for
+cases where you do want to convert a payload manually.
 
 ```python
 wire_payload = runtime.payload_to_wire_payload(payload)
 restored_payload = runtime.wire_payload_to_payload(wire_payload)
 ```
 
-## Migration Note
+## A Useful Rule Of Thumb
 
-Implicit map-based metadata (`attributes`) remains intentionally excluded from serialization contracts.
-Use typed fields (for example `idempotency_key`) and first-class message schemas.
+If both sender and receiver live inside one normal runtime and you are sending
+ordinary Python models, do not over-configure serialization. Start with the
+default path and only reach for explicit registry setup when you have a clear
+transport requirement.

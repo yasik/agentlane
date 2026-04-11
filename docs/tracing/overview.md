@@ -1,46 +1,37 @@
 # Tracing Overview
 
-`agentlane.tracing` provides the core tracing primitives used to instrument
-runtime, model, and application code.
+Tracing is the shared observability layer for AgentLane. It gives runtime code,
+model code, and application code a common trace and span model so the whole
+workflow can be understood as one unit instead of as isolated logs.
 
-It gives AgentLane a shared trace and span model with context propagation and
-trace-level metrics. Use this layer when you want structured observability
-without coupling tracing logic to a specific runtime or provider.
-The core tracing types are
-[`TraceProvider`](../../src/agentlane/tracing/_provider.py),
-[`DefaultTraceProvider`](../../src/agentlane/tracing/_provider.py),
-[`Trace`](../../src/agentlane/tracing/_trace.py),
-[`Span`](../../src/agentlane/tracing/_span.py),
-[`MetricsProcessor`](../../src/agentlane/tracing/_metrics_processor.py), and
-[`TracingProcessor`](../../src/agentlane/tracing/_processor_interface.py).
+The public tracing surface stays small. A
+[`TraceProvider`](../../src/agentlane/tracing/_provider.py) creates
+[`Trace`](../../src/agentlane/tracing/_trace.py) and
+[`Span`](../../src/agentlane/tracing/_span.py) values, the default
+[`DefaultTraceProvider`](../../src/agentlane/tracing/_provider.py) gives most
+applications a ready-made implementation, and processors such as
+[`MetricsProcessor`](../../src/agentlane/tracing/_metrics_processor.py) or a
+custom [`TracingProcessor`](../../src/agentlane/tracing/_processor_interface.py)
+consume what was recorded.
 
-## What It Includes
+## What Tracing Captures
 
-1. `trace(...)` for top-level trace scopes.
-2. `agent_span(...)`, `function_span(...)`, `generation_span(...)`, and
-   `custom_span(...)` for common span types.
-3. context helpers such as `get_current_trace()`, `get_current_span()`, and
-   parent-context propagation functions.
-4. a metrics registry and aggregation helpers for trace-level metrics.
-5. provider and processor interfaces for exporting traces and metrics.
+Tracing is built around a simple idea:
 
-## Boundaries
+1. a trace represents one workflow or run
+2. spans represent meaningful operations inside that workflow
+3. processors export or aggregate what happened
 
-1. This package defines tracing primitives and metrics aggregation.
-2. It does not own runtime delivery, model calls, or harness orchestration.
-3. Runtime and model layers can emit tracing data through this shared surface
-   instead of each layer defining its own tracing contract.
+That makes tracing useful for both debugging and operations. You can see how a
+request moved through a system, and you can also aggregate metrics about that
+system over time.
 
-## Provider Setup
+## Getting Started
 
 Tracing uses one global
-[`TraceProvider`](../../src/agentlane/tracing/_provider.py).
-
-The default setup path is:
-
-1. create a `DefaultTraceProvider`
-2. register one or more processors on it
-3. install it with `set_trace_provider(...)`
+[`TraceProvider`](../../src/agentlane/tracing/_provider.py). The usual setup is
+to create a [`DefaultTraceProvider`](../../src/agentlane/tracing/_provider.py),
+register one or more processors, and install it with `set_trace_provider(...)`.
 
 ```python
 from agentlane.tracing import (
@@ -54,10 +45,8 @@ provider.register_processor(MetricsProcessor())
 set_trace_provider(provider)
 ```
 
-Use `get_trace_provider()` when you need to inspect or extend the installed
-provider later in process startup.
-
-## Minimal Example
+Once a provider is installed, traces and spans can be created anywhere in the
+process through the shared tracing API.
 
 ```python
 from agentlane.tracing import emit_metric, generation_span, trace
@@ -70,51 +59,43 @@ with trace("customer_support_run"):
 
 ## Context Propagation
 
-Use the propagation helpers when a trace must cross an async boundary that does
-not automatically preserve the current tracing scope.
+Tracing becomes more interesting once work crosses task or process boundaries.
+That is why the package exposes explicit propagation helpers.
 
-The public helpers are:
+Use:
 
 1. `capture_parent_context(message_id)` before handing work off
 2. `adopt_parent_context(message_id)` while processing that work
-3. `discard_parent_context(message_id)` to drop stored context explicitly
+3. `discard_parent_context(message_id)` when stored context should be dropped
 
-These helpers are useful for message-driven runtime flows where the producer and
-consumer execute in different tasks or processes.
+Those helpers are especially useful for runtime-driven message flows where the
+producer and consumer do not share the same synchronous call stack.
 
 ## Metrics
 
-Metric emission happens inside an active span. Aggregation happens at the trace
-level through the metrics registry.
+Metrics are emitted inside spans and aggregated at the trace level. That keeps
+the metric story close to the trace story: one workflow can contain many metric
+events, but the final result can still be summarized once the workflow ends.
 
-Common aggregation modes are:
+[`MetricsProcessor`](../../src/agentlane/tracing/_metrics_processor.py) is the
+default building block for that aggregation path.
 
-1. `sum`
-2. `count`
-3. `avg`
-4. `min`
-5. `max`
-6. `first`
-7. `last`
-
-## Processors And Export
+## Exporters And Processors
 
 [`TracingProcessor`](../../src/agentlane/tracing/_processor_interface.py) is
-the export boundary for traces and spans.
+the extension point for exporting traces and spans to another sink.
 
-Common processor setup patterns are:
+The common patterns are:
 
-1. `MetricsProcessor` to aggregate per-trace metrics and optionally hand them to
-   another exporter callback
-2. a custom `TracingProcessor` implementation for your own sink
-3. `agentlane-braintrust` with `BraintrustProcessor` when you want Braintrust
-   export for traces, spans, and aggregated metrics
-
-Example Braintrust registration:
+1. use `MetricsProcessor` when you need aggregated trace metrics
+2. implement a custom processor when you need your own export destination
+3. use `agentlane-braintrust` with `BraintrustProcessor` when you want
+   Braintrust export
 
 ```python
 from agentlane.tracing import DefaultTraceProvider, set_trace_provider
 from agentlane_braintrust import BraintrustProcessor
+
 
 provider = DefaultTraceProvider()
 provider.register_processor(

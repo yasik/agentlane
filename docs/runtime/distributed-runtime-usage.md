@@ -1,34 +1,27 @@
 # Runtime: Distributed Runtime Usage
 
-This guide shows how the current distributed runtime is used in practice. It is
-meant to answer two questions quickly: when the convenience entrypoint is
-enough, and when you should work with hosts and workers directly. The main
-entrypoints are
+Distributed runtime support is easiest to approach in two modes:
+
+1. use the managed entrypoint when you want the normal runtime API and one
+   primary worker behind it
+2. use explicit hosts and workers when you need to control topology yourself
+
+Most applications should start with
 [`distributed_runtime(...)`](../../src/agentlane/runtime/_context.py), which
-creates a managed
-[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py),
-and the explicit
+yields a managed
+[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py).
+Reach for
 [`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py) and
 [`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py)
-types for multi-worker topologies.
+directly only when worker placement or topology needs to be explicit.
 
-## When To Use Which Entry Point
+## Start With The Managed Entry Point
 
 Use [`distributed_runtime()`](../../src/agentlane/runtime/_context.py) when you
-want the same runtime API as the
-single-threaded engine, but backed by an in-process host plus one primary worker
-with no network setup.
-
-Use
-[`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py)
-and [`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py)
-directly when you want to model an explicit multi-worker topology yourself.
-
-## Zero-Config Example
-
-[`distributed_runtime()`](../../src/agentlane/runtime/_context.py) manages the
-host lifecycle for you and yields a
-[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py).
+want to keep the runtime mental model unchanged. You still call
+`send_message(...)`, `publish_message(...)`, `register_factory(...)`, and the
+other normal runtime APIs. The difference is that a host and a primary worker
+are created for you behind the scenes.
 
 ```python
 from agentlane.messaging import AgentId, MessageContext
@@ -64,17 +57,24 @@ async with distributed_runtime() as runtime:
     assert second.response_payload == {"count": 2}
 ```
 
-What this does:
+This is the right default when:
 
-1. Starts an in-process `WorkerAgentRuntimeHost`.
-2. Starts one primary `WorkerAgentRuntime`.
-3. Runs your registered factories on that worker.
-4. Stops the worker and host automatically when the context exits.
+1. you want distributed execution without designing your own topology
+2. one host plus one primary worker is enough
+3. you want the same mental model as the in-process runtime
 
-## Explicit Direct RPC Across Workers
+## Move To Explicit Hosts And Workers When Placement Matters
 
-Use the explicit primitives when you want to place different agent types on
-different workers and route direct RPCs through the host.
+Use explicit
+[`WorkerAgentRuntimeHost`](../../src/agentlane/runtime/_worker_runtime_host.py)
+and [`WorkerAgentRuntime`](../../src/agentlane/runtime/_worker_runtime.py)
+instances when you want different agent types to live on different workers.
+
+The important design idea is that the host chooses the destination worker, but
+the chosen worker still runs the delivery locally with its own registry,
+scheduler, and agent instances.
+
+### Direct Send Across Workers
 
 ```python
 from agentlane.messaging import AgentId, MessageContext
@@ -110,24 +110,19 @@ try:
         recipient=AgentId.from_values("echo", "session-1"),
     )
     assert outcome.status.value == "delivered"
-    assert outcome.response_payload == {
-        "agent_id": "session-1",
-        "echo": "ping",
-    }
 finally:
     await caller.stop_when_idle()
     await echo_worker.stop_when_idle()
     await host.stop_when_idle()
 ```
 
-The important point is that `caller` does not host the `echo` factory. The
-host resolves `AgentType("echo")` to `echo_worker`, then that worker executes
-the agent locally.
+The caller does not need to host the target agent type. The host resolves the
+destination worker and forwards the delivery there.
 
-## Explicit Publish Across Workers
+### Publish Across Workers
 
-Use the explicit primitives when you want publish fan-out resolved centrally by
-the host and executed on whichever worker owns the subscribed agent type.
+Publish follows the same high-level pattern, but the host resolves all matching
+subscriptions before it forwards concrete deliveries to workers.
 
 ```python
 from agentlane.messaging import MessageContext, TopicId
@@ -175,59 +170,18 @@ finally:
     await host.stop_when_idle()
 ```
 
-## Lifecycle Notes
+## What To Keep In Mind
 
-Host lifecycle:
+The current distributed implementation is intentionally narrow:
 
-1. Start the host before starting explicit workers.
-2. `host.stop()` fails in-flight direct RPC sessions immediately.
-3. `host.stop_when_idle()` currently waits for direct RPC sessions only.
+1. `distributed_runtime()` manages one in-process host plus one primary worker
+2. a given `AgentType` is owned by one worker at a time
+3. `PublishAck` still means enqueue only, not handler completion
+4. cancellation does not yet propagate across the process boundary
 
-Worker lifecycle:
+Those are current implementation facts, not just usage advice.
 
-1. A worker must know its `host_address` before `start()`.
-2. Worker startup binds the local gRPC endpoint first, then registers with the host.
-3. Worker shutdown deregisters from the host before transport teardown so new
-   cross-worker traffic stops first.
-4. Registering factories and subscriptions before `start()` is fine. The worker
-   pushes a full catalog snapshot during startup and after later local changes.
+## Related Docs
 
-## Routing Semantics
-
-Current v1 placement and routing rules:
-
-1. One worker owns a given `AgentType`.
-2. All distributed `send_message` and `publish_message` calls go through the host.
-3. The host keeps the authoritative pending-session table for direct RPCs.
-4. The host mirrors worker subscriptions and computes concrete publish deliveries.
-5. The target worker directly enqueues the concrete deliveries it receives from
-   the host; it does not rerun global publish subscription matching.
-
-## Current Limitations
-
-These are current implementation facts, not future promises:
-
-1. `distributed_runtime()` manages one in-process host plus one primary worker.
-   Extra workers must be created explicitly with `WorkerAgentRuntime`.
-2. Placement is exclusive per `AgentType`, so different keys of the same type are
-   not sharded across multiple workers yet.
-3. `cancellation_token` is part of the API surface but is not propagated across
-   the process boundary yet.
-4. `PublishAck` means enqueue only, never downstream handler completion.
-
-## Runnable Examples
-
-See these runnable distributed runtime demos:
-
-1. [distributed_publish_fan_in](../../examples/runtime/distributed_publish_fan_in/README.md):
-   explicit host/workers with publish fan-out and one stateful aggregator agent
-   for fan-in.
-2. [distributed_scatter_gather](../../examples/runtime/distributed_scatter_gather/README.md):
-   explicit host/workers with one coordinator agent aggregating multiple direct
-   RPC responses.
-3. [simple](../../examples/runtime/simple/README.md):
-   stripped-down starter versions of both patterns with plain `print(...)`
-   output and single-file scripts.
-
-For design background and tradeoffs, see
-[Runtime: Distributed Host/Worker Architecture](./distributed-runtime-architecture.md).
+1. [Runtime: Engine and Execution](./engine-and-execution.md)
+2. [Runtime: Distributed Runtime Architecture](./distributed-runtime-architecture.md)

@@ -1,34 +1,36 @@
 # Harness Architecture
 
-## Overview
+The harness is the layer you use when explicit message delivery is not enough
+and you want a reusable agent loop on top of the runtime. It does not replace
+the runtime. It uses the runtime as its execution substrate and adds a
+structured way to turn model calls, tool calls, and handoffs into a coherent
+workflow.
 
-The harness is the layer you reach for when message delivery alone is not
-enough and you want a reusable agent loop on top of the runtime. It keeps the
-runtime's delivery rules in place, then adds model calls, tool execution,
-handoffs, and resumable state around those rules.
+The pieces matter in relation to one another.
+[`Task`](../../src/agentlane/harness/_task.py) gives ordinary orchestration code
+a home above the runtime. [`Agent`](../../src/agentlane/harness/_agent.py)
+layers in reusable configuration through
+[`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py) and resumable
+state through [`RunState`](../../src/agentlane/harness/_run.py).
+[`Runner`](../../src/agentlane/harness/_runner.py) then conducts the actual
+model loop and produces a [`RunResult`](../../src/agentlane/harness/_run.py).
 
-At its core, the harness is built from
-[`Task`](../../src/agentlane/harness/_task.py),
-[`Agent`](../../src/agentlane/harness/_agent.py),
-[`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py),
-[`Runner`](../../src/agentlane/harness/_runner.py), and the run data types
-[`RunState`](../../src/agentlane/harness/_run.py) and
-[`RunResult`](../../src/agentlane/harness/_run.py).
+## What The Harness Adds
 
-At a high level:
+The runtime already knows how to deliver messages and preserve ordering. The
+harness adds a higher-level story on top of that:
 
-1. `Task` is the top-level unit of work.
-2. `Agent` builds on `Task` and owns per-agent lifecycle state.
-3. `Runner` executes the generic LLM loop for one run.
-4. `agentlane.models` remains the model-facing foundation.
-5. Provider packages stay thin and adapt request and response traffic into the
-   shared model contract.
+1. `Task` gives ordinary application orchestration a home above the runtime
+2. `Agent` keeps static configuration and resumable conversation state together
+3. `Runner` executes the model loop for one run
+4. tools and handoffs become first-class parts of that loop
 
-The key design choice is to keep the public harness boundary run-oriented.
-Developers work with descriptors, run input, and run state. The harness itself
-decides how those values become canonical model messages.
+That separation matters because queueing and persistence are different problems
+from model reasoning. The harness keeps them apart.
 
-## System View
+## The Main Flow
+
+At a high level, a run moves like this:
 
 ```text
 Application / caller
@@ -42,12 +44,6 @@ Application / caller
               |
               v
 +---------------------------+
-| Task                      |
-| top-level unit of work    |
-+-------------+-------------+
-              |
-              v
-+---------------------------+
 | Agent                     |
 | descriptor + lifecycle    |
 +-------------+-------------+
@@ -56,15 +52,13 @@ Application / caller
 +---------------------------+
 | AgentLifecycle            |
 | queue + persisted state   |
-| RunState ownership        |
 +-------------+-------------+
               |
               v
 +---------------------------+
 | Runner                    |
-| stateless loop            |
-| request building          |
-| tool / handoff control    |
+| model loop                |
+| tools + handoffs          |
 +------+------+-------------+
        |      |
        |      +--------------------+
@@ -73,283 +67,40 @@ Application / caller
 +--------------+          +-------------------+
 | ToolExecutor |          | runtime messaging |
 | local tools  |          | delegated agents  |
-+--------------+          +---------+---------+
-                                      |
-                                      v
-                            +-------------------+
-                            | child Agent       |
-                            | tool or handoff   |
-                            +-------------------+
-
-              Runner
-                |
-                v
-      +-----------------------+
-      | agentlane.models      |
-      | prompts, schema,      |
-      | tools, ModelResponse  |
-      +-----------+-----------+
-                  |
-                  v
-      +-----------------------+
-      | provider client       |
-      | thin request/response |
-      +-----------+-----------+
-                  |
-                  v
-                LLM
++--------------+          +-------------------+
 ```
 
-## Package Layout
+The important point is that the runtime still owns delivery and instance reuse.
+The harness owns the meaning of a run.
 
-The implementation lives under `src/agentlane/harness`.
+## Why Lifecycle And Runner Are Separate
 
-Core modules:
+The lifecycle owns sequencing. If multiple inputs arrive for the same concrete
+agent, it queues them and makes sure only one run is active at a time.
 
-1. `_task.py`: the thin top-level task primitive.
-2. `_agent.py`: the default harness agent built on top of `Task`.
-3. `_lifecycle.py`: agent descriptor types plus per-agent queue and run-state
-   management.
-4. `_runner.py`: the stateless generic LLM loop.
-5. `_handoff.py`: delegation payloads and helper functions shared by handoffs
-   and delegated sub-agents.
-6. `_tooling.py`: tool inheritance and merge helpers.
-7. `_hooks.py`: runner lifecycle hooks.
-8. `_run.py`: minimal run-state and result contracts.
+The runner owns the model loop inside that run. It builds the next request,
+calls the model, inspects the response, executes tools or handoffs, and either
+continues or returns a final result.
 
-Reserved subpackages:
-
-1. `context/`
-2. `memory/`
-
-Those package seams exist so future context and memory features can grow
-without changing the current harness boundary.
-
-## Core Contracts
-
-### [`Task`](../../src/agentlane/harness/_task.py)
-
-`Task` is a thin wrapper over the existing runtime model. It does not introduce
-its own scheduler or dispatcher.
-
-### [`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py)
-
-`AgentDescriptor` is the canonical static configuration for one agent. It owns:
-
-1. descriptive metadata such as `name` and `description`
-2. the model client
-3. `instructions`
-4. `model_args`
-5. `schema`
-6. `tools`
-7. predefined `handoffs`
-8. `default_handoff`
-9. reserved `skills`, `context`, and `memory` seams
-
-The descriptor is static. Mutable conversation state is kept in `RunState`.
-
-### [`RunInput`](../../src/agentlane/harness/_run.py)
-
-The default harness agent accepts:
-
-1. `str`
-2. `list[object]`
-3. `RunState`
-
-That keeps the public input surface simple while still allowing rich prompt
-input, replay, and resume.
-
-### [`RunState`](../../src/agentlane/harness/_run.py)
-
-`RunState` is the minimal resumable state for one agent run:
-
-1. `original_input`
-2. `continuation_history`
-3. `responses`
-4. `turn_count`
-
-It is intentionally small. The harness does not currently expose a larger event
-log, approval state, or actor graph.
-
-### [`RunResult`](../../src/agentlane/harness/_run.py)
-
-`RunResult` is the minimal final result returned by the default runner:
-
-1. `final_output`
-2. `responses`
-3. `turn_count`
-4. `run_state`
-
-The harness keeps raw `ModelResponse` values intact instead of wrapping them in
-new harness-specific response models.
+That split is what makes resumable runs practical. The lifecycle can keep a
+stable baseline of `RunState`, while the runner works on a private copy for the
+current turn.
 
 ## Request Ownership
 
-The public harness boundary is not `MessageDict`-oriented.
+The harness public boundary is deliberately not a low-level message-dict API.
 
 Instead:
 
-1. `Agent` accepts `RunInput`.
-2. `AgentLifecycle` persists and queues `RunState`.
-3. `Runner` converts `instructions + original_input + continuation_history`
-   into canonical model requests.
-4. Provider clients receive canonical model messages and return canonical
-   `ModelResponse` values.
+1. callers provide a `RunInput`
+2. the lifecycle turns that into a working `RunState`
+3. the runner turns `RunState` into canonical model messages
+4. provider clients receive the shared `agentlane.models` request shape
 
-This keeps message normalization inside the runner and prevents low-level model
-wire types from leaking into the public harness API.
+That keeps raw provider wire formats out of application code.
 
-## Lifecycle Model
+## Where To Read Next
 
-Each concrete `AgentId` preserves the runtime guarantee of a single active
-handler at a time.
-
-When new input arrives:
-
-1. if the agent is idle, the lifecycle creates a private working copy of the
-   current `RunState` and invokes the runner
-2. if the agent is already running, the lifecycle appends the input to an
-   internal FIFO queue
-3. queued inputs are drained one runner invocation at a time
-
-The lifecycle uses copy-on-write state handling so failed turns do not corrupt
-the persisted baseline.
-
-```text
-new input for AgentId
-        |
-        v
-+---------------------------+
-| AgentLifecycle.enqueue    |
-+-------------+-------------+
-              |
-      +-------+--------+
-      | already active?|
-      +---+--------+---+
-          |        |
-        yes        no
-          |        |
-          v        v
- +----------------+  +------------------------+
- | append to FIFO |  | copy persisted state   |
- | pending queue  |  | create working state   |
- +--------+-------+  +-----------+------------+
-          |                      |
-          +----------+-----------+
-                     |
-                     v
-           +--------------------+
-           | Runner.run(...)    |
-           +---------+----------+
-                     |
-                     v
-           +--------------------+
-           | success?           |
-           +----+----------+----+
-                |          |
-               no         yes
-                |          |
-                v          v
-      +----------------+  +--------------------+
-      | keep baseline  |  | persist new state  |
-      | unchanged      |  | and drain next     |
-      +----------------+  | queued input       |
-                          +--------------------+
-```
-
-## Runner Ownership
-
-`Runner` owns the generic loop for one run:
-
-1. build the next model request
-2. call the model
-3. accumulate the raw `ModelResponse`
-4. classify the model output
-5. either stop, execute tools, or transfer control
-6. continue until a terminal answer is produced
-
-The runner also owns:
-
-1. tool execution
-2. model-facing tool visibility
-3. optional outer retry policy
-4. hook dispatch
-5. handoff interception
-6. delegated agent-as-tool execution
-
-## Delegation Model
-
-The harness supports two distinct delegation patterns that both appear to the
-model as tool choices.
-
-### First-class handoff
-
-Handoff transfers control to another agent.
-
-Semantics:
-
-1. the model emits a handoff tool call
-2. the runner intercepts it specially
-3. full conversation history is transferred to the downstream agent
-4. the triggering handoff turn is preserved in transferred history
-5. an optional delegation message is appended
-6. the downstream agent continues the run
-7. the original agent does not resume
-
-Predefined transfer targets live in `AgentDescriptor.handoffs`. A generic
-fresh-agent path can also be exposed through `DefaultHandoff`.
-
-### Agent-as-tool
-
-Agent-as-tool behaves like a subroutine call.
-
-Semantics:
-
-1. the model emits a normal tool call with a JSON schema
-2. the runner validates arguments into a Pydantic model
-3. that structured payload is sent to another agent through runtime messaging
-4. the child agent runs to completion
-5. the child result is converted into a tool result string
-6. the caller agent continues its own loop
-
-Predefined sub-agents are exposed through `AgentDescriptor.as_tool(...)` or
-`Agent.as_tool(...)`. A generic spawned-helper path is exposed as one model
-tool through `DefaultAgentTool`.
-
-## Tool Visibility And Inheritance
-
-`AgentDescriptor.tools` uses an inheritance-aware policy:
-
-1. omitted tools inherit the parent tool set
-2. explicit `Tools(...)` overrides the parent tool set
-3. explicit `None` disables tools for that agent
-
-The concrete `Agent.tools` property merges that resolved tool catalog with any
-model-visible handoff tools for the current instance.
-
-## Model And Provider Boundary
-
-The harness reuses the shared model contract from `agentlane.models`:
-
-1. `ModelResponse`
-2. `ToolCall`
-3. `MessageDict`
-4. `Tools`
-5. `OutputSchema`
-
-Provider adapters stay thin:
-
-1. they accept canonical request input
-2. they return canonical model responses
-3. they do not run their own tool loop
-4. they do not own handoff logic
-
-## Current Scope
-
-The current harness intentionally does not define:
-
-1. memory persistence semantics
-2. approval interrupts
-3. event-log envelopes
-4. distributed orchestration beyond the existing runtime messaging contract
-5. provider-specific harness abstractions beyond `agentlane.models`
+Start with [Harness Tasks](./tasks.md) if you need orchestration without an LLM
+loop. Read [Harness Agents](./agents.md) to understand the default agent type.
+Read [Harness Runner](./runner.md) when you want the actual loop behavior.

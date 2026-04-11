@@ -1,81 +1,53 @@
 # Harness Tasks
 
-This page explains the smallest harness abstraction. A task is useful when you
-want runtime-oriented orchestration code with a clearer name and a few helper
-methods, but without opting into the default LLM loop.
+Tasks are the smallest harness abstraction. They are useful when you want a
+clear place for application orchestration logic, but you do not want to opt
+into the default model loop.
 
-[`Task`](../../src/agentlane/harness/_task.py) itself is a thin layer over
-[`BaseAgent`](../../src/agentlane/runtime/_base_agent.py), so it keeps the
-runtime model intact while adding a clearer place for application orchestration
-code.
+[`Task`](../../src/agentlane/harness/_task.py) is a thin layer over
+[`BaseAgent`](../../src/agentlane/runtime/_base_agent.py). That is why it feels
+familiar if you already understand the runtime: it keeps the same message
+handlers, the same delivery model, and the same instance reuse rules.
 
-## What A Task Is
+## When To Use A Task
 
-[`Task`](../../src/agentlane/harness/_task.py) is the top-level harness
-primitive for application work that sits upstream of LLM-driven agents.
+Use a task when the work is application logic rather than model-driven
+reasoning. Typical examples include:
 
-Use a task when you need orchestration logic that:
+1. coordinating multiple runtime recipients
+2. calling databases, services, or webhooks
+3. shaping a workflow before or after a model-backed agent runs
 
-1. receives runtime messages,
-2. talks to other runtime recipients,
-3. may call databases, webhooks, filesystems, or service clients, and
-4. should not itself imply an LLM loop.
+If the code needs the runtime but not an LLM loop, a task is usually the right
+level.
 
-The default harness `Agent` builds directly on top of `Task`.
+## Why Tasks Stay Thin
 
-## Runtime Model
+Tasks do not introduce a second scheduler or a second execution model. They
+exist mostly to make intent clearer and to provide a few small registration
+helpers.
 
-Tasks reuse the existing runtime model directly:
+That means the important runtime ideas still apply:
 
-1. a task extends `agentlane.runtime.BaseAgent`
+1. one concrete `AgentId` means one reusable instance
 2. message handlers are still declared with `@on_message`
-3. orchestration still uses `send_message` and `publish_message`
-4. runtime instance reuse is still keyed by `AgentId`
+3. orchestration still uses `send_message(...)` and `publish_message(...)`
 
-There is no second task-specific execution engine.
+## Registration And State
 
-## Registration Patterns
+There are two common patterns:
 
-### Lazy factory registration
+1. `Task.register(...)` when the runtime should create instances lazily
+2. `Task.bind(...)` when you want to create and bind one concrete instance
 
-Use `Task.register(runtime, agent_type, ...)` when the runtime should create
-task instances on demand.
+The choice is really about state ownership.
 
-This is the right default when:
+Use registration when state should follow the normal `AgentId` reuse model. Use
+binding when you already have a concrete stateful instance and want that exact
+instance tied to one identity.
 
-1. task construction is cheap,
-2. state should be tied to `AgentId` reuse, and
-3. you want runtime factories rather than pre-created instances.
+## A Useful Rule Of Thumb
 
-### Stateful instance binding
-
-Use `Task.bind(runtime, agent_id, ...)` when you want to construct one concrete
-task instance and keep reusing it for a specific `AgentId`.
-
-This is the right choice when:
-
-1. task state must survive across multiple deliveries for the same id,
-2. dependencies or state are initialized up front, or
-3. tests need direct access to the concrete task instance.
-
-## Stateful vs Stateless Guidance
-
-Tasks may be either stateful or effectively stateless depending on how they are
-addressed.
-
-1. Reusing the same `AgentId` means the runtime will reuse the same task
-   instance.
-2. Using a new `AgentId` creates an isolated task instance for that key.
-3. A task registered via factory can still behave statefully if callers reuse
-   the same `AgentId`.
-4. A task bound as one explicit instance is intentionally stateful for that
-   exact `AgentId`.
-
-The runtime semantics stay explicit: statefulness is driven by instance reuse,
-not hidden task logic.
-
-## Design Constraint
-
-Tasks remain intentionally thin. They add semantic clarity and small
-registration helpers, but they do not replace or wrap the runtime's routing,
-scheduler, or dispatcher contracts.
+If you start adding prompt construction, model configuration, or tool policies
+to a task, it is probably time to move up to the default harness
+[`Agent`](../../src/agentlane/harness/_agent.py).

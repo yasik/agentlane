@@ -1,19 +1,39 @@
 # Documentation
 
-The pages here focus on how the framework is organized, what each
-layer is responsible for, and which public types you work with when building
-applications.
+AgentLane is built for AI systems where the runtime is part of the product. At
+the center is a messaging runtime: agents have stable addresses, receive direct
+messages and published events, preserve per-recipient ordering, and keep state
+when work needs to live longer than one model turn. That makes the framework a
+good fit for long-horizon agentic tasks, background specialists, fan-out and
+fan-in flows, and applications that mix deterministic services with
+model-driven components.
 
-AgentLane is easiest to understand as a small stack of cooperating layers:
+Many adjacent frameworks start from the agent loop itself. They are often optimized 
+either for interactive local or cloud sessions and delegated background work, or 
+for durable runs expressed as explicit workflows and graphs.
 
-1. runtime and messaging for delivery, routing, and execution
-2. transport for payload serialization across boundaries
-3. models for prompts, schemas, tools, and provider-facing model calls
-4. harness for agent loops, handoffs, and resumable runs
-5. tracing for observability across the other layers
+AgentLane starts one layer lower: it treats addressed messaging,
+routing, delivery outcomes, and instance reuse as the core abstraction, then
+layers prompts, tools, and a default harness on top.
 
-Viewed as the main application-facing stack, the framework can also be pictured
-as nested layers with application code wrapped around the core runtime:
+In practical terms, this gives you a clean progression. Use
+[`single_threaded_runtime()`](../src/agentlane/runtime/_context.py) and the
+harness when you want one local agent loop or one in-process service. Move to
+[`distributed_runtime()`](../src/agentlane/runtime/_context.py) or explicit
+host/worker runtimes when the same system needs cross-worker routing, worker
+placement, or cloud execution. The public messaging model stays the same, so
+you do not need to redesign the application around a different orchestration
+surface just because deployment changed.
+
+At a high level:
+
+1. runtime and messaging define delivery, routing, and execution
+2. transport turns payloads into wire-safe values
+3. models describe prompts, tools, schemas, and model-call behavior
+4. harness adds reusable agent loops, handoffs, and resumable runs
+5. tracing cuts across those layers and provides observability
+
+The main application-facing stack looks like this:
 
 ```text
 +------------------------------------------------------+
@@ -42,58 +62,76 @@ as nested layers with application code wrapped around the core runtime:
 +------------------------------------------------------+
 ```
 
-## Getting Started
+Tracing is not shown as another wrapper because it is a cross-cutting concern:
+it instruments work that happens in every layer rather than owning a separate
+execution boundary.
 
-If you are new to the codebase, this path is the shortest way to build a
-working mental model:
+## Start Here
 
-1. Read the project [README](../README.md) for the high-level architecture.
-2. Choose your entrypoint:
-   - use the runtime directly if you want explicit message passing
-   - use the harness if you want a default agent loop on top of the runtime
-3. Read the matching docs pages below.
-4. Run one of the examples under [examples/](../examples/README.md).
+If you are new to the codebase, start with the shortest path to a working
+mental model:
+
+1. Read the project [README](../README.md) for the top-level architecture.
+2. If you want explicit message passing, start with
+   [Runtime: Engine and Execution](./runtime/engine-and-execution.md).
+3. If you want the default agent loop, read
+   [Harness Architecture](./harness/architecture.md) and then
+   [Harness Runner](./harness/runner.md).
+4. If you want to understand prompt construction or tool exposure, read
+   [Models Overview](./models/overview.md) and
+   [Models: Prompt Templating](./models/prompt-templating.md).
+5. Run one of the examples under [examples/](../examples/README.md).
+
+## Choose A Topic
+
+Use this table when you know the kind of problem you are solving but not which
+page to read first.
+
+| If you want to understand... | Start here |
+| --- | --- |
+| How messages are sent, published, scheduled, and completed | [Runtime: Engine and Execution](./runtime/engine-and-execution.md) |
+| How cross-worker delivery works | [Runtime: Distributed Runtime Usage](./runtime/distributed-runtime-usage.md) and [Runtime: Distributed Runtime Architecture](./runtime/distributed-runtime-architecture.md) |
+| How routing, subscriptions, and delivery modes behave | [Messaging: Routing and Delivery](./messaging/routing-and-delivery.md) |
+| When serialization matters and when the defaults are enough | [Transport Serialization](./transport/serialization.md) |
+| How prompts, tools, and structured outputs fit together | [Models Overview](./models/overview.md) |
+| How prompt templates are authored and rendered | [Models: Prompt Templating](./models/prompt-templating.md) |
+| How the harness organizes tasks, agents, and runs | [Harness Architecture](./harness/architecture.md) |
+| What the default agent owns | [Harness Agents](./harness/agents.md) |
+| How the default loop calls models, tools, and handoffs | [Harness Runner](./harness/runner.md) |
+| How tracing, metrics, and processors are wired up | [Tracing Overview](./tracing/overview.md) |
 
 ## Contents
 
 ### Runtime
 
 1. [Runtime: Engine and Execution](./runtime/engine-and-execution.md)
-   Core runtime flow, lifecycle, scheduling, and local versus distributed execution.
 2. [Runtime: Distributed Runtime Usage](./runtime/distributed-runtime-usage.md)
-   Practical guide for `distributed_runtime()`, explicit hosts, and explicit workers.
-3. [Runtime: Distributed Host/Worker Architecture](./runtime/distributed-runtime-architecture.md)
-   Design view of host responsibilities, worker responsibilities, and cross-worker routing.
+3. [Runtime: Distributed Runtime Architecture](./runtime/distributed-runtime-architecture.md)
 
 ### Messaging
 
 1. [Messaging: Routing and Delivery](./messaging/routing-and-delivery.md)
-   Direct send, publish fan-out, subscriptions, delivery modes, and ordering.
 
 ### Transport
 
 1. [Transport Serialization](./transport/serialization.md)
-   How payloads become wire-safe values and when custom serializers are useful.
 
 ### Models
 
 1. [Models Overview](./models/overview.md)
-   Shared model-facing primitives: prompts, schemas, tools, retries, and run-scoped helpers.
 2. [Models: Prompt Templating](./models/prompt-templating.md)
-   How `PromptTemplate`, `MultiPartPromptTemplate`, and `PromptSpec` turn typed values into model input.
 
 ### Harness
 
 1. [Harness Architecture](./harness/architecture.md)
-   How the harness sits on top of the runtime and models layers.
 2. [Harness Tasks](./harness/tasks.md)
-   The thin task abstraction for orchestration work that does not need an LLM loop.
 3. [Harness Agents](./harness/agents.md)
-   The default agent type, its descriptor, tool surface, and resumable state.
 4. [Harness Runner](./harness/runner.md)
-   The stateless loop that builds requests, calls the model, and processes tools and handoffs.
 
 ### Tracing
 
 1. [Tracing Overview](./tracing/overview.md)
-   Traces, spans, metrics, processors, and context propagation.
+
+### Releases
+
+1. [v0.3.0](./releases/v0.3.0.md)

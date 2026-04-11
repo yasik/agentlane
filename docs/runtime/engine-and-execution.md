@@ -1,138 +1,98 @@
 # Runtime: Engine and Execution
 
-This page explains how the runtime accepts work, turns that work into
-deliveries, and decides when deliveries run. The goal is to describe the moving
-parts in practical terms: what
-[`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) owns, how
-[`AgentRegistry`](../../src/agentlane/runtime/_registry.py) and
-[`PerAgentMailboxScheduler`](../../src/agentlane/runtime/_scheduler.py) shape
-execution, and how the in-process
-[`SingleThreadedRuntimeEngine`](../../src/agentlane/runtime/_runtime.py) and
-distributed
-[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py)
-relate to one another.
+The runtime is where AgentLane decides what delivery means. It is responsible
+for creating handlers, preserving ordering, and defining what a caller can
+expect after sending or publishing a message.
 
-## TL;DR
+Most applications meet that behavior through
+[`SingleThreadedRuntimeEngine`](../../src/agentlane/runtime/_runtime.py). The
+distributed path keeps the same public contract through
+[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py).
+Both build on
+[`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) and rely on
+[`AgentRegistry`](../../src/agentlane/runtime/_registry.py) plus
+[`PerAgentMailboxScheduler`](../../src/agentlane/runtime/_scheduler.py) to
+reuse instances and preserve fair FIFO execution.
 
-1. [`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) is the
-   orchestration entrypoint (`send_message`, `publish_message`).
-2. [`SingleThreadedRuntimeEngine`](../../src/agentlane/runtime/_runtime.py) is
-   the simplest in-process implementation.
-3. [`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py)
-   is implemented in core v1 as a managed host plus one primary worker.
-4. Scheduling guarantees in-order execution per
-   [`AgentId`](../../src/agentlane/messaging/_identity.py).
-5. Concurrency happens across different `AgentId` values; in distributed mode,
-   the effective bound is per worker runtime rather than one global
-   `worker_count`.
+## The Delivery Model
 
-## Runtime Components
+There are two caller-facing paths:
 
-A delivery flows through:
+1. `send_message(...)` sends work to one recipient and waits for a terminal
+   [`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py)
+2. `publish_message(...)` fans one event out to all matching subscriptions and
+   returns a [`PublishAck`](../../src/agentlane/messaging/_outcome.py) once the
+   deliveries are enqueued
 
-1. [`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) (API + envelope construction),
-2. [`RoutingEngine`](../../src/agentlane/messaging/_routing.py) (publish route resolution),
-3. [`PerAgentMailboxScheduler`](../../src/agentlane/runtime/_scheduler.py) (queueing and fairness),
-4. `Dispatcher` (instance lookup + handler invocation),
-5. [`AgentRegistry`](../../src/agentlane/runtime/_registry.py) (factory/instance lifecycle).
+That difference shapes most other runtime behavior. Direct sends are about
+completion. Publish is about fan-out and enqueue.
 
-## Runtime Lifecycle
+## Identity And Instance Reuse
 
-### Registration Modes
+The runtime addresses work by
+[`AgentId`](../../src/agentlane/messaging/_identity.py). If the same `AgentId`
+is used again, the runtime reuses the same cached agent instance. If a
+different `AgentId` is used, the runtime creates or resolves a different
+instance.
 
-1. `register_factory(agent_type, factory)` for lazy creation.
-2. `register_instance(agent_id, instance)` for explicit pre-created stateful instance.
+That is why statefulness is explicit rather than hidden:
 
-Factory contract:
+1. reuse the same `AgentId` when you want one long-lived instance
+2. use different `AgentId` values when you want isolated work
 
-1. Engine is always passed in: `factory(engine)`.
-2. Factory may be sync or async.
-3. Created instances are bound to their `AgentId` by runtime.
+Registration follows the same idea. `register_factory(...)` is the normal path
+when the runtime should create instances lazily. `register_instance(...)` is
+useful when you want to bind an already-created stateful instance to one
+identity.
 
-### Reuse Behavior
+## Ordering And Concurrency
 
-1. Same `AgentId` resolves to same cached instance.
-2. Different `AgentId` values produce isolated instances.
-3. Publish `STATELESS` mode uses unique transient recipient keys per delivery.
+The runtime guarantees FIFO delivery per recipient. Two deliveries for the same
+`AgentId` run one after the other. Deliveries for different `AgentId` values
+may run concurrently.
 
-## Scheduling and Concurrency
+In practice, that means:
 
-Default scheduler behavior:
+1. one mailbox per recipient
+2. one active handler per recipient at a time
+3. fair scheduling across different recipients that have queued work
 
-1. one FIFO mailbox per recipient `AgentId`,
-2. fair round-robin across non-empty mailboxes,
-3. at most one active task per recipient at a time.
+This is why concurrency in AgentLane is easier to reason about than a general
+task pool. Parallelism comes from using different recipients, not from
+re-entering the same one.
 
-Practical implication:
+## Lifecycle And Shutdown
 
-1. two parallel sends to same `AgentId` are serialized,
-2. two sends to different `AgentId` values can run in parallel,
-3. increase `worker_count` to raise cross-recipient concurrency on one runtime;
-   distributed setups scale further by adding workers.
+[`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) has three lifecycle
+operations:
 
-## Delivery APIs
+1. `start()` to make the runtime ready for new work
+2. `stop()` to cancel in-flight and queued work immediately
+3. `stop_when_idle()` to stop after queued work has drained
 
-### `send_message`
+Most application code uses the async context helpers
+`single_threaded_runtime(...)`, `distributed_runtime(...)`, or
+`runtime_scope(...)` instead of calling lifecycle methods directly.
 
-1. builds one RPC envelope,
-2. enqueues one task,
-3. waits for terminal `DeliveryOutcome`.
+## Where Distributed Mode Fits
 
-Use this for request/response paths where caller needs completion status and optional response payload.
+Distributed mode keeps the same public runtime API while changing where work is
+executed. The convenience entrypoint still behaves like one runtime from the
+caller's point of view, but behind the scenes a host chooses a worker and that
+worker runs the delivery using the same local scheduler and registry model.
 
-### `publish_message`
+Read [Runtime: Distributed Runtime Usage](./distributed-runtime-usage.md) when
+you need the practical setup. Read
+[Runtime: Distributed Runtime Architecture](./distributed-runtime-architecture.md)
+when you want the host and worker responsibilities in more detail.
 
-1. builds one base event envelope,
-2. resolves matching subscriptions,
-3. enqueues one task per resolved route,
-4. returns `PublishAck` after enqueue.
-
-Use this for event fan-out where caller only needs enqueue confirmation.
-
-## Lifecycle Management
-
-[`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) lifecycle methods are idempotent:
-
-1. `start()`
-2. `stop()` (immediate shutdown, cancels in-flight/queued work)
-3. `stop_when_idle()` (graceful drain)
-
-Async context helpers:
-
-1. `single_threaded_runtime(...)`
-2. `distributed_runtime(...)`
-3. `runtime_scope(...)`
-
-These helpers start runtime on entry and stop/stop-when-idle on exit depending on success/failure path.
-
-## Distributed Mode Status
-
-[`DistributedRuntimeEngine`](../../src/agentlane/runtime/_worker_runtime.py) is
-implemented as the distributed entrypoint in core v1.
-
-Current shape:
-
-1. `DistributedRuntimeEngine` manages a zero-config host plus one primary worker.
-2. `WorkerAgentRuntimeHost` is the explicit host service for multi-worker topologies.
-3. `WorkerAgentRuntime` is the explicit worker runtime that executes application agents and connects to the host over gRPC.
-4. Once the host chooses a destination worker, execution falls back to the same local scheduler/dispatcher path used by the in-process runtime.
-
-See:
-
-1. [Runtime: Distributed Runtime Usage](./distributed-runtime-usage.md) for practical examples.
-2. [Runtime: Distributed Host/Worker Architecture](./distributed-runtime-architecture.md) for design and lifecycle details.
-
-## Minimal Example
+## Example
 
 ```python
 from dataclasses import dataclass
 
 from agentlane.messaging import AgentId, MessageContext
-from agentlane.runtime import (
-    BaseAgent,
-    SingleThreadedRuntimeEngine,
-    on_message,
-)
+from agentlane.runtime import BaseAgent, SingleThreadedRuntimeEngine, on_message
 
 
 @dataclass(slots=True)
@@ -154,6 +114,7 @@ result = await runtime.send_message(
     Ping(value="hello"),
     recipient=AgentId.from_values("worker", "session-1"),
 )
+
 assert result.status.value == "delivered"
 assert result.response_payload == {"reply": "HELLO"}
 ```

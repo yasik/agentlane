@@ -1,106 +1,99 @@
 # Models Overview
 
-`agentlane.models` is the shared model-facing layer in AgentLane. It holds the
-public pieces that describe how prompts are rendered through
-[`PromptTemplate`](../../src/agentlane/models/_prompts.py) and
-[`PromptSpec`](../../src/agentlane/models/_prompts.py), how tools are exposed
-through [`Tool`](../../src/agentlane/models/_tool.py) and
-[`Tools`](../../src/agentlane/models/_interface.py), how outputs are validated
-through [`OutputSchema`](../../src/agentlane/models/_output_schema.py), and how
-provider clients conform to the shared [`Model`](../../src/agentlane/models/_interface.py)
-and [`Config`](../../src/agentlane/models/_interface.py) contract.
+The models layer gives the rest of AgentLane a stable way to describe an LLM
+interaction without baking provider details into application code. This is
+where prompts are shaped, tools become model-visible, and structured outputs
+are defined.
 
-If you are working on model requests or responses, this is usually the right
-layer to start with. Run-scoped helpers such as
-[`DefaultRunContext`](../../src/agentlane/models/run/_context.py) and
-[`TraceCtxManager`](../../src/agentlane/models/run/_ctx_managers.py) also live
-here.
+In day-to-day code, that usually means defining a
+[`PromptTemplate`](../../src/agentlane/models/_prompts.py) or
+[`MultiPartPromptTemplate`](../../src/agentlane/models/_prompts.py), binding
+run-specific values with [`PromptSpec`](../../src/agentlane/models/_prompts.py),
+describing tool access with [`Tools`](../../src/agentlane/models/_interface.py)
+and [`@as_tool`](../../src/agentlane/models/_tool.py), and declaring the
+expected response shape with
+[`OutputSchema`](../../src/agentlane/models/_output_schema.py). Provider
+packages then implement the shared
+[`Model`](../../src/agentlane/models/_interface.py) and
+[`Config`](../../src/agentlane/models/_interface.py) boundary instead of
+inventing a different request shape for every integration.
 
-## What It Includes
+## Prompts, Tools, And Output
 
-1. [`Model`](../../src/agentlane/models/_interface.py),
-   [`Config`](../../src/agentlane/models/_interface.py), and
-   [`ModelResponse`](../../src/agentlane/models/_types.py) as the shared model
-   client contract.
-2. [`PromptTemplate`](../../src/agentlane/models/_prompts.py),
-   [`MultiPartPromptTemplate`](../../src/agentlane/models/_prompts.py), and
-   [`PromptSpec`](../../src/agentlane/models/_prompts.py) for typed prompt
-   input.
-3. [`Tool`](../../src/agentlane/models/_tool.py),
-   [`Tools`](../../src/agentlane/models/_interface.py),
-   [`ToolExecutor`](../../src/agentlane/models/_tool_executor.py), and
-   [`@as_tool`](../../src/agentlane/models/_tool.py) for native tool
-   definition and execution.
-4. [`OutputSchema`](../../src/agentlane/models/_output_schema.py) and strict
-   JSON-schema helpers for structured outputs.
-5. Retry and rate-limiting helpers for provider clients.
-6. `agentlane.models.run` helpers for run-scoped context and trace ownership.
+The three pieces fit together:
 
-## Boundaries
+1. prompt templates describe the input you want to send
+2. tools describe the actions the model may call during a run
+3. output schemas describe the shape you expect back
 
-1. This package defines reusable model primitives.
-2. It does not implement agent orchestration or runtime delivery.
-3. Application code should usually provide plain payloads or prompt primitives,
-   not low-level message dictionaries.
-4. Provider-specific request arguments should flow through per-call model args
-   instead of being normalized into `Config`.
-5. Provider packages such as `agentlane-openai` and `agentlane-litellm` build
-   on this layer instead of redefining the shared contract.
+In practice, a typical flow looks like this:
+
+1. build a prompt from typed values
+2. expose a small tool set
+3. decide whether the result should be plain text or structured output
+
+That is the reason the models layer feels lower-level than the harness but
+higher-level than a provider SDK. It does not run an agent loop. It gives the
+rest of the framework a stable language for talking to models.
 
 ## Prompt Templating
 
-Prompt templating is the part of the model layer that keeps prompt structure
-separate from prompt values. That makes prompt definitions easier to reuse and
-easier to reason about when a run is built from typed input.
+Prompt templating is described in more detail in
+[Models: Prompt Templating](./prompt-templating.md), but the short version is
+that templates keep prompt structure separate from prompt values.
 
-See [Models: Prompt Templating](./prompt-templating.md) for the full guide.
+That separation matters because it lets you:
 
-## Tool Ergonomics
+1. reuse the same prompt shape across runs
+2. keep prompt values typed and explicit
+3. hand prompts to the harness without flattening them into raw message dicts
 
-The common tool paths are intentionally lightweight:
+## Tool Policy
 
-1. decorate a typed function with
-   [`@as_tool`](../../src/agentlane/models/_tool.py),
-2. pass typed callables into
-   [`Tools(...)`](../../src/agentlane/models/_interface.py),
-3. use [`Tool.from_function(...)`](../../src/agentlane/models/_tool.py) when
-   you want an explicit native tool value.
+The common tool paths are intentionally lightweight. Use
+[`@as_tool`](../../src/agentlane/models/_tool.py) when a function should read
+as a tool definition at the declaration site. Use
+[`Tool.from_function(...)`](../../src/agentlane/models/_tool.py) when you want
+an explicit tool value in code.
 
-All three paths share the same schema inference logic for name, description, and
-arguments.
+[`Tools(...)`](../../src/agentlane/models/_interface.py) is the higher-level
+piece. It combines the visible tool set with request policy such as
+`tool_choice`, `parallel_tool_calls`, per-tool call limits, and the overall
+round-trip safety limit. That policy belongs in the models layer because it
+describes what the model is allowed to ask for. The harness then decides how
+those tool calls are executed inside a run.
 
-`Tools(...)` also owns the model-facing tool policy for a request:
+## Provider Boundary
 
-1. `tool_choice` controls whether tool use is automatic, required, or disabled.
-2. `parallel_tool_calls` controls whether the model may issue parallel tool
-   calls.
-3. `tool_call_limits` and `max_tool_round_trips` provide loop-safety controls
-   for higher-level harness usage.
+This layer is also where provider-specific behavior is contained.
 
-## Run-Scoped Helpers
+The shared [`Model`](../../src/agentlane/models/_interface.py) contract defines
+what the harness expects from a model client. Provider packages such as
+`agentlane-openai` and `agentlane-litellm` adapt concrete providers to that
+contract instead of pushing provider-specific request shapes up into the rest of
+the framework.
 
-Run-scoped helpers live under `agentlane.models.run`.
+That is why `Config` stays narrow. It covers shared networking and control-plane
+concerns. Model-specific options are passed through per-call arguments instead
+of being forced into one large global settings object.
 
-Use them when you need state that should exist for one agent run or one tool
-chain without becoming part of the LLM-visible prompt.
+## Run-Scoped Context
 
-The public helpers are:
+Some model-adjacent helpers live under `agentlane.models.run`.
 
-1. [`RunContext[T]`](../../src/agentlane/models/run/_context.py) for carrying
-   typed dependencies or in-memory state.
-2. [`DefaultRunContext`](../../src/agentlane/models/run/_context.py) for a
-   dictionary-backed context with async-safe helper methods such as
-   `increment(...)`, `set(...)`, and `append_to_list(...)`.
-3. [`TraceCtxManager`](../../src/agentlane/models/run/_ctx_managers.py) for
-   creating a trace only when the current code path does not already have one.
+They are useful when a run needs local state or tracing support that should not
+be sent to the model. The main ones are
+[`DefaultRunContext`](../../src/agentlane/models/run/_context.py) for
+dictionary-backed run-local state and
+[`TraceCtxManager`](../../src/agentlane/models/run/_ctx_managers.py) for
+ensuring a trace exists when model work begins.
 
-## Minimal Example
+## Example
 
 ```python
 from typing import TypedDict
 
 from agentlane.models import OutputSchema, PromptSpec, PromptTemplate, Tools, as_tool
-from agentlane.models.run import DefaultRunContext
 
 
 class SupportVars(TypedDict):
@@ -109,7 +102,6 @@ class SupportVars(TypedDict):
 
 support_prompt = PromptTemplate[SupportVars, str](
     system_template="You support {{ customer_tier }} customers.",
-    user_template=None,
     output_schema=OutputSchema(str),
 )
 
@@ -126,12 +118,11 @@ instructions = PromptSpec(
 )
 
 tools = Tools(tools=[search_help_center])
-run_context = DefaultRunContext()
 ```
 
 ## Related Docs
 
-1. [Harness Architecture](../harness/architecture.md)
-2. [Harness Runner](../harness/runner.md)
-3. [Models: Prompt Templating](./prompt-templating.md)
+1. [Models: Prompt Templating](./prompt-templating.md)
+2. [Harness Architecture](../harness/architecture.md)
+3. [Harness Runner](../harness/runner.md)
 4. [Transport Serialization](../transport/serialization.md)

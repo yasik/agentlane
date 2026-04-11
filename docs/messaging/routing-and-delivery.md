@@ -1,120 +1,86 @@
 # Messaging: Routing and Delivery
 
-This page describes the small set of messaging concepts that the rest of the
-framework builds on. It explains how a recipient is identified, how one message
-becomes one or more deliveries, and what the caller can rely on once work has
-been queued.
-[`AgentId`](../../src/agentlane/messaging/_identity.py),
-[`TopicId`](../../src/agentlane/messaging/_identity.py), and
-[`MessageEnvelope`](../../src/agentlane/messaging/_envelope.py) describe where
-work goes and how it is packaged. Caller-visible results come back as
-[`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py) or
-[`PublishAck`](../../src/agentlane/messaging/_outcome.py), while
-[`RoutingEngine`](../../src/agentlane/messaging/_routing.py) and
-[`DeliveryMode`](../../src/agentlane/messaging/_subscription.py) shape publish
-routing and recipient reuse.
+Messaging is the vocabulary the rest of AgentLane builds on. Before there are
+tools, handoffs, or runs, there are only recipients, topics, envelopes, and
+delivery outcomes.
 
-## TL;DR
+That vocabulary is represented directly in code:
+[`AgentId`](../../src/agentlane/messaging/_identity.py) names one recipient,
+[`TopicId`](../../src/agentlane/messaging/_identity.py) names a publish target,
+[`MessageEnvelope`](../../src/agentlane/messaging/_envelope.py) carries the
+work, and [`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py) or
+[`PublishAck`](../../src/agentlane/messaging/_outcome.py) tell the caller what
+happened. Subscription matching is governed by
+[`DeliveryMode`](../../src/agentlane/messaging/_subscription.py).
 
-1. Use `send_message` for one recipient and terminal
-   [`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py).
-2. Use `publish_message` for fan-out and enqueue-only
-   [`PublishAck`](../../src/agentlane/messaging/_outcome.py).
-3. Subscriptions map topic matches to recipients by `route_key` (`topic.source`).
-4. `DeliveryMode.STATEFUL` reuses recipient instances; `STATELESS` creates per-delivery recipients.
+## Two Delivery Patterns
 
-## Core Primitives
+There are two caller-facing ways to move work:
 
-### Identity
+1. `send_message(...)` for one recipient and a terminal outcome
+2. `publish_message(...)` for topic-based fan-out and enqueue confirmation
 
-1. [`AgentId`](../../src/agentlane/messaging/_identity.py) =
-   ([`AgentType`](../../src/agentlane/messaging/_identity.py),
-   [`AgentKey`](../../src/agentlane/messaging/_identity.py)) identifies one
-   runtime target.
-2. [`TopicId`](../../src/agentlane/messaging/_identity.py) = `(type, source)`
-   where `source` is the route-key dimension.
-3. [`CorrelationId`](../../src/agentlane/messaging/_identity.py) ties one
-   logical workflow chain across hops.
-4. [`MessageId`](../../src/agentlane/messaging/_identity.py) uniquely
-   identifies one envelope.
+Use send when the caller needs completion. Use publish when the caller needs to
+announce an event and let matching subscribers process it independently.
 
-### Envelope
+## Identities And Topics
 
-[`MessageEnvelope`](../../src/agentlane/messaging/_envelope.py) carries:
+An [`AgentId`](../../src/agentlane/messaging/_identity.py) points at one
+runtime recipient. It is made from an `AgentType` and an `AgentKey`.
 
-1. message kind (`RPC_REQUEST`, `PUBLISH_EVENT`, ...),
-2. sender and recipient/topic,
-3. payload metadata (`schema_name`, `content_type`, `format`),
-4. optional `idempotency_key`.
+A [`TopicId`](../../src/agentlane/messaging/_identity.py) describes a publish
+target instead. It has a topic type and a route key. The route key is what
+later lets publish deliveries preserve stateful affinity for the same logical
+stream of work.
 
-## Direct Send Semantics
+Once a delivery is created, it travels as a
+[`MessageEnvelope`](../../src/agentlane/messaging/_envelope.py). The envelope
+holds the sender, recipient or topic, payload metadata, and correlation data
+that must survive transport.
 
-`send_message(...)` does:
+## Direct Send
 
-1. recipient resolution (`AgentId` directly, or type-only resolution),
-2. single RPC envelope creation,
-3. one task enqueue,
-4. wait for terminal `DeliveryOutcome`.
+`send_message(...)` resolves one recipient, enqueues one delivery, and waits for
+one terminal
+[`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py).
 
-If recipient cannot be resolved, runtime returns `POLICY_REJECTED` or `UNDELIVERABLE` outcome (depending on failure stage), not a partial success.
+That outcome is where the caller learns whether the message was delivered,
+rejected by policy, failed in the handler, or could not be delivered at all.
 
-## Publish Semantics
+## Publish
 
-`publish_message(...)` does:
+`publish_message(...)` starts from one topic and expands it into one or more
+concrete deliveries. The publish side returns a
+[`PublishAck`](../../src/agentlane/messaging/_outcome.py), which tells you how
+many recipients were enqueued. It does not tell you whether those recipients
+finished their handlers successfully.
 
-1. build one base publish envelope,
-2. resolve all matching subscriptions into
-   [`PublishRoute`](../../src/agentlane/messaging/_subscription.py) values,
-3. enqueue one task per route,
-4. return `PublishAck` once enqueued.
+That distinction matters when you design workflows. Publish is a fan-out
+mechanism, not a multi-recipient RPC.
 
-Important:
-`PublishAck` confirms enqueue only, not downstream handler completion.
+## Subscriptions And Delivery Modes
 
-## Subscriptions and Topic Matching
+Subscriptions map a topic match to an agent type. The main choice is whether
+publish deliveries should reuse a stateful recipient or create a fresh one.
 
-Use runtime convenience APIs:
+[`DeliveryMode.STATEFUL`](../../src/agentlane/messaging/_subscription.py) uses
+the topic route key to derive a stable recipient key. That means repeated events
+for the same route key reach the same cached agent instance.
 
-1. `subscribe_exact(topic_type=..., agent_type=..., delivery_mode=...)`
-2. `subscribe_prefix(topic_prefix=..., agent_type=..., delivery_mode=...)`
+[`DeliveryMode.STATELESS`](../../src/agentlane/messaging/_subscription.py)
+creates a unique recipient key per delivery. That is useful for fan-out work
+where instance reuse is not part of the contract.
 
-Matching strategies:
+## Ordering And Correlation
 
-1. `TYPE_EXACT`: `topic.type == topic_pattern`
-2. `TYPE_PREFIX`: `topic.type.startswith(topic_pattern)`
+Ordering is guaranteed per recipient. If multiple deliveries target the same
+`AgentId`, they are processed FIFO. Different recipients may run concurrently.
 
-## Delivery Modes
+Correlation is a separate concern. Preserve `correlation_id` when work should be
+traceable across multiple hops. Use `idempotency_key` when retries need
+deduplication semantics at the transport or runtime boundary.
 
-### Stateful
-
-[`DeliveryMode.STATEFUL`](../../src/agentlane/messaging/_subscription.py) maps
-recipient key from topic route key:
-
-1. recipient key = `topic.source`,
-2. same `(agent_type, route_key)` reuses same cached instance,
-3. preserves state across deliveries for that key.
-
-### Stateless
-
-[`DeliveryMode.STATELESS`](../../src/agentlane/messaging/_subscription.py) uses
-a unique per-delivery recipient key:
-
-1. no instance reuse guarantee,
-2. parallel-friendly for workflow fan-out,
-3. still keeps deterministic routing per subscription.
-
-## Ordering Guarantees
-
-1. Per `AgentId` delivery order is FIFO.
-2. Different `AgentId` values can run concurrently (subject to worker count).
-3. Publish fan-out order is deterministic after routing dedup/sort.
-
-## Correlation and Idempotency
-
-1. Preserve `correlation_id` when forwarding work to keep one traceable chain.
-2. Use `idempotency_key` for retry-safe dedup semantics at transport/runtime boundaries.
-
-## Minimal Example
+## Example
 
 ```python
 from agentlane.messaging import AgentId, DeliveryMode, TopicId
@@ -135,12 +101,13 @@ ack = await runtime.publish_message(
         route_key="session-42",
     ),
 )
-assert ack.enqueued_recipient_count >= 0
 
 result = await runtime.send_message(
     {"task_id": "t-1"},
     recipient=AgentId.from_values("worker", "session-42"),
 )
+
+assert ack.enqueued_recipient_count >= 0
 assert result.status.value in {
     "delivered",
     "handler_error",

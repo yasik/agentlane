@@ -1,49 +1,36 @@
 # Models: Prompt Templating
 
-Prompt templating is the part of AgentLane that turns typed application data
-into the messages sent to a model. It gives you a place to describe the shape
-of your instructions once, then render those instructions with concrete values
-for a specific run.
+Prompt code gets hard to maintain when message strings, runtime data, and
+expected output shape are all mixed together. AgentLane keeps those concerns
+separate so a prompt can stay readable while each run still provides its own
+values.
 
-The main building blocks are
-[`PromptTemplate`](../../src/agentlane/models/_prompts.py) for text prompts,
-[`MultiPartPromptTemplate`](../../src/agentlane/models/_prompts.py) for
-structured prompt content, and
-[`PromptSpec`](../../src/agentlane/models/_prompts.py) for pairing a template
-with the values used to render it. Multipart prompts use
-[`TextPart`](../../src/agentlane/models/_prompts.py),
-[`FilePart`](../../src/agentlane/models/_prompts.py), and
-[`ImagePart`](../../src/agentlane/models/_prompts.py), while
-[`OutputSchema`](../../src/agentlane/models/_output_schema.py) describes the
-expected model output.
+Most prompt flows use
+[`PromptTemplate`](../../src/agentlane/models/_prompts.py) for text messages or
+[`MultiPartPromptTemplate`](../../src/agentlane/models/_prompts.py) when a
+message needs multiple content parts. [`PromptSpec`](../../src/agentlane/models/_prompts.py)
+is the small object that binds one of those templates to the values for the
+current run.
 
-## Core Ideas
+## A Template Is Structure Plus Values
 
-The templating surface is intentionally small:
+The usual flow is:
 
 1. define a template once
-2. supply typed values later
-3. render those values into canonical model messages when the run executes
+2. pass values later
+3. let the harness or model layer render the final messages
 
-That separation keeps prompt structure reusable while letting each run provide
-its own input values.
+That is what [`PromptSpec`](../../src/agentlane/models/_prompts.py) is for. It
+keeps the prompt definition and the current values together so the rest of the
+framework can build a request at the right time.
 
-## `PromptTemplate`
+## Text Prompts
 
 Use [`PromptTemplate`](../../src/agentlane/models/_prompts.py) when your prompt
-is plain text and naturally fits into optional `system` and `user` messages.
+fits naturally into optional `system` and `user` messages.
 
-It accepts:
-
-1. `system_template`
-2. `user_template`
-3. `output_schema`
-
-At least one of `system_template` or `user_template` must be present.
-
-Template strings are rendered with Jinja. In practice that means you can define
-variables once and pass a typed object, often a `TypedDict`, when it is time to
-render the prompt.
+This is the most common case. Template strings are rendered with Jinja, so you
+can keep the prompt readable and still pass typed values into it.
 
 ```python
 from typing import TypedDict
@@ -71,59 +58,66 @@ prompt = PromptSpec(
 )
 ```
 
-## `PromptSpec`
-
-[`PromptSpec`](../../src/agentlane/models/_prompts.py) is the developer-facing
-container for one rendered prompt input. It keeps the template and the concrete
-values together so the harness can build model messages later.
-
-This is useful when:
-
-1. the same template is reused across runs
-2. you want type-checked prompt values
-3. the prompt should stay at the higher-level harness boundary instead of being
-   flattened into raw message dictionaries by application code
-
 ## Multipart Prompts
 
 Use [`MultiPartPromptTemplate`](../../src/agentlane/models/_prompts.py) when
-message content needs more than text. This is the right surface when the model
-input should include files, images, or mixed content blocks.
+the model input needs more than plain text.
 
-Multipart prompts are made from part templates:
+That usually means one of two things:
 
-1. [`TextPart`](../../src/agentlane/models/_prompts.py) for rendered text
-2. [`FilePart`](../../src/agentlane/models/_prompts.py) for base64 file input
-3. [`ImagePart`](../../src/agentlane/models/_prompts.py) for base64 image input
+1. the message content should be built from multiple parts
+2. the prompt should include file or image input alongside text
 
-`TextPart` renders Jinja templates with context values. `FilePart` and
-`ImagePart` carry already-prepared base64 payloads.
+Multipart templates use
+[`TextPart`](../../src/agentlane/models/_prompts.py),
+[`FilePart`](../../src/agentlane/models/_prompts.py), and
+[`ImagePart`](../../src/agentlane/models/_prompts.py). `TextPart` renders a
+template string with values. `FilePart` and `ImagePart` carry already-prepared
+payloads.
 
-Use multipart prompts when the model input itself is structured. Use
-`PromptTemplate` when text alone is enough.
+```python
+from agentlane.models import ImagePart, MultiPartPromptTemplate, OutputSchema
+from agentlane.models import PromptSpec, TextPart
 
-## Output Schemas And Prompting
+
+receipt_image_b64 = "..."
+
+template = MultiPartPromptTemplate[dict[str, str], str](
+    system_parts=[TextPart("Summarize the issue shown in the image.")],
+    user_parts=[
+        TextPart("Customer note: {{ note }}"),
+        ImagePart(base64_data=receipt_image_b64, media_type="image/png"),
+    ],
+    output_schema=OutputSchema(str),
+)
+
+prompt = PromptSpec(
+    template=template,
+    values={"note": "The package arrived damaged."},
+)
+```
+
+## How `OutputSchema` Fits
 
 Every prompt template carries an
 [`OutputSchema`](../../src/agentlane/models/_output_schema.py). That schema is
-how the model layer knows whether you expect:
+how the model layer knows whether you expect plain text or structured output,
+and whether a provider should enforce a JSON schema at request time.
 
-1. plain text
-2. structured JSON output
-3. strict schema enforcement where the provider supports it
+It helps to think of the pieces this way:
 
-In other words, prompt templating describes the input shape and `OutputSchema`
-describes the expected output shape.
+1. the template describes what goes in
+2. the output schema describes what should come back
 
-## Rendering Model Messages
+## When To Render Directly
 
-Templates render into canonical message payloads through `render_messages(...)`.
-Most application code does not need to call that method directly. The harness
-can accept a [`PromptSpec`](../../src/agentlane/models/_prompts.py) and build
-the final model request for you.
+Templates ultimately render through `render_messages(...)`, but most
+application code does not need to call that method itself.
 
-Reach for direct rendering when you are implementing lower-level model flows.
-For normal harness usage, keep prompts at the `PromptSpec` level.
+If you are building on the harness, keep prompts at the
+[`PromptSpec`](../../src/agentlane/models/_prompts.py) level and let the runner
+build the final request. Reach for direct rendering when you are implementing a
+lower-level model flow and need the canonical message list immediately.
 
 ## Related Docs
 
