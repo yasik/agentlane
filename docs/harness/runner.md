@@ -13,6 +13,12 @@ observation points, and
 [`DefaultHandoff`](../../src/agentlane/harness/_lifecycle.py) are the bridge
 that lets delegation appear to the model as part of the same tool surface.
 
+The runner is used both by:
+
+1. the runtime-facing `agentlane.harness.Agent`
+2. the higher-level local `agentlane.harness.agents.DefaultAgent`, which wraps
+   that lower-level agent for a simpler `run(...)` surface
+
 ## The Loop
 
 At a high level, one run looks like this:
@@ -27,6 +33,12 @@ At a high level, one run looks like this:
 queued run input
       |
       v
++---------------------------+
+| DefaultAgent.run(...)     |
+| optional local wrapper    |
++-------------+-------------+
+              |
+              v
 +---------------------------+
 | AgentLifecycle            |
 | passes working RunState   |
@@ -130,4 +142,5 @@ narrow. Provider-specific retries still belong in the model client layer.
 
 1. [Harness Architecture](./architecture.md)
 2. [Harness Agents](./agents.md)
-3. [Models Overview](../models/overview.md)
+3. [Harness Default Agents](./default-agents.md)
+4. [Models Overview](../models/overview.md)

@@ -7,11 +7,12 @@ structured way to turn model calls, tool calls, and handoffs into a coherent
 workflow.
 
 The pieces matter in relation to one another.
-[`Task`](../../src/agentlane/harness/_task.py) gives ordinary orchestration code
-a home above the runtime. [`Agent`](../../src/agentlane/harness/_agent.py)
-layers in reusable configuration through
-[`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py) and resumable
-state through [`RunState`](../../src/agentlane/harness/_run.py).
+[`Task`](../../src/agentlane/harness/_task.py) gives ordinary orchestration
+code a home above the runtime. The runtime-facing
+[`Agent`](../../src/agentlane/harness/_agent.py) binds addressed runs to one
+descriptor, one lifecycle, and one runner. The local
+[`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
+wraps that lower-level path in a smaller `run(...)` surface. The
 [`Runner`](../../src/agentlane/harness/_runner.py) then conducts the actual
 model loop and produces a [`RunResult`](../../src/agentlane/harness/_run.py).
 
@@ -21,9 +22,12 @@ The runtime already knows how to deliver messages and preserve ordering. The
 harness adds a higher-level story on top of that:
 
 1. `Task` gives ordinary application orchestration a home above the runtime
-2. `Agent` keeps static configuration and resumable conversation state together
-3. `Runner` executes the model loop for one run
-4. tools and handoffs become first-class parts of that loop
+2. the runtime-facing `Agent` keeps static configuration and resumable
+   conversation state together
+3. `DefaultAgent` provides the smaller local `run(...)` surface for
+   straightforward usage
+4. `Runner` executes the model loop for one run
+5. tools and handoffs become first-class parts of that loop
 
 That separation matters because queueing and persistence are different problems
 from model reasoning. The harness keeps them apart.
@@ -35,8 +39,14 @@ At a high level, a run moves like this:
 ```text
 Application / caller
         |
-        | send_message(run_input)
+        | run(...) or send_message(run_input)
         v
++---------------------------+
+| DefaultAgent             |
+| optional local wrapper   |
++-------------+-------------+
+              |
+              v
 +---------------------------+
 | RuntimeEngine             |
 | routing + instance reuse  |
@@ -86,13 +96,19 @@ That split is what makes resumable runs practical. The lifecycle can keep a
 stable baseline of `RunState`, while the runner works on a private copy for the
 current turn.
 
+[`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
+sits one level above that lower-level path. It provisions a local runtime when
+needed, keeps a primary `RunState` between repeated `run(...)` calls, and still
+routes through the same runtime-facing `Agent` plus `Runner` stack underneath.
+
 ## Request Ownership
 
 The harness public boundary is deliberately not a low-level message-dict API.
 
 Instead:
 
-1. callers provide a `RunInput`
+1. callers either use `DefaultAgent.run(...)` locally or send `RunInput` to the
+   runtime-facing `Agent`
 2. the lifecycle turns that into a working `RunState`
 3. the runner turns `RunState` into canonical model messages
 4. provider clients receive the shared `agentlane.models` request shape
@@ -102,5 +118,7 @@ That keeps raw provider wire formats out of application code.
 ## Where To Read Next
 
 Start with [Harness Tasks](./tasks.md) if you need orchestration without an LLM
-loop. Read [Harness Agents](./agents.md) to understand the default agent type.
-Read [Harness Runner](./runner.md) when you want the actual loop behavior.
+loop. Read [Harness Default Agents](./default-agents.md) for the smallest local
+developer surface. Read [Harness Agents](./agents.md) to understand the
+runtime-facing agent type. Read [Harness Runner](./runner.md) when you want the
+actual loop behavior.

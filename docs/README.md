@@ -8,13 +8,14 @@ good fit for long-horizon agentic tasks, background specialists, fan-out and
 fan-in flows, and applications that mix deterministic services with
 model-driven components.
 
-Many adjacent frameworks start from the agent loop itself. They are often optimized 
-either for interactive local or cloud sessions and delegated background work, or 
-for durable runs expressed as explicit workflows and graphs.
+Many adjacent frameworks start from the agent loop itself. They are often
+optimized either for interactive local or cloud sessions and delegated
+background work, or for durable runs expressed as explicit workflows and
+graphs.
 
-AgentLane starts one layer lower: it treats addressed messaging,
-routing, delivery outcomes, and instance reuse as the core abstraction, then
-layers prompts, tools, and a default harness on top.
+AgentLane starts one layer lower: it treats addressed messaging, routing,
+delivery outcomes, and instance reuse as the core abstraction, then layers
+prompts, tools, and a default harness on top.
 
 In practical terms, this gives you a clean progression. Use
 [`single_threaded_runtime()`](../src/agentlane/runtime/_context.py) and the
@@ -74,13 +75,15 @@ mental model:
 1. Read the project [README](../README.md) for the top-level architecture.
 2. If you want explicit message passing, start with
    [Runtime: Engine and Execution](./runtime/engine-and-execution.md).
-3. If you want the default agent loop, read
-   [Harness Architecture](./harness/architecture.md) and then
+3. If you want the smallest local harness surface, read
+   [Harness Default Agents](./harness/default-agents.md), then
    [Harness Runner](./harness/runner.md).
-4. If you want to understand prompt construction or tool exposure, read
+4. If you want to understand how the harness fits together under that local
+   surface, read [Harness Architecture](./harness/architecture.md).
+5. If you want to understand prompt construction or tool exposure, read
    [Models Overview](./models/overview.md) and
    [Models: Prompt Templating](./models/prompt-templating.md).
-5. Run one of the examples under [examples/](../examples/README.md).
+6. Run one of the examples under [examples/](../examples/README.md).
 
 ## Choose A Topic
 
@@ -95,8 +98,9 @@ page to read first.
 | When serialization matters and when the defaults are enough | [Transport Serialization](./transport/serialization.md) |
 | How prompts, tools, and structured outputs fit together | [Models Overview](./models/overview.md) |
 | How prompt templates are authored and rendered | [Models: Prompt Templating](./models/prompt-templating.md) |
+| How to start with the local `run(...)` wrapper | [Harness Default Agents](./harness/default-agents.md) |
 | How the harness organizes tasks, agents, and runs | [Harness Architecture](./harness/architecture.md) |
-| What the default agent owns | [Harness Agents](./harness/agents.md) |
+| What the runtime-facing harness agent owns | [Harness Agents](./harness/agents.md) |
 | How the default loop calls models, tools, and handoffs | [Harness Runner](./harness/runner.md) |
 | How tracing, metrics, and processors are wired up | [Tracing Overview](./tracing/overview.md) |
 
@@ -126,7 +130,8 @@ page to read first.
 1. [Harness Architecture](./harness/architecture.md)
 2. [Harness Tasks](./harness/tasks.md)
 3. [Harness Agents](./harness/agents.md)
-4. [Harness Runner](./harness/runner.md)
+4. [Harness Default Agents](./harness/default-agents.md)
+5. [Harness Runner](./harness/runner.md)
 
 ### Tracing
 
@@ -135,3 +140,13 @@ page to read first.
 ### Releases
 
 1. [v0.3.0](./releases/v0.3.0.md)
+
+## Code Style
+
+1. [Code Style Index](./code-style/README.md)
+2. [Imports and Typing](./code-style/imports.md)
+3. [Workspace Packages](./code-style/workspace-packages.md)
+4. [Python Conventions](./code-style/python.md)
+5. [Comments](./code-style/comments.md)
+6. [Module Layout and Exports](./code-style/modules.md)
+7. [Testing and Pull Requests](./code-style/testing-and-prs.md)

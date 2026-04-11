@@ -1,19 +1,22 @@
 # Harness Agents
 
-The default harness
-[`Agent`](../../src/agentlane/harness/_agent.py) is where a long-lived agent
-definition meets one concrete conversation. It keeps static configuration in
+This page documents the runtime-facing
+[`agentlane.harness.Agent`](../../src/agentlane/harness/_agent.py).
+
+For the higher-level local wrapper that exposes `run(...)` directly, see
+[Harness Default Agents](./default-agents.md).
+
+The runtime-facing harness `Agent` is where a long-lived agent definition meets
+one concrete addressed conversation. It keeps static configuration in
 [`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py), persists the
 conversation as [`RunState`](../../src/agentlane/harness/_run.py), and hands
 execution to the [`Runner`](../../src/agentlane/harness/_runner.py).
 
-That split is what makes an agent feel stable across turns. The descriptor says
-what kind of agent this is. The run state says where one concrete interaction
-currently stands.
+That split is what makes an addressed agent feel stable across turns. The
+descriptor says what kind of agent this is. The run state says where one
+concrete interaction currently stands.
 
-## What The Default Agent Owns
-
-An agent is more than a model configuration. It owns:
+## What The Runtime-Facing Agent Owns
 
 1. the descriptor that defines instructions, tools, schema, and handoffs
 2. the lifecycle that queues later inputs while one run is active
@@ -24,7 +27,8 @@ model loop. The agent is the place where those pieces meet.
 
 ## Input And Recovery
 
-The public input surface is intentionally small. A default agent accepts:
+The public input surface is intentionally small. A runtime-facing agent
+accepts:
 
 1. a `str` for a normal user turn
 2. a `list[object]` for richer multi-item input
