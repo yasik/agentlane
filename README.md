@@ -1,271 +1,176 @@
 # AgentLane
 
-**AgentLane** is an event-driven framework for building AI systems with three
-composable layers:
+**AgentLane** is a runtime-first framework for building AI agents with
+addressed messaging, model primitives, and a reusable agent harness.
 
-1. a runtime for message delivery, routing, and scheduling
-2. a model layer for prompts, schemas, tools, and provider adapters
-3. a harness for agent loops, tool execution, handoffs, and delegated sub-agents
+(Initially inspired by Microsoft's [autogen](https://github.com/microsoft/autogen) framework that is no longer being actively developed).
 
-It is intentionally unopinionated about the intelligence inside an agent. You
-can use the runtime directly, build on the harness, or plug in your own
-orchestration strategy on top of the model primitives.
+It gives you three layers that can be used together or independently:
 
-It was initially inspired by Microsoft's
-[autogen](https://github.com/microsoft/autogen) framework. AgentLane's design
-has since evolved toward clearer runtime guarantees, a thinner provider
-boundary, and a cleaner path from local execution to distributed messaging.
+1. `agentlane.runtime` for delivery, routing, scheduling, and agent identity
+2. `agentlane.models` for prompts, schemas, tools, and model clients
+3. `agentlane.harness` for agent loops, tool execution, handoffs, and
+   high-level agents
 
-![agentlane](https://ossfiles-6842.s3.us-west-2.amazonaws.com/agentlane-gh-banner-1280x640.png)
+```text
+╔════════════════════════════════════════════════════════════════════════════════════╗
+║                                                                                    ║
+║    █████╗  ██████╗ ███████╗███╗   ██╗████████╗██╗      █████╗ ███╗   ██╗███████╗   ║
+║   ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝██║     ██╔══██╗████╗  ██║██╔════╝   ║
+║   ███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ██║     ███████║██╔██╗ ██║█████╗     ║
+║   ██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ██║     ██╔══██║██║╚██╗██║██╔══╝     ║
+║   ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████╗██║  ██║██║ ╚████║███████╗   ║
+║   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝   ║
+║                                                                                    ║
+║                    runtime-first AI agent framework                                ║
+║                                                                                    ║
+║        addressed messaging • model primitives • reusable agent harness             ║
+║                                                                                    ║ 
+╠════════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                    ║
+║   Runtime      → delivery • routing • scheduling • identity                        ║
+║   Models       → prompts • schemas • tools • model clients                         ║
+║   Harness      → loops • execution • handoffs • agents                             ║
+║                                                                                    ║
+║   from local agents → to distributed multi-agent systems                           ║
+║                                                                                    ║
+╚════════════════════════════════════════════════════════════════════════════════════╝
+```
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://img.shields.io/badge/python-3.12-blue?style=flat-square"><img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square" alt="Python 3.12"></a>
 </p>
 
-## Key Differentiators
+## Why AgentLane?
 
-Many agent frameworks stop at an in-process agent loop. AgentLane is built
-around a runtime and messaging model first, then layers model primitives and a
-default harness on top of that foundation.
+AgentLane is built for AI systems where messaging, addressing, and runtime
+behavior are part of the application design.
 
-1. **Runtime-first, not loop-first**: agents communicate through explicit
-   messaging and routing primitives instead of assuming everything is a local
-   function call inside one process.
-2. **Same mental model from local to distributed**: the same `send_message(...)`
-   and `publish_message(...)` semantics work in single-threaded and distributed
-   runtime setups.
-3. **Clear delivery guarantees**: per-recipient FIFO ordering, fair scheduling,
-   explicit delivery outcomes, and durable instance identity are part of the
-   framework contract.
-4. **Harness built on the runtime**: handoffs and delegated
-   sub-agents route through the same runtime messaging model as everything else,
-   which keeps local and future distributed behavior aligned.
-6. **Run-oriented public API**: developers work with descriptors, tools,
-   prompts, `RunState`, and `RunResult` instead of assembling low-level model
-   wire payloads by hand.
-7. **Framework flexibility**: you can use only the
-   runtime, only the model layer, or the full harness, instead of being forced
-   into one monolithic abstraction stack.
+It is a good fit when you want:
 
-## Key Concepts
+1. one programming model from local runs to distributed execution
+2. explicit message routing instead of hidden in-process orchestration
+3. a high-level agent interface without giving up lower-level runtime control
+4. thin provider adapters instead of provider-owned orchestration logic
+5. a path from simple local agents to multi-agent systems with tools and
+   handoffs
 
-### Runtime
+## Why Runtime And Messaging Matter
 
-The runtime is the foundation:
+Many agent frameworks center on a single in-process agent loop or workflow
+graph. That is a good fit for one request running in one place.
 
-1. direct request/response via `send_message(...)`
-2. publish / subscribe fan-out via `publish_message(...)`
-3. explicit registration and instance reuse
-4. FIFO delivery per `AgentId` with fair scheduling across recipients
-5. in-process and distributed runtime entrypoints
+AgentLane starts one layer lower, at addressed messaging and runtime
+execution. That matters because it gives application code a stable way to:
 
-### Models
+1. send work to a specific long-lived agent or service by address
+2. keep state attached to that addressed instance across multiple turns
+3. publish one event to many subscribers without hard-coding the fan-out
+4. split work across specialists and gather results back
+5. move from local execution to distributed workers without changing the core
+   communication model
 
-`agentlane.models` is the shared LLM-facing layer:
+In practice, that means the same framework can cover both:
 
-1. typed prompt templates via `PromptTemplate`, `MultiPartPromptTemplate`, and `PromptSpec`
-2. structured output via `OutputSchema`
-3. native tools via `Tool`, `Tools`, `ToolSpec`, and `@as_tool`
-4. provider-agnostic `Model` and canonical `ModelResponse`
-5. retries, rate limiting, and response helpers
+1. local agent(s) running in one process
+2. a system of addressed agents, background specialists, and pub/sub flows
+   spread across workers
 
-### Harness
+The messaging layer is what makes those two use cases part of one model instead
+of two different frameworks glued together.
 
-`agentlane.harness` is the higher-level orchestration layer:
+## When To Use It
 
-1. `Task` for top-level units of work
-2. `AgentDescriptor` for static agent configuration
-3. `agentlane.harness.agents.DefaultAgent` for the smallest local `run(...)`
-   developer surface
-4. `Agent` for the runtime-facing lifecycle primitive
-5. `Runner` for the generic LLM loop
-6. runner-owned tool execution
-7. first-class handoffs
-8. agent-as-tool subroutines
-9. resumable `RunState` and final `RunResult`
+Use AgentLane for:
 
-## Why AgentLane
-
-1. **Event-first communication model**: direct RPC and pub/sub are first-class.
-2. **Clear runtime guarantees**: FIFO per recipient, explicit delivery
-   outcomes, and fair scheduling.
-3. **Provider-agnostic model layer**: prompts, schemas, tools, and retries live
-   behind one shared contract.
-4. **Thin provider adapters**: provider clients accept canonical requests and
-   return canonical responses; they do not own orchestration policy.
-5. **Built-in harness**: the framework now ships a default agent loop with tool
-   execution, delegation, and resumable state.
-6. **Scalability path**: the same messaging model works in-process and in
-   distributed host / worker setups.
-
-## Layered Architecture
-
-```text
-Application code
-      |
-      +---------------------------+
-      |                           |
-      v                           v
-Runtime-first usage         Harness usage
-send_message / publish      DefaultAgent / Agent / Runner
-      |                           |
-      +-------------+-------------+
-                    |
-                    v
-            RuntimeEngine API
-                    |
-                    v
-         routing + mailbox scheduling
-                    |
-                    v
-             @on_message handlers
-
-Harness path adds:
-
-AgentDescriptor -> AgentLifecycle -> Runner
-                                    |
-                    +---------------+---------------+
-                    |                               |
-                    v                               v
-               ToolExecutor                   runtime messaging
-               local tools                    delegated agents
-                    |
-                    v
-             agentlane.models
-     prompts / schema / tools / ModelResponse
-                    |
-                    v
-              provider clients
-                    |
-                    v
-                   LLM
-```
-
-## Core Messaging Semantics
-
-1. `send_message(...)`
-   - one recipient
-   - waits for terminal `DeliveryOutcome`
-   - use for request / response paths
-2. `publish_message(...)`
-   - routes one event to all matching subscriptions
-   - returns `PublishAck` after enqueue
-   - does not wait for downstream handler completion
-3. `DeliveryMode.STATEFUL`
-   - recipient key is derived from topic route key
-   - reuses the same instance for that `(agent_type, route_key)` identity
-4. `DeliveryMode.STATELESS`
-   - uses per-delivery transient recipient identity
-   - avoids instance reuse guarantees
+1. local agents that need tools, delegation, or resumable runs
+2. background specialists and addressed services that communicate by message
+3. fan-out, fan-in, and pub/sub workflows
+4. applications that start in one process and may later move to a distributed
+   runtime
 
 ## Quick Start
 
-### Prerequisites
-
-1. Python `3.12`
-2. [`uv`](https://docs.astral.sh/uv/)
-
-### Install Workspace Dependencies
+If you are trying the repository directly:
 
 ```bash
 uv sync --all-extras
 ```
 
-### Minimal Runtime Example
+Run one runtime example:
 
-```python
-import asyncio
-from dataclasses import dataclass
-
-from agentlane.messaging import AgentId, MessageContext
-from agentlane.runtime import BaseAgent, Engine, on_message, single_threaded_runtime
-
-
-@dataclass(slots=True)
-class Ping:
-    text: str
-
-
-class EchoAgent(BaseAgent):
-    def __init__(self, engine: Engine) -> None:
-        super().__init__(engine)
-
-    @on_message
-    async def handle(self, payload: Ping, context: MessageContext) -> object:
-        _ = context
-        return {"echo": payload.text}
-
-
-async def main() -> None:
-    async with single_threaded_runtime() as runtime:
-        runtime.register_factory("echo", EchoAgent)
-        outcome = await runtime.send_message(
-            Ping(text="hello"),
-            recipient=AgentId.from_values("echo", "session-1"),
-        )
-        print(outcome.status.value, outcome.response_payload)
-
-
-asyncio.run(main())
+```bash
+uv run python examples/runtime/multi_agent_workflow/main.py
 ```
 
-### Harness Examples
-
-The harness examples show the newer orchestration surface:
-
-1. `DefaultAgent` quickstart with direct `run(...)`
-2. multi-turn conversation plus `RunState` resume
-3. tool calling with a native `@as_tool` function
-4. predefined and generic agent-as-tool flows
-5. predefined and generic handoff flows
-
-These examples use `agentlane-openai` and require `OPENAI_API_KEY`.
+Run one high-level harness example with a real model:
 
 ```bash
 OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
-OPENAI_API_KEY=sk-... uv run python examples/harness/customer_support_conversation/main.py
-OPENAI_API_KEY=sk-... uv run python examples/harness/tool_calling_search_answer/main.py
-OPENAI_API_KEY=sk-... uv run python examples/harness/agent_as_tool_policy_specialist/main.py
-OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_tool_note_writer/main.py
-OPENAI_API_KEY=sk-... uv run python examples/harness/handoff_to_returns_specialist/main.py
-OPENAI_API_KEY=sk-... uv run python examples/harness/default_handoff_takeover/main.py
 ```
 
-### Runtime Examples
+The runtime example shows explicit message passing.
 
-```bash
-uv run python examples/throughput/high_throughput_messaging/main.py
-uv run python examples/runtime/multi_agent_workflow/main.py
-uv run python examples/runtime/distributed_publish_fan_in/main.py
-uv run python examples/runtime/distributed_scatter_gather/main.py
-uv run python examples/runtime/simple/distributed_publish_fan_in.py
-uv run python examples/runtime/simple/distributed_scatter_gather.py
+The harness example shows the smallest local agent surface:
+
+```python
+from agentlane.harness import AgentDescriptor
+from agentlane.harness.agents import DefaultAgent
+
+
+class SupportAgent(DefaultAgent):
+    descriptor = AgentDescriptor(
+        name="Support",
+        model=model,
+        instructions="You are a concise support agent.",
+    )
+
+
+agent = SupportAgent()
+result = await agent.run("My order arrived damaged. What should I do first?")
 ```
 
-## Documentation Map
+## Choose Your Level
 
-### Runtime And Messaging
+### Runtime
+
+Use the runtime when you want explicit messaging, stable identities, pub/sub,
+or distributed execution.
+
+Start here:
+
+1. [Runtime: Engine and Execution](./docs/runtime/engine-and-execution.md)
+2. [Messaging: Routing and Delivery](./docs/messaging/routing-and-delivery.md)
+
+### Models
+
+Use the models layer when you want prompt templates, structured outputs, native
+tools, or provider clients without the full harness.
+
+Start here:
+
+1. [Overview](./docs/models/overview.md)
+2. [Prompt Templating](./docs/models/prompt-templating.md)
+
+### Harness
+
+Use the harness when you want reusable agent loops, tool execution, handoffs,
+agent-as-tool, or high-level local agents.
+
+Start here:
+
+1. [Default Agents](./docs/harness/default-agents.md)
+2. [Architecture](./docs/harness/architecture.md)
+
+## Documentation
+
+Use the documentation index for the full docs tree:
 
 1. [Documentation Index](./docs/README.md)
-2. [Runtime: Engine and Execution](./docs/runtime/engine-and-execution.md)
-3. [Runtime: Distributed Host/Worker Architecture](./docs/runtime/distributed-runtime-architecture.md)
-4. [Runtime: Distributed Runtime Usage](./docs/runtime/distributed-runtime-usage.md)
-5. [Messaging: Routing and Delivery](./docs/messaging/routing-and-delivery.md)
-6. [Agent Handler Patterns](./docs/agents/handler-patterns.md)
-7. [Transport Serialization](./docs/transport/serialization.md)
+2. [Examples Index](./examples/README.md)
 
-### Harness And Models
-
-1. [Harness Architecture](./docs/harness/architecture.md)
-2. [Harness Tasks](./docs/harness/tasks.md)
-3. [Harness Agents](./docs/harness/agents.md)
-4. [Harness Default Agents](./docs/harness/default-agents.md)
-5. [Harness Runner](./docs/harness/runner.md)
-6. [Examples Index](./examples/README.md)
-7. [Models Layer Overview](./src/agentlane/models/README.md)
-
-## Local Development
+## Development
 
 ```bash
 /usr/bin/make format
@@ -273,16 +178,7 @@ uv run python examples/runtime/simple/distributed_scatter_gather.py
 /usr/bin/make tests
 ```
 
-For maintainers, publish an existing local release tag and GitHub release with:
-
-```bash
-/usr/bin/make release
-```
-
-Set `TAG=vX.Y.Z` to override the default. When `TAG` is omitted, the target uses
-the newest local tag.
-
-Run a single test with:
+Run one test with:
 
 ```bash
 uv run pytest -s -k <test_name>
@@ -293,4 +189,4 @@ uv run pytest -s -k <test_name>
 1. Keep changes small and focused.
 2. Add or update tests when behavior changes.
 3. Update public docs and examples when the developer-facing surface changes.
-4. Ensure formatting, linting, type-checking, and tests pass before opening a PR.
+4. Ensure formatting, linting, and tests pass before opening a PR.
