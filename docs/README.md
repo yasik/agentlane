@@ -85,25 +85,6 @@ mental model:
    [Models: Prompt Templating](./models/prompt-templating.md).
 6. Run one of the examples under [examples/](../examples/README.md).
 
-## Choose A Topic
-
-Use this table when you know the kind of problem you are solving but not which
-page to read first.
-
-| If you want to understand... | Start here |
-| --- | --- |
-| How messages are sent, published, scheduled, and completed | [Runtime: Engine and Execution](./runtime/engine-and-execution.md) |
-| How cross-worker delivery works | [Runtime: Distributed Runtime Usage](./runtime/distributed-runtime-usage.md) and [Runtime: Distributed Runtime Architecture](./runtime/distributed-runtime-architecture.md) |
-| How routing, subscriptions, and delivery modes behave | [Messaging: Routing and Delivery](./messaging/routing-and-delivery.md) |
-| When serialization matters and when the defaults are enough | [Transport Serialization](./transport/serialization.md) |
-| How prompts, tools, and structured outputs fit together | [Models Overview](./models/overview.md) |
-| How prompt templates are authored and rendered | [Models: Prompt Templating](./models/prompt-templating.md) |
-| How to start with the local `run(...)` wrapper | [Harness Default Agents](./harness/default-agents.md) |
-| How the harness organizes tasks, agents, and runs | [Harness Architecture](./harness/architecture.md) |
-| What the runtime-facing harness agent owns | [Harness Agents](./harness/agents.md) |
-| How the default loop calls models, tools, and handoffs | [Harness Runner](./harness/runner.md) |
-| How tracing, metrics, and processors are wired up | [Tracing Overview](./tracing/overview.md) |
-
 ## Contents
 
 ### Runtime
@@ -127,26 +108,12 @@ page to read first.
 
 ### Harness
 
-1. [Harness Architecture](./harness/architecture.md)
-2. [Harness Tasks](./harness/tasks.md)
-3. [Harness Agents](./harness/agents.md)
-4. [Harness Default Agents](./harness/default-agents.md)
-5. [Harness Runner](./harness/runner.md)
+1. [Architecture](./harness/architecture.md)
+2. [Tasks](./harness/tasks.md)
+3. [Agents](./harness/agents.md)
+4. [Default Agents](./harness/default-agents.md)
+5. [Runner](./harness/runner.md)
 
 ### Tracing
 
 1. [Tracing Overview](./tracing/overview.md)
-
-### Releases
-
-1. [v0.3.0](./releases/v0.3.0.md)
-
-## Code Style
-
-1. [Code Style Index](./code-style/README.md)
-2. [Imports and Typing](./code-style/imports.md)
-3. [Workspace Packages](./code-style/workspace-packages.md)
-4. [Python Conventions](./code-style/python.md)
-5. [Comments](./code-style/comments.md)
-6. [Module Layout and Exports](./code-style/modules.md)
-7. [Testing and Pull Requests](./code-style/testing-and-prs.md)
