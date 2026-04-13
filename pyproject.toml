@@ -1,7 +1,7 @@
 [project]
 name = "agentlane"
-version = "0.4.0"
-description = "AI agent runtime and messaging framework"
+version = "0.5.0"
+description = "An event-based runtime and messaging framework for AI agents."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -34,6 +34,19 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 
+[project.optional-dependencies]
+braintrust = [
+  "braintrust>=0.0.168",
+]
+litellm = [
+  "litellm>=1.71.1",
+]
+openai = []
+all = [
+  "braintrust>=0.0.168",
+  "litellm>=1.71.1",
+]
+
 [project.urls]
 Repository = "https://github.com/yasik/agentlane"
 
@@ -43,20 +56,19 @@ disallow_incomplete_defs = false
 disallow_untyped_defs = false
 disallow_untyped_calls = false
 
-[tool.uv.workspace]
-members = ["packages/*"]
-
-[tool.uv.sources]
-agentlane = { workspace = true }
-agentlane-braintrust = { workspace = true }
-agentlane-openai = { workspace = true }
-agentlane-litellm = { workspace = true }
-
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentlane"]
+packages = [
+  "src/agentlane",
+  "packages/braintrust/src/agentlane_braintrust",
+  "packages/litellm/src/agentlane_litellm",
+  "packages/openai/src/agentlane_openai",
+]
 
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
+"packages/braintrust/src" = ""
+"packages/litellm/src" = ""
+"packages/openai/src" = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages"]
