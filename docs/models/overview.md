@@ -68,10 +68,10 @@ those tool calls are executed inside a run.
 This layer is also where provider-specific behavior is contained.
 
 The shared [`Model`](../../src/agentlane/models/_interface.py) contract defines
-what the harness expects from a model client. Provider packages such as
-`agentlane-openai` and `agentlane-litellm` adapt concrete providers to that
+what the harness expects from a model client. Integration modules such as
+`agentlane_openai` and `agentlane_litellm` adapt concrete providers to that
 contract instead of pushing provider-specific request shapes up into the rest of
-the framework.
+the framework. Install LiteLLM support with `agentlane[litellm]`.
 
 That is why `Config` stays narrow. It covers shared networking and control-plane
 concerns. Model-specific options are passed through per-call arguments instead
