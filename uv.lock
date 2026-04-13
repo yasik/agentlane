@@ -12,7 +12,7 @@ members = [
 
 [[package]]
 name = "agentlane"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "demjson3" },
@@ -75,7 +75,7 @@ dev = [
 
 [[package]]
 name = "agentlane-braintrust"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "packages/braintrust" }
 dependencies = [
     { name = "agentlane" },
@@ -92,7 +92,7 @@ requires-dist = [
 
 [[package]]
 name = "agentlane-litellm"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "packages/litellm" }
 dependencies = [
     { name = "agentlane" },
@@ -111,7 +111,7 @@ requires-dist = [
 
 [[package]]
 name = "agentlane-openai"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "packages/openai" }
 dependencies = [
     { name = "agentlane" },
