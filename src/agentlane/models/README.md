@@ -7,11 +7,12 @@ It exists to keep model-facing concerns separate from both the runtime and the h
 At a high level, this package provides:
 
 1. client-facing model primitives such as `Model`, `Factory`, `Config`, and the shared `ModelResponse` contract,
-2. prompt-template helpers such as `PromptTemplate`, `MultiPartPromptTemplate`, and `PromptSpec` for building typed LLM message content,
-3. the native `Tool` primitive and tool execution helpers,
-4. retry and rate-limiting helpers for model clients,
-5. `RunContext` primitives for ephemeral per-run state,
-6. a clean dependency boundary so provider packages can build on the same core model contract.
+2. `ModelStreamEvent` and `Model.stream_response(...)` for provider-grounded streaming,
+3. prompt-template helpers such as `PromptTemplate`, `MultiPartPromptTemplate`, and `PromptSpec` for building typed LLM message content,
+4. the native `Tool` primitive and tool execution helpers,
+5. retry and rate-limiting helpers for model clients,
+6. `RunContext` primitives for ephemeral per-run state,
+7. a clean dependency boundary so provider packages can build on the same core model contract.
 
 For tooling ergonomics, the common application path is intentionally lightweight:
 decorate a typed Python function with `@as_tool`, pass a normal typed callable
@@ -35,6 +36,14 @@ or per-call model args rather than being normalized into `Config`.
 The shared cancellation token intentionally lives in `agentlane.runtime`, not here. Model clients and tools consume that runtime primitive instead of growing a second copy.
 
 If you are building orchestration, use the harness or runtime layers. Application developers should provide plain payloads or higher-level prompt primitives such as `PromptSpec`, not assemble low-level message dictionaries themselves. The harness runner owns request construction and decides how typed prompt input and accumulated run state become canonical model messages.
+
+Streaming follows the same boundary. Provider adapters own event fidelity and
+final response assembly. The shared models surface keeps the normalized event
+envelope intentionally small and preserves raw provider payloads on each
+`ModelStreamEvent`. That means OpenAI-native adapters can keep semantic
+Responses API events, while LiteLLM adapters preserve the documented chunk
+shape they actually expose without pretending to provide richer provider-native
+stream semantics than LiteLLM publishes.
 
 Likewise, application developers should usually define tools from typed Python
 functions rather than hand-writing argument models for every simple tool. Reach
