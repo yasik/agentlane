@@ -89,7 +89,7 @@ The common patterns are:
 
 1. use `MetricsProcessor` when you need aggregated trace metrics
 2. implement a custom processor when you need your own export destination
-3. use `agentlane-braintrust` with `BraintrustProcessor` when you want
+3. install `agentlane[braintrust]` and use `BraintrustProcessor` when you want
    Braintrust export
 
 ```python

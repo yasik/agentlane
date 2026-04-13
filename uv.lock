@@ -2,17 +2,9 @@ version = 1
 revision = 3
 requires-python = "==3.12.*"
 
-[manifest]
-members = [
-    "agentlane",
-    "agentlane-braintrust",
-    "agentlane-litellm",
-    "agentlane-openai",
-]
-
 [[package]]
 name = "agentlane"
-version = "0.3.0"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "demjson3" },
@@ -31,6 +23,18 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 
+[package.optional-dependencies]
+all = [
+    { name = "braintrust" },
+    { name = "litellm" },
+]
+braintrust = [
+    { name = "braintrust" },
+]
+litellm = [
+    { name = "litellm" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "black" },
@@ -45,11 +49,15 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "braintrust", marker = "extra == 'all'", specifier = ">=0.0.168" },
+    { name = "braintrust", marker = "extra == 'braintrust'", specifier = ">=0.0.168" },
     { name = "demjson3", specifier = ">=3.0.6,<4.0.0" },
     { name = "grpcio", specifier = ">=1.71.0,<2.0.0" },
     { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
     { name = "jinja2", specifier = ">=3.1.0,<4.0.0" },
     { name = "json-repair", specifier = ">=0.39.0,<1.0.0" },
+    { name = "litellm", marker = "extra == 'all'", specifier = ">=1.71.1" },
+    { name = "litellm", marker = "extra == 'litellm'", specifier = ">=1.71.1" },
     { name = "openai", specifier = ">=1.68.2" },
     { name = "protobuf", specifier = ">=5.29.0,<6.0.0" },
     { name = "pydantic", specifier = ">=2.8.0,<3.0.0" },
@@ -60,6 +68,7 @@ requires-dist = [
     { name = "types-protobuf", specifier = ">=6.32.1.20260221" },
     { name = "typing-extensions", specifier = ">=4.12.0" },
 ]
+provides-extras = ["braintrust", "litellm", "openai", "all"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -71,61 +80,6 @@ dev = [
     { name = "ruff", specifier = ">=0.14.14" },
     { name = "vulture", specifier = ">=2.16" },
     { name = "yamllint", specifier = ">=1.37.0" },
-]
-
-[[package]]
-name = "agentlane-braintrust"
-version = "0.3.0"
-source = { editable = "packages/braintrust" }
-dependencies = [
-    { name = "agentlane" },
-    { name = "braintrust" },
-    { name = "structlog" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agentlane", editable = "." },
-    { name = "braintrust", specifier = ">=0.0.168" },
-    { name = "structlog", specifier = ">=25.1.0,<26.0.0" },
-]
-
-[[package]]
-name = "agentlane-litellm"
-version = "0.3.0"
-source = { editable = "packages/litellm" }
-dependencies = [
-    { name = "agentlane" },
-    { name = "litellm" },
-    { name = "pydantic" },
-    { name = "structlog" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agentlane", editable = "." },
-    { name = "litellm", specifier = ">=1.71.1" },
-    { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
-    { name = "structlog", specifier = ">=25.1.0,<26.0.0" },
-]
-
-[[package]]
-name = "agentlane-openai"
-version = "0.3.0"
-source = { editable = "packages/openai" }
-dependencies = [
-    { name = "agentlane" },
-    { name = "openai" },
-    { name = "pydantic" },
-    { name = "structlog" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "agentlane", editable = "." },
-    { name = "openai", specifier = ">=1.68.2" },
-    { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
-    { name = "structlog", specifier = ">=25.1.0,<26.0.0" },
 ]
 
 [[package]]

@@ -40,6 +40,7 @@ It gives you three layers that can be used together or independently:
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
   <a href="https://img.shields.io/badge/python-3.12-blue?style=flat-square"><img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square" alt="Python 3.12"></a>
+  <a href="https://pypi.org/project/agentlane/"><img src="https://img.shields.io/pypi/v/agentlane?style=flat-square" alt="PyPI"></a>
 </p>
 
 ## Why AgentLane?
@@ -90,29 +91,23 @@ Use AgentLane for:
 4. applications that start in one process and may later move to a distributed
    runtime
 
-## Quick Start
+## Installation
 
-If you are trying the repository directly:
+Install AgentLane with `uv`:
+
+```bash
+uv add agentlane
+```
+
+If you are trying the repository directly instead:
 
 ```bash
 uv sync --all-extras
 ```
 
-Run one runtime example:
+## Quick Start
 
-```bash
-uv run python examples/runtime/multi_agent_workflow/main.py
-```
-
-Run one high-level harness example with a real model:
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
-```
-
-The runtime example shows explicit message passing.
-
-The harness example shows the smallest local agent surface:
+After installing the package, define an agent against your model client:
 
 ```python
 from agentlane.harness import AgentDescriptor
@@ -130,6 +125,22 @@ class SupportAgent(DefaultAgent):
 agent = SupportAgent()
 result = await agent.run("My order arrived damaged. What should I do first?")
 ```
+
+## Repository Examples
+
+If you are running from a repository checkout, run one runtime example:
+
+```bash
+uv run python examples/runtime/multi_agent_workflow/main.py
+```
+
+Run one high-level harness example with a real model:
+
+```bash
+OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
+```
+
+The runtime example shows explicit message passing.
 
 ## Choose Your Level
 
