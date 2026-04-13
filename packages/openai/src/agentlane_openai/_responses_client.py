@@ -13,6 +13,7 @@ several advantages over Chat Completions:
 """
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import fields, replace
 from typing import Any, Literal, cast
@@ -525,7 +526,13 @@ class ResponsesClient(Model[TResponseType]):
         cancellation_token: CancellationToken | None = None,
         **_kwargs: Any,
     ) -> AsyncIterator[ModelStreamEvent]:
-        """Stream semantic OpenAI Responses API events as normalized model events."""
+        """Stream semantic OpenAI Responses API events as normalized model events.
+
+        Retry behavior is scoped to stream setup only: transient errors that
+        occur before the first chunk trigger the shared retry policy, while
+        mid-stream failures surface as an ``ERROR`` event and a raised
+        exception without retry.
+        """
         conversation_input = self._messages_to_input(messages)
 
         async def _stream() -> AsyncIterator[ModelStreamEvent]:
@@ -555,28 +562,18 @@ class ResponsesClient(Model[TResponseType]):
                 retry_metrics: RetryMetrics | None = None
                 emitted_error = False
 
+                # Hold the limiter for the lifetime of the stream so one active
+                # streamed generation counts as one in-flight model call.
+                # ``nullcontext`` keeps a single code path when no limiter is
+                # configured.
+                limiter_cm: Any = (
+                    self._rate_limiter
+                    if self._rate_limiter is not None
+                    else contextlib.nullcontext()
+                )
+
                 try:
-                    if self._rate_limiter is not None:
-                        # Hold the limiter for the lifetime of the stream so one
-                        # active streamed generation counts as one in-flight model call.
-                        async with self._rate_limiter:
-                            stream, retry_metrics = (
-                                await self._create_stream_with_retry(
-                                    input_data=conversation_input,
-                                    call_args=call_args,
-                                    cancellation_token=cancellation_token,
-                                )
-                            )
-                            async for event in self._iterate_stream(
-                                stream=stream,
-                                trace_events=trace_events,
-                                span_generation=span_generation,
-                                retry_metrics=retry_metrics,
-                            ):
-                                if event.kind == ModelStreamEventKind.ERROR:
-                                    emitted_error = True
-                                yield event
-                    else:
+                    async with limiter_cm:
                         stream, retry_metrics = await self._create_stream_with_retry(
                             input_data=conversation_input,
                             call_args=call_args,

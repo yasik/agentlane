@@ -1,6 +1,7 @@
 # pylint: disable=R0917, C0301
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import fields, replace
 from typing import Any, cast
@@ -320,7 +321,13 @@ class Client(Model[TResponseType]):
         cancellation_token: CancellationToken | None = None,
         **_kwargs: Any,
     ) -> AsyncIterator[ModelStreamEvent]:
-        """Return LiteLLM chunk streams as normalized model events."""
+        """Return LiteLLM chunk streams as normalized model events.
+
+        Retry behavior is scoped to stream setup only: transient errors that
+        occur before the first chunk trigger the shared retry policy, while
+        mid-stream failures surface as an ``ERROR`` event and a raised
+        exception without retry.
+        """
 
         async def _stream() -> AsyncIterator[ModelStreamEvent]:
             trace_events: list[dict[str, Any]] = []
@@ -349,28 +356,17 @@ class Client(Model[TResponseType]):
                 retry_metrics: RetryMetrics | None = None
                 emitted_error = False
 
+                # Keep one limiter slot for the full streamed generation, not
+                # just the initial stream setup request. ``nullcontext`` keeps
+                # a single code path when no limiter is configured.
+                limiter_cm: Any = (
+                    self._rate_limiter
+                    if self._rate_limiter is not None
+                    else contextlib.nullcontext()
+                )
+
                 try:
-                    if self._rate_limiter is not None:
-                        # Keep one limiter slot for the full streamed generation,
-                        # not just for the initial stream setup request.
-                        async with self._rate_limiter:
-                            stream_result, retry_metrics = (
-                                await self._execute_stream_with_retry(
-                                    messages=messages,
-                                    call_args=call_args,
-                                    cancellation_token=cancellation_token,
-                                )
-                            )
-                            async for event in self._yield_stream_events(
-                                stream_result=stream_result,
-                                trace_events=trace_events,
-                                span_generation=span_generation,
-                                retry_metrics=retry_metrics,
-                            ):
-                                if event.kind == ModelStreamEventKind.ERROR:
-                                    emitted_error = True
-                                yield event
-                    else:
+                    async with limiter_cm:
                         stream_result, retry_metrics = (
                             await self._execute_stream_with_retry(
                                 messages=messages,

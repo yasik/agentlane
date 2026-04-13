@@ -4,7 +4,6 @@ import enum
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, cast
 
-from openai import BaseModel as OpenAIBaseModel
 from pydantic import BaseModel
 
 from ._types import ModelResponse
@@ -28,8 +27,7 @@ def _serialize_stream_value(value: object) -> object:
     if isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-    if isinstance(value, OpenAIBaseModel):
+        # Covers pydantic v2 models, which includes the OpenAI SDK's BaseModel.
         return value.model_dump(mode="json")
     if is_dataclass(value) and not isinstance(value, type):
         return asdict(cast(Any, value))
@@ -65,8 +63,15 @@ class ModelStreamEvent:
     response: ModelResponse | None = None
     error: Exception | None = None
 
-    def to_trace_dict(self) -> dict[str, Any]:
-        """Export one event into a trace-safe dictionary."""
+    def to_trace_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
+        """Export one event into a trace-safe dictionary.
+
+        The raw provider payload is omitted by default because the normalized
+        fields already carry the semantic content, and retaining raw chunks for
+        every event can balloon trace memory on long streams. Pass
+        ``include_raw=True`` when you deliberately need the provider-native
+        payload persisted in the trace.
+        """
         payload: dict[str, Any] = {
             "kind": self.kind.value,
         }
@@ -92,6 +97,6 @@ class ModelStreamEvent:
             payload["response"] = self.response.model_dump(mode="json")
         if self.error is not None:
             payload["error"] = str(self.error)
-        if self.raw is not None:
+        if include_raw and self.raw is not None:
             payload["raw"] = _serialize_stream_value(self.raw)
         return payload
