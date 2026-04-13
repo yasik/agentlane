@@ -6,79 +6,15 @@ AgentLane runnable demos are grouped by category.
 
 1. [`throughput/`](./throughput/) for high-load messaging demonstrations.
 2. [`runtime/`](./runtime/) for lifecycle, scheduling, and distributed runtime demos.
-3. [`harness/`](./harness/) for direct agentic-harness demonstrations.
+3. [`models/`](./models/) for direct provider and models-layer demonstrations.
+4. [`harness/`](./harness/) for agent and orchestration demonstrations.
 
-## Quick Start
+## How To Use This Directory
 
-Run the high-throughput demo:
+Each category has its own README with the available demos and the exact commands
+to run them.
 
-```bash
-uv run python examples/throughput/high_throughput_messaging/main.py
-```
+## Environment
 
-Run the runtime multi-agent workflow demo:
-
-```bash
-uv run python examples/runtime/multi_agent_workflow/main.py
-```
-
-Run the harness customer-support demo (requires `OPENAI_API_KEY`):
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/customer_support_conversation/main.py
-```
-
-Run the harness default-agent quickstart (requires `OPENAI_API_KEY`):
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
-```
-
-Run the harness tool-calling demo (requires `OPENAI_API_KEY`):
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/tool_calling_search_answer/main.py
-```
-
-Run the harness predefined agent-as-tool demo (requires `OPENAI_API_KEY`):
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/agent_as_tool_policy_specialist/main.py
-```
-
-Run the harness generic `agent` tool demo (requires `OPENAI_API_KEY`):
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_tool_note_writer/main.py
-```
-
-Run the harness predefined handoff demo (requires `OPENAI_API_KEY`):
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/handoff_to_returns_specialist/main.py
-```
-
-Run the harness default handoff demo (requires `OPENAI_API_KEY`):
-
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/default_handoff_takeover/main.py
-```
-
-Run the distributed publish fan-out / fan-in demo:
-
-```bash
-uv run python examples/runtime/distributed_publish_fan_in/main.py
-```
-
-Run the distributed scatter / gather demo:
-
-```bash
-uv run python examples/runtime/distributed_scatter_gather/main.py
-```
-
-Run the simple distributed runtime starter examples:
-
-```bash
-uv run python examples/runtime/simple/distributed_publish_fan_in.py
-uv run python examples/runtime/simple/distributed_scatter_gather.py
-```
+Some examples require provider API keys such as `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY`. The category READMEs call that out where needed.
