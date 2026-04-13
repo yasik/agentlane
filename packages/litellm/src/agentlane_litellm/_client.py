@@ -1,11 +1,14 @@
 # pylint: disable=R0917, C0301
 
 import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from dataclasses import fields, replace
 from typing import Any, cast
 
 import litellm
 import structlog
+from litellm import CustomStreamWrapper
 from pydantic import BaseModel
 
 from agentlane.models import (
@@ -16,6 +19,8 @@ from agentlane.models import (
     MessageDict,
     Model,
     ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
     ModelTracing,
     OutputSchema,
     RetryMetrics,
@@ -83,6 +88,14 @@ async def _litellm_acompletion(**kwargs: Any) -> ModelResponse:
     """Call LiteLLM's async completion API with a typed return value."""
     acompletion: Any = getattr(litellm, "acompletion")  # noqa: B009
     return cast(ModelResponse, await acompletion(**kwargs))
+
+
+async def _litellm_astream_completion(
+    **kwargs: Any,
+) -> ModelResponse | CustomStreamWrapper:
+    """Call LiteLLM's async completion API in streaming mode."""
+    acompletion: Any = getattr(litellm, "acompletion")  # noqa: B009
+    return cast(ModelResponse | CustomStreamWrapper, await acompletion(**kwargs))
 
 
 class Factory(BaseFactory[TResponseType]):
@@ -299,6 +312,92 @@ class Client(Model[TResponseType]):
 
                 return model_response
 
+    def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, Any] | None = None,
+        schema: type[BaseModel] | OutputSchema[Any] | None = None,
+        tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
+        **_kwargs: Any,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Return LiteLLM chunk streams as normalized model events.
+
+        Retry behavior is scoped to stream setup only: transient errors that
+        occur before the first chunk trigger the shared retry policy, while
+        mid-stream failures surface as an ``ERROR`` event and a raised
+        exception without retry.
+        """
+
+        async def _stream() -> AsyncIterator[ModelStreamEvent]:
+            trace_events: list[dict[str, Any]] = []
+
+            with generation_span(
+                model=self._model,
+                model_config=self._trace_settings,
+                disabled=self._tracing.is_disabled(),
+            ) as span_generation:
+                if self._tracing.include_data():
+                    span_generation.span_data.input = messages
+
+                call_args = self._build_call_args(
+                    extra_call_args=extra_call_args,
+                    schema=schema,
+                    tools=tools,
+                )
+                call_args["stream"] = True
+
+                LOGGER.debug(
+                    "LLM stream started",
+                    messages=messages,
+                    call_args=call_args,
+                )
+
+                retry_metrics: RetryMetrics | None = None
+                emitted_error = False
+
+                # Keep one limiter slot for the full streamed generation, not
+                # just the initial stream setup request. ``nullcontext`` keeps
+                # a single code path when no limiter is configured.
+                limiter_cm: Any = (
+                    self._rate_limiter
+                    if self._rate_limiter is not None
+                    else contextlib.nullcontext()
+                )
+
+                try:
+                    async with limiter_cm:
+                        stream_result, retry_metrics = (
+                            await self._execute_stream_with_retry(
+                                messages=messages,
+                                call_args=call_args,
+                                cancellation_token=cancellation_token,
+                            )
+                        )
+                        async for event in self._yield_stream_events(
+                            stream_result=stream_result,
+                            trace_events=trace_events,
+                            span_generation=span_generation,
+                            retry_metrics=retry_metrics,
+                        ):
+                            if event.kind == ModelStreamEventKind.ERROR:
+                                emitted_error = True
+                            yield event
+                except Exception as error:
+                    if not emitted_error:
+                        error_event = ModelStreamEvent(
+                            kind=ModelStreamEventKind.ERROR,
+                            error=error,
+                        )
+                        self._append_trace_event(trace_events, error_event)
+                        yield error_event
+                    raise
+                finally:
+                    if self._tracing.include_data() and trace_events:
+                        span_generation.span_data.events = trace_events
+
+        return _stream()
+
     def get_model(self) -> str:
         """Get the model name."""
         return self._model
@@ -384,6 +483,183 @@ class Client(Model[TResponseType]):
             return None
         return output_schema.response_format()
 
+    async def _yield_stream_events(
+        self,
+        *,
+        stream_result: ModelResponse | CustomStreamWrapper,
+        trace_events: list[dict[str, Any]],
+        span_generation: Span[Any],
+        retry_metrics: RetryMetrics | None,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Yield normalized events for one LiteLLM streaming request."""
+        if isinstance(stream_result, ModelResponse):
+            self._normalize_usage_cost(stream_result)
+            completed_event = ModelStreamEvent(
+                kind=ModelStreamEventKind.COMPLETED,
+                raw=stream_result,
+                provider_event_type="chat.completion",
+                response=self._to_model_response(stream_result),
+            )
+            self._append_trace_event(trace_events, completed_event)
+            self._record_tracing_output(span_generation, stream_result)
+            self._record_usage(span_generation, stream_result, retry_metrics)
+            if self._rate_limiter is not None and hasattr(
+                self._rate_limiter, "record_usage"
+            ):
+                usage = getattr(stream_result, "usage", None)
+                if usage is not None:
+                    self._rate_limiter.record_usage(usage.total_tokens)
+            yield completed_event
+            return
+
+        collected_chunks: list[ModelResponse] = []
+        try:
+            async for raw_chunk in stream_result:
+                collected_chunks.append(cast(ModelResponse, raw_chunk))
+                events = self._stream_events_from_chunk(cast(ModelResponse, raw_chunk))
+                for event in events:
+                    self._append_trace_event(trace_events, event)
+                    yield event
+        finally:
+            await stream_result.aclose()
+
+        if not collected_chunks:
+            raise RuntimeError("LiteLLM stream ended without yielding any chunks.")
+
+        # LiteLLM publishes chunk streams and provides the canonical builder for
+        # reconstructing the final assistant message and tool calls from them.
+        final_response = cast(
+            ModelResponse | None,
+            cast(Any, litellm).stream_chunk_builder(chunks=collected_chunks),
+        )
+        if final_response is None:
+            raise RuntimeError("LiteLLM stream did not assemble into a final response.")
+
+        last_hidden_params = getattr(collected_chunks[-1], "_hidden_params", None)
+        if last_hidden_params is not None:
+            cast(Any, final_response)._hidden_params = last_hidden_params
+
+        self._normalize_usage_cost(final_response)
+        model_response = self._to_model_response(final_response)
+        completed_event = ModelStreamEvent(
+            kind=ModelStreamEventKind.COMPLETED,
+            raw=final_response,
+            provider_event_type="chat.completion",
+            response=model_response,
+        )
+        self._append_trace_event(trace_events, completed_event)
+        self._record_tracing_output(span_generation, final_response)
+        self._record_usage(span_generation, final_response, retry_metrics)
+
+        if self._rate_limiter is not None and hasattr(
+            self._rate_limiter, "record_usage"
+        ):
+            usage = getattr(final_response, "usage", None)
+            if usage is not None:
+                self._rate_limiter.record_usage(usage.total_tokens)
+
+        yield completed_event
+
+    def _stream_events_from_chunk(
+        self,
+        raw_chunk: ModelResponse,
+    ) -> list[ModelStreamEvent]:
+        """Convert one LiteLLM chunk into normalized stream events."""
+        provider_event_type = cast(
+            str,
+            getattr(raw_chunk, "object", "chat.completion.chunk"),
+        )
+
+        if not getattr(raw_chunk, "choices", None):
+            return [
+                ModelStreamEvent(
+                    kind=ModelStreamEventKind.PROVIDER,
+                    raw=raw_chunk,
+                    provider_event_type=provider_event_type,
+                )
+            ]
+
+        choice0 = raw_chunk.choices[0]
+        delta = getattr(choice0, "delta", None)
+        if delta is None:
+            return [
+                ModelStreamEvent(
+                    kind=ModelStreamEventKind.PROVIDER,
+                    raw=raw_chunk,
+                    provider_event_type=provider_event_type,
+                )
+            ]
+
+        events: list[ModelStreamEvent] = []
+
+        text = cast(str | None, getattr(delta, "content", None))
+        if text:
+            events.append(
+                ModelStreamEvent(
+                    kind=ModelStreamEventKind.TEXT_DELTA,
+                    raw=raw_chunk,
+                    provider_event_type=provider_event_type,
+                    text=text,
+                )
+            )
+
+        tool_calls = getattr(delta, "tool_calls", None)
+        if tool_calls:
+            for tool_call in cast(list[object], tool_calls):
+                function_payload = getattr(tool_call, "function", None)
+                arguments_delta = cast(
+                    str | None,
+                    getattr(function_payload, "arguments", None),
+                )
+                if not arguments_delta:
+                    continue
+                events.append(
+                    ModelStreamEvent(
+                        kind=ModelStreamEventKind.TOOL_CALL_ARGUMENTS_DELTA,
+                        raw=raw_chunk,
+                        provider_event_type=provider_event_type,
+                        tool_call_id=cast(str | None, getattr(tool_call, "id", None)),
+                        tool_call_index=cast(
+                            int | None,
+                            getattr(tool_call, "index", None),
+                        ),
+                        arguments_delta=arguments_delta,
+                    )
+                )
+
+        reasoning_content = cast(str | None, getattr(delta, "reasoning_content", None))
+        if reasoning_content:
+            events.append(
+                ModelStreamEvent(
+                    kind=ModelStreamEventKind.REASONING,
+                    raw=raw_chunk,
+                    provider_event_type=provider_event_type,
+                    reasoning=reasoning_content,
+                )
+            )
+
+        thinking_blocks = getattr(delta, "thinking_blocks", None)
+        if thinking_blocks:
+            events.append(
+                ModelStreamEvent(
+                    kind=ModelStreamEventKind.REASONING,
+                    raw=raw_chunk,
+                    provider_event_type=provider_event_type,
+                    reasoning=thinking_blocks,
+                )
+            )
+
+        if events:
+            return events
+
+        return [
+            ModelStreamEvent(
+                kind=ModelStreamEventKind.PROVIDER,
+                raw=raw_chunk,
+                provider_event_type=provider_event_type,
+            )
+        ]
+
     async def _execute_with_retry(
         self,
         *,
@@ -431,6 +707,34 @@ class Client(Model[TResponseType]):
         retry_result = await future
         return retry_result.result, retry_result.metrics
 
+    async def _execute_stream_with_retry(
+        self,
+        *,
+        messages: list[MessageDict],
+        call_args: dict[str, Any],
+        cancellation_token: CancellationToken | None,
+    ) -> tuple[ModelResponse | CustomStreamWrapper, RetryMetrics]:
+        """Invoke LiteLLM streaming with retry on setup errors only."""
+
+        @retry_on_errors(
+            max_retries=self._max_retries, is_retryable=_is_litellm_retryable
+        )
+        async def _llm_call() -> ModelResponse | CustomStreamWrapper:
+            return await _litellm_astream_completion(
+                model=self._model,
+                messages=messages,
+                **call_args,
+            )
+
+        if cancellation_token is None:
+            retry_result = await _llm_call()
+            return retry_result.result, retry_result.metrics
+
+        future = asyncio.ensure_future(_llm_call())
+        cancellation_token.link_future(future)
+        retry_result = await future
+        return retry_result.result, retry_result.metrics
+
     @staticmethod
     def _normalize_usage_cost(resp: ModelResponse) -> None:
         """Normalize ``Usage.cost`` from dict to float.
@@ -461,6 +765,16 @@ class Client(Model[TResponseType]):
 
         output_data = [cast(dict[str, Any], cast(Any, result).model_dump(mode="json"))]
         span_generation.span_data.output = output_data
+
+    def _append_trace_event(
+        self,
+        trace_events: list[dict[str, Any]],
+        event: ModelStreamEvent,
+    ) -> None:
+        """Persist one serialized stream event when tracing includes payload data."""
+        if not self._tracing.include_data():
+            return
+        trace_events.append(event.to_trace_dict())
 
     def _record_usage(
         self,

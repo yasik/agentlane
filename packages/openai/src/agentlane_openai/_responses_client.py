@@ -13,6 +13,8 @@ several advantages over Chat Completions:
 """
 
 import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from dataclasses import fields, replace
 from typing import Any, Literal, cast
 
@@ -43,6 +45,8 @@ from agentlane.models import (
     MessageDict,
     Model,
     ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
     ModelTracing,
     OutputSchema,
     RetryMetrics,
@@ -513,6 +517,96 @@ class ResponsesClient(Model[TResponseType]):
 
                 return model_response
 
+    def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, Any] | None = None,
+        schema: type[BaseModel] | OutputSchema[Any] | None = None,
+        tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
+        **_kwargs: Any,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Stream semantic OpenAI Responses API events as normalized model events.
+
+        Retry behavior is scoped to stream setup only: transient errors that
+        occur before the first chunk trigger the shared retry policy, while
+        mid-stream failures surface as an ``ERROR`` event and a raised
+        exception without retry.
+        """
+        conversation_input = self._messages_to_input(messages)
+
+        async def _stream() -> AsyncIterator[ModelStreamEvent]:
+            trace_events: list[dict[str, Any]] = []
+            stream: object | None = None
+
+            with generation_span(
+                model=self._model,
+                model_config=self._trace_settings,
+                disabled=self._tracing.is_disabled(),
+            ) as span_generation:
+                if self._tracing.include_data():
+                    span_generation.span_data.input = messages
+
+                call_args = self._build_call_args(
+                    extra_call_args=extra_call_args,
+                    schema=schema,
+                    tools=tools,
+                )
+
+                LOGGER.debug(
+                    "Responses API stream started",
+                    input=conversation_input,
+                    call_args=call_args,
+                )
+
+                retry_metrics: RetryMetrics | None = None
+                emitted_error = False
+
+                # Hold the limiter for the lifetime of the stream so one active
+                # streamed generation counts as one in-flight model call.
+                # ``nullcontext`` keeps a single code path when no limiter is
+                # configured.
+                limiter_cm: Any = (
+                    self._rate_limiter
+                    if self._rate_limiter is not None
+                    else contextlib.nullcontext()
+                )
+
+                try:
+                    async with limiter_cm:
+                        stream, retry_metrics = await self._create_stream_with_retry(
+                            input_data=conversation_input,
+                            call_args=call_args,
+                            cancellation_token=cancellation_token,
+                        )
+                        async for event in self._iterate_stream(
+                            stream=stream,
+                            trace_events=trace_events,
+                            span_generation=span_generation,
+                            retry_metrics=retry_metrics,
+                        ):
+                            if event.kind == ModelStreamEventKind.ERROR:
+                                emitted_error = True
+                            yield event
+                except Exception as error:
+                    if not emitted_error:
+                        error_event = ModelStreamEvent(
+                            kind=ModelStreamEventKind.ERROR,
+                            error=error,
+                        )
+                        self._append_trace_event(trace_events, error_event)
+                        yield error_event
+                    raise
+                finally:
+                    if self._tracing.include_data() and trace_events:
+                        span_generation.span_data.events = trace_events
+                    if stream is not None:
+                        close = getattr(stream, "close", None)
+                        if callable(close):
+                            await cast(Any, close)()
+
+        return _stream()
+
     def get_model(self) -> str:
         """Get the model name."""
         return self._model
@@ -734,6 +828,158 @@ class ResponsesClient(Model[TResponseType]):
                 tool_calls.append(tool_call)
 
         return tool_calls
+
+    async def _iterate_stream(
+        self,
+        *,
+        stream: object,
+        trace_events: list[dict[str, Any]],
+        span_generation: Span[Any],
+        retry_metrics: RetryMetrics | None,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Yield normalized events from one open OpenAI response stream."""
+        async for raw_event in cast(AsyncIterator[object], stream):
+            event = self._to_stream_event(raw_event)
+            self._append_trace_event(trace_events, event)
+
+            if event.kind == ModelStreamEventKind.COMPLETED:
+                # The Responses API sends a terminal response object on
+                # `response.completed`, so final canonical assembly happens here.
+                raw_response = getattr(raw_event, "response", None)
+                if raw_response is None:
+                    raise RuntimeError(
+                        "OpenAI streaming completed without a terminal response."
+                    )
+                final_response = cast(OpenAIResponse, raw_response)
+                self._record_tracing_output(span_generation, final_response)
+                self._record_usage(span_generation, final_response, retry_metrics)
+                if self._rate_limiter is not None and final_response.usage is not None:
+                    self._rate_limiter.record_usage(final_response.usage.total_tokens)
+                yield event
+                return
+
+            yield event
+
+            if event.kind == ModelStreamEventKind.ERROR:
+                error = event.error or RuntimeError("OpenAI streaming error.")
+                raise error
+
+        raise RuntimeError("OpenAI stream ended without a completed event.")
+
+    def _to_stream_event(self, raw_event: object) -> ModelStreamEvent:
+        """Map one OpenAI streaming event into the shared streaming envelope."""
+        provider_event_type = str(
+            getattr(raw_event, "type", raw_event.__class__.__name__)
+        )
+        item_index = getattr(raw_event, "output_index", None)
+
+        if provider_event_type == "response.output_text.delta":
+            return ModelStreamEvent(
+                kind=ModelStreamEventKind.TEXT_DELTA,
+                raw=raw_event,
+                provider_event_type=provider_event_type,
+                item_index=cast(int | None, item_index),
+                text=cast(str | None, getattr(raw_event, "delta", None)),
+            )
+
+        if provider_event_type == "response.function_call_arguments.delta":
+            return ModelStreamEvent(
+                kind=ModelStreamEventKind.TOOL_CALL_ARGUMENTS_DELTA,
+                raw=raw_event,
+                provider_event_type=provider_event_type,
+                item_index=cast(int | None, item_index),
+                tool_call_id=cast(str | None, getattr(raw_event, "item_id", None)),
+                arguments_delta=cast(str | None, getattr(raw_event, "delta", None)),
+            )
+
+        if provider_event_type in (
+            "response.reasoning_text.delta",
+            "response.reasoning_summary_text.delta",
+        ):
+            return ModelStreamEvent(
+                kind=ModelStreamEventKind.REASONING,
+                raw=raw_event,
+                provider_event_type=provider_event_type,
+                item_index=cast(int | None, item_index),
+                reasoning=getattr(raw_event, "delta", None),
+            )
+
+        if provider_event_type == "response.completed":
+            response = cast(OpenAIResponse | None, getattr(raw_event, "response", None))
+            if response is None:
+                raise RuntimeError(
+                    "OpenAI completed stream event did not include a response."
+                )
+            return ModelStreamEvent(
+                kind=ModelStreamEventKind.COMPLETED,
+                raw=raw_event,
+                provider_event_type=provider_event_type,
+                response=response_to_model_response(response),
+            )
+
+        if provider_event_type == "error":
+            message = cast(str | None, getattr(raw_event, "message", None))
+            code = cast(str | None, getattr(raw_event, "code", None))
+            error_parts = [part for part in [code, message] if part]
+            error_message = (
+                ": ".join(error_parts)
+                if error_parts
+                else "OpenAI streaming error event."
+            )
+            return ModelStreamEvent(
+                kind=ModelStreamEventKind.ERROR,
+                raw=raw_event,
+                provider_event_type=provider_event_type,
+                error=RuntimeError(error_message),
+            )
+
+        raw_item = getattr(raw_event, "item", None)
+        return ModelStreamEvent(
+            kind=ModelStreamEventKind.PROVIDER,
+            raw=raw_event,
+            provider_event_type=provider_event_type,
+            item_index=cast(int | None, item_index),
+            item_type=cast(str | None, getattr(raw_item, "type", None)),
+        )
+
+    def _append_trace_event(
+        self,
+        trace_events: list[dict[str, Any]],
+        event: ModelStreamEvent,
+    ) -> None:
+        """Persist one serialized stream event when tracing includes payload data."""
+        if not self._tracing.include_data():
+            return
+        trace_events.append(event.to_trace_dict())
+
+    async def _create_stream_with_retry(
+        self,
+        *,
+        input_data: list[dict[str, Any]],
+        call_args: dict[str, Any],
+        cancellation_token: CancellationToken | None,
+    ) -> tuple[object, RetryMetrics]:
+        """Create one OpenAI response stream with retry on stream setup errors."""
+
+        @retry_on_errors(
+            max_retries=self._max_retries, is_retryable=_is_openai_retryable
+        )
+        async def _api_call() -> object:
+            return await self._openai_client.responses.create(
+                model=self._model,
+                input=input_data,  # type: ignore[arg-type]
+                stream=True,
+                **call_args,
+            )
+
+        if cancellation_token is None:
+            retry_result = await _api_call()
+            return retry_result.result, retry_result.metrics
+
+        future = asyncio.ensure_future(_api_call())
+        cancellation_token.link_future(future)
+        retry_result = await future
+        return retry_result.result, retry_result.metrics
 
     async def _execute_with_retry(
         self,

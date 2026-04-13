@@ -77,6 +77,7 @@ class GenerationSpanData(SpanData):
 
     input: Sequence[Mapping[str, Any]] | None = None
     output: Sequence[Mapping[str, Any]] | None = None
+    events: Sequence[Mapping[str, Any]] | None = None
     model: str | None = None
     model_config: Mapping[str, Any] | None = None
     usage: dict[str, Any] | None = None
@@ -90,6 +91,7 @@ class GenerationSpanData(SpanData):
             "type": self.type,
             "input": self.input,
             "output": self.output,
+            "events": self.events,
             "model": self.model,
             "model_config": self.model_config,
             "usage": self.usage,

@@ -40,6 +40,7 @@ from ._retry import (
     retry_on_errors,
     wait_with_retry_after,
 )
+from ._streaming import ModelStreamEvent, ModelStreamEventKind
 from ._strict_schema import ensure_strict_json_schema
 from ._tool import Tool, ToolSpec, as_tool
 from ._tool_executor import ToolExecutor
@@ -70,6 +71,8 @@ __all__ = [
     "parse_content_filter_block",
     "ReasoningContent",
     "ResponseReasoningItem",
+    "ModelStreamEvent",
+    "ModelStreamEventKind",
     "PromptTemplate",
     "PromptTemplateBase",
     "MultiPartPromptTemplate",

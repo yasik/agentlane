@@ -1,6 +1,6 @@
 import abc
 import enum
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from ._output_schema import OutputSchema
 from ._rate_limiter import RateLimiter
+from ._streaming import ModelStreamEvent, ModelStreamEventKind
 from ._tool import Tool, ToolFunction, ToolSpec
 
 type MessageDict = dict[str, Any]
@@ -268,6 +269,45 @@ class Model[TResponse](abc.ABC):
     ) -> TResponse:
         """Get the response from the LLM."""
         raise NotImplementedError("get_response method must be implemented")
+
+    def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, Any] | None = None,
+        schema: type[BaseModel] | OutputSchema[Any] | None = None,
+        tools: Tools | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Return a stream of model events.
+
+        The default implementation preserves backward compatibility for
+        non-streaming model implementations by calling ``get_response(...)`` and
+        emitting one terminal ``COMPLETED`` event. Concrete provider clients can
+        override this with real streaming support.
+        """
+
+        async def _fallback() -> AsyncIterator[ModelStreamEvent]:
+            try:
+                response = await self.get_response(
+                    messages,
+                    extra_call_args=extra_call_args,
+                    schema=schema,
+                    tools=tools,
+                    **kwargs,
+                )
+            except Exception as error:
+                yield ModelStreamEvent(
+                    kind=ModelStreamEventKind.ERROR,
+                    error=error,
+                )
+                raise
+
+            yield ModelStreamEvent(
+                kind=ModelStreamEventKind.COMPLETED,
+                response=cast(Any, response),
+            )
+
+        return _fallback()
 
 
 class Factory[TResponse](abc.ABC):

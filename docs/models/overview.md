@@ -77,6 +77,37 @@ That is why `Config` stays narrow. It covers shared networking and control-plane
 concerns. Model-specific options are passed through per-call arguments instead
 of being forced into one large global settings object.
 
+## Streaming
+
+The shared [`Model`](../../src/agentlane/models/_interface.py) contract now
+supports both:
+
+1. `get_response(...)` for terminal-response workflows
+2. `stream_response(...)` for provider-grounded event streams
+
+`stream_response(...)` yields
+[`ModelStreamEvent`](../../src/agentlane/models/_streaming.py) items. The
+normalized event kinds stay small on purpose:
+
+1. `text_delta`
+2. `tool_call_arguments_delta`
+3. `reasoning`
+4. `completed`
+5. `error`
+6. `provider`
+
+That split matters because providers do not all stream the same way.
+
+`agentlane-openai` can preserve semantic Responses API events, including output
+deltas and reasoning-related events. `agentlane-litellm` preserves the chunk
+shape LiteLLM documents publicly and then assembles a final canonical
+`ModelResponse` when the stream completes.
+
+The normalized fields are there for the common framework cases. The original
+provider event or chunk is still attached on `ModelStreamEvent.raw`, together
+with `provider_event_type`, so provider-specific detail is not lost at the
+adapter boundary.
+
 ## Run-Scoped Context
 
 Some model-adjacent helpers live under `agentlane.models.run`.
