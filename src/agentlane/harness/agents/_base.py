@@ -3,14 +3,15 @@
 This module defines the minimal public execution surface for stateful agent
 types that sit above the runtime-facing harness agent. Concrete agents may add
 their own configuration or lifecycle conveniences, but they should preserve
-the same two core execution paths:
+the same core execution paths:
 
 1. continue the primary conversation line with ``run(...)``, and
-2. create a non-mutating branch with ``fork(...)``.
+2. continue it with live events through ``run_stream(...)``, and
+3. create a non-mutating branch with ``fork(...)``.
 
 Stateful agents also need one shared lifecycle control:
 
-3. clear the persisted primary conversation line with ``reset()``.
+4. clear the persisted primary conversation line with ``reset()``.
 """
 
 import abc
@@ -18,6 +19,7 @@ import abc
 from agentlane.runtime import CancellationToken
 
 from .._run import RunInput, RunResult
+from .._stream import RunStream
 
 
 class AgentBase(abc.ABC):
@@ -27,11 +29,12 @@ class AgentBase(abc.ABC):
     conversation agents that preserve one primary execution line and may also
     expose one-off branches from that line.
 
-    Future high-level agent types should expose at least two execution
+    Future high-level agent types should expose at least three execution
     paths:
 
     1. ``run(...)`` for the main stateful conversation line, and
-    2. ``fork(...)`` for a one-off branch that does not mutate that line.
+    2. ``run_stream(...)`` for live events on that same line, and
+    3. ``fork(...)`` for a one-off branch that does not mutate that line.
 
     Stateful agents should also expose ``reset()`` so callers can discard
     the persisted primary state explicitly.
@@ -76,4 +79,22 @@ class AgentBase(abc.ABC):
     @abc.abstractmethod
     def reset(self) -> None:
         """Clear the persisted primary conversation line for future runs."""
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    async def run_stream(
+        self,
+        input: RunInput,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunStream:
+        """Run or continue the primary conversation line with live streaming.
+
+        Args:
+            input: Raw run input or an explicit ``RunState`` resume payload.
+            cancellation_token: Optional shared cancellation token for the run.
+
+        Returns:
+            RunStream: Live model event stream plus final ``RunResult`` handle.
+        """
         raise NotImplementedError

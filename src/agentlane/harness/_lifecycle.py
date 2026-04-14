@@ -18,6 +18,7 @@ Key invariants maintained here:
 import asyncio
 from asyncio import Future, get_running_loop
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, Self
 
@@ -50,6 +51,7 @@ from ._run import (
     copy_original_input,
     copy_run_state,
 )
+from ._stream import RunStream
 from ._task import Task
 from ._tooling import INHERIT_TOOLS, ToolConfig
 
@@ -273,6 +275,15 @@ class LifecycleRunner(Protocol):
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult: ...
 
+    def run_stream(
+        self,
+        agent: Task,
+        state: RunState,
+        *,
+        hooks: RunnerHooks | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunStream: ...
+
 
 @dataclass(slots=True)
 class _QueuedRunInput:
@@ -285,8 +296,11 @@ class _QueuedRunInput:
     run_input: RunInput
     """Public run input queued for the next runner invocation."""
 
-    future: Future[RunResult]
-    """Future resolved with the final run result for this input."""
+    future: Future[RunResult] | None
+    """Future resolved with the final run result for terminal inputs."""
+
+    stream: RunStream | None
+    """Live stream handle for streamed inputs."""
 
     cancellation_token: CancellationToken | None
     """Optional cancellation token for the runner turn."""
@@ -357,6 +371,7 @@ class AgentLifecycle:
         queued_input = _QueuedRunInput(
             run_input=run_input,
             future=get_running_loop().create_future(),
+            stream=None,
             cancellation_token=cancellation_token,
         )
         should_drain = False
@@ -377,7 +392,54 @@ class AgentLifecycle:
 
         # Every caller awaits its own future, regardless of whether it was
         # the drainer or a later arrival.
+        if queued_input.future is None:
+            raise AssertionError("Terminal queue input unexpectedly has no future.")
         return await queued_input.future
+
+    async def enqueue_input_stream(
+        self,
+        *,
+        agent: Task,
+        runner: LifecycleRunner,
+        hooks: RunnerHooks | None,
+        run_input: RunInput,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunStream:
+        """Queue one streamed run input and return its live stream handle."""
+        internal_token = CancellationToken()
+        stream = RunStream(on_close=internal_token.cancel)
+        relay_task = _cancellation_relay_task(
+            source=cancellation_token,
+            target=internal_token,
+        )
+        if relay_task is not None:
+            stream.add_cleanup(_cancel_task_callback(relay_task))
+
+        queued_input = _QueuedRunInput(
+            run_input=run_input,
+            future=None,
+            stream=stream,
+            cancellation_token=internal_token,
+        )
+        should_drain = False
+
+        async with self._lock:
+            self._pending_inputs.append(queued_input)
+            if not self._is_running:
+                self._is_running = True
+                should_drain = True
+
+        if should_drain:
+            drain_task = asyncio.create_task(
+                self._drain_pending_inputs(
+                    agent=agent,
+                    runner=runner,
+                    hooks=hooks,
+                )
+            )
+            drain_task.add_done_callback(_consume_drain_task_result)
+
+        return stream
 
     async def _drain_pending_inputs(
         self,
@@ -415,20 +477,40 @@ class AgentLifecycle:
                     active_input.run_input,
                 )
 
+                if (
+                    active_input.cancellation_token is not None
+                    and active_input.cancellation_token.is_cancelled
+                ):
+                    exc = asyncio.CancelledError()
+                    _fail_queued_input(active_input, exc)
+                    active_input = None
+                    continue
+
                 # Execute one runner turn
                 try:
-                    result = await runner.run(
-                        agent=agent,
-                        state=working_state,
-                        hooks=hooks,
-                        cancellation_token=active_input.cancellation_token,
-                    )
+                    if active_input.stream is None:
+                        result = await runner.run(
+                            agent=agent,
+                            state=working_state,
+                            hooks=hooks,
+                            cancellation_token=active_input.cancellation_token,
+                        )
+                    else:
+                        runner_stream = runner.run_stream(
+                            agent=agent,
+                            state=working_state,
+                            hooks=hooks,
+                            cancellation_token=active_input.cancellation_token,
+                        )
+                        async for event in runner_stream:
+                            active_input.stream.emit(event)
+                        result = await runner_stream.result()
                 except Exception as exc:  # noqa: BLE001
                     # Runner failures are contained: only this input's
                     # future is failed. The persisted baseline is unchanged,
                     # so subsequent queued inputs start from the last good
                     # state.
-                    _set_future_exception(active_input.future, exc)
+                    _fail_queued_input(active_input, exc)
                 else:
                     # Commit the working state only after success, ensuring
                     # the baseline always reflects a completed turn. Handoff
@@ -436,7 +518,7 @@ class AgentLifecycle:
                     # runner can return a different final run state than the
                     # local working copy that started the turn.
                     self._run_state = copy_run_state(result.run_state) or working_state
-                    _set_future_result(active_input.future, result)
+                    _resolve_queued_input(active_input, result)
                 finally:
                     active_input = None
 
@@ -444,7 +526,7 @@ class AgentLifecycle:
             # Catastrophic failure (cancellation, KeyboardInterrupt, etc.).
             # Fail any in-flight and remaining queued futures, then reset.
             if active_input is not None:
-                _set_future_exception(active_input.future, exc)
+                _fail_queued_input(active_input, exc)
 
             async with self._lock:
                 pending_inputs = list(self._pending_inputs)
@@ -452,7 +534,7 @@ class AgentLifecycle:
                 self._is_running = False
 
             for queued_input in pending_inputs:
-                _set_future_exception(queued_input.future, exc)
+                _fail_queued_input(queued_input, exc)
             raise
 
 
@@ -528,3 +610,70 @@ def _set_future_exception(
     """Fail a future once, guarding against double-resolution."""
     if not future.done():
         future.set_exception(exc)
+
+
+def _resolve_queued_input(queued_input: _QueuedRunInput, result: RunResult) -> None:
+    """Resolve one queued terminal or streaming input successfully."""
+    if queued_input.stream is not None:
+        queued_input.stream.finish(result)
+        return
+
+    if queued_input.future is None:
+        raise AssertionError("Queued terminal input unexpectedly has no future.")
+
+    _set_future_result(queued_input.future, result)
+
+
+def _fail_queued_input(
+    queued_input: _QueuedRunInput,
+    exc: BaseException,
+) -> None:
+    """Fail one queued terminal or streaming input."""
+    if queued_input.stream is not None:
+        queued_input.stream.fail(exc)
+        return
+
+    if queued_input.future is None:
+        raise AssertionError("Queued terminal input unexpectedly has no future.")
+
+    _set_future_exception(queued_input.future, exc)
+
+
+def _cancellation_relay_task(
+    *,
+    source: CancellationToken | None,
+    target: CancellationToken,
+) -> asyncio.Task[None] | None:
+    """Relay cancellation from one token into another when needed."""
+    if source is None:
+        return None
+
+    return asyncio.create_task(
+        _relay_cancellation(source=source, target=target),
+    )
+
+
+async def _relay_cancellation(
+    *,
+    source: CancellationToken,
+    target: CancellationToken,
+) -> None:
+    """Wait for one token to cancel and propagate it to another."""
+    await source.wait_cancelled()
+    target.cancel()
+
+
+def _consume_drain_task_result(task: asyncio.Task[None]) -> None:
+    """Consume a background drain task result to avoid unhandled warnings."""
+    if task.cancelled():
+        return
+    _ = task.exception()
+
+
+def _cancel_task_callback(task: asyncio.Task[None]) -> Callable[[], None]:
+    """Return a cleanup callback that cancels the provided task."""
+
+    def cancel_task() -> None:
+        task.cancel()
+
+    return cancel_task

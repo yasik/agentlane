@@ -16,8 +16,9 @@ that lets delegation appear to the model as part of the same tool surface.
 The runner is used both by:
 
 1. the runtime-facing `agentlane.harness.Agent`
-2. the higher-level local `agentlane.harness.agents.DefaultAgent`, which wraps
-   that lower-level agent for a simpler `run(...)` surface
+2. the higher-level local `agentlane.harness.agents.DefaultAgent`, which uses
+   that lower-level agent for the simpler `run(...)` and `run_stream(...)`
+   surfaces
 
 ## The Loop
 
@@ -35,7 +36,7 @@ queued run input
       v
 +---------------------------+
 | DefaultAgent.run(...)     |
-| optional local wrapper    |
+| or run_stream(...)        |
 +-------------+-------------+
               |
               v
@@ -78,6 +79,28 @@ queued run input
 
 The lifecycle owns queueing and persistence around this loop. The runner owns
 the loop itself.
+
+## Streaming
+
+The runner also owns live model streaming for one run.
+
+The harness does not define a second event model here. It reuses
+[`ModelStreamEvent`](../../src/agentlane/models/_streaming.py) directly and
+adds one small harness handle:
+[`RunStream`](../../src/agentlane/harness/_stream.py).
+
+That split is deliberate:
+
+1. `ModelStreamEvent` is the live per-model-call event type
+2. `RunStream.result()` is the whole-run completion point
+
+One streamed harness run may cross multiple model calls because of tools or
+first-class handoff, so one `run_stream(...)` may emit more than one
+`ModelStreamEventKind.COMPLETED`. The final whole-run result is still
+`RunResult`.
+
+Streaming remains local to the harness in this step. The runner and lifecycle
+handle it without changing runtime `send_message(...)` delivery semantics.
 
 ## Request Ownership
 

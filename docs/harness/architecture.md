@@ -12,7 +12,7 @@ code a home above the runtime. The runtime-facing
 [`Agent`](../../src/agentlane/harness/_agent.py) binds addressed runs to one
 descriptor, one lifecycle, and one runner. The local
 [`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
-wraps that lower-level path in a smaller `run(...)` surface. The
+provides the smaller high-level `run(...)` and `run_stream(...)` surface. The
 [`Runner`](../../src/agentlane/harness/_runner.py) then conducts the actual
 model loop and produces a [`RunResult`](../../src/agentlane/harness/_run.py).
 
@@ -26,8 +26,10 @@ harness adds a higher-level story on top of that:
    conversation state together
 3. `DefaultAgent` provides the smaller local `run(...)` surface for
    straightforward usage
-4. `Runner` executes the model loop for one run
-5. tools and handoffs become first-class parts of that loop
+4. `DefaultAgent` also provides `run_stream(...)` for live model events on that
+   same primary conversation line
+5. `Runner` executes the model loop for one run
+6. tools and handoffs become first-class parts of that loop
 
 That separation matters because queueing and persistence are different problems
 from model reasoning. The harness keeps them apart.
@@ -39,11 +41,12 @@ At a high level, a run moves like this:
 ```text
 Application / caller
         |
-        | run(...) or send_message(run_input)
+        | run(...), run_stream(...),
+        | or send_message(run_input)
         v
 +---------------------------+
 | DefaultAgent             |
-| optional local wrapper   |
+| high-level local agent   |
 +-------------+-------------+
               |
               v
@@ -98,8 +101,9 @@ current turn.
 
 [`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
 sits one level above that lower-level path. It provisions a local runtime when
-needed, keeps a primary `RunState` between repeated `run(...)` calls, and still
-routes through the same runtime-facing `Agent` plus `Runner` stack underneath.
+needed, keeps a primary `RunState` between repeated `run(...)` and
+`run_stream(...)` calls, and still routes through the same runtime-facing
+`Agent` plus `Runner` stack underneath.
 
 ## Request Ownership
 

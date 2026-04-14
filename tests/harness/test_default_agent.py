@@ -7,11 +7,18 @@ from agentlane.harness import (
     RunnerHooks,
     RunResult,
     RunState,
+    RunStream,
     Task,
 )
 from agentlane.harness._run import copy_run_state
 from agentlane.harness.agents import AgentBase, DefaultAgent
-from agentlane.models import MessageDict, Model, ModelResponse
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
+)
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
 
@@ -61,6 +68,74 @@ class _SequenceModel(Model[ModelResponse]):
         if not self._outcomes:
             raise AssertionError("Expected one queued model response.")
         return self._outcomes.pop(0)
+
+
+class _StreamingSequenceModel(Model[ModelResponse]):
+    def __init__(
+        self,
+        outcomes: list[ModelResponse],
+        *,
+        wait_for_cancel: bool = False,
+    ) -> None:
+        self._outcomes = list(outcomes)
+        self._wait_for_cancel = wait_for_cancel
+        self.calls: list[list[MessageDict]] = []
+
+    async def get_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: object | None = None,
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: object,
+    ) -> ModelResponse:
+        del messages, extra_call_args, schema, tools, cancellation_token, kwargs
+        raise AssertionError("Streaming tests should call stream_response directly.")
+
+    def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: object | None = None,
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: object,
+    ):
+        del extra_call_args, schema, tools, kwargs
+
+        async def _stream():
+            self.calls.append([dict(message) for message in messages])
+
+            if self._wait_for_cancel:
+                if cancellation_token is None:
+                    raise AssertionError("Expected cancellation token for stream test.")
+                await cancellation_token.wait_cancelled()
+                raise asyncio.CancelledError()
+
+            if not self._outcomes:
+                raise AssertionError("Expected one queued model response.")
+
+            response = self._outcomes.pop(0)
+            content = response.choices[0].message.content or ""
+            yield ModelStreamEvent(
+                kind=ModelStreamEventKind.TEXT_DELTA,
+                text=content,
+            )
+            yield ModelStreamEvent(
+                kind=ModelStreamEventKind.COMPLETED,
+                response=response,
+            )
+
+        return _stream()
+
+
+async def _collect_run_stream(stream: RunStream) -> list[ModelStreamEvent]:
+    """Collect all streamed events from one harness run."""
+    events: list[ModelStreamEvent] = []
+    async for event in stream:
+        events.append(event)
+    return events
 
 
 def _last_user_input(run_state: RunState) -> object:
@@ -242,6 +317,101 @@ def test_default_agent_implements_agent_base_contract() -> None:
     agent = DefaultAgent(descriptor=AgentDescriptor(name="Support"))
 
     assert isinstance(agent, AgentBase)
+
+
+def test_default_agent_run_stream_emits_events_and_commits_state() -> None:
+    async def scenario() -> None:
+        model = _StreamingSequenceModel([make_assistant_response("streamed reply")])
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Support",
+                model=model,
+                instructions="You are helpful.",
+            )
+        )
+
+        stream = await agent.run_stream("hello")
+        events = await _collect_run_stream(stream)
+        result = await stream.result()
+
+        assert [event.kind for event in events] == [
+            ModelStreamEventKind.TEXT_DELTA,
+            ModelStreamEventKind.COMPLETED,
+        ]
+        assert events[0].text == "streamed reply"
+        assert result.final_output == "streamed reply"
+        assert agent.run_state is not None
+        assert agent.run_state.turn_count == 1
+        assert model.calls == [
+            [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "hello"},
+            ]
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_run_stream_reuses_persisted_state() -> None:
+    async def scenario() -> None:
+        model = _StreamingSequenceModel(
+            [
+                make_assistant_response("first"),
+                make_assistant_response("second"),
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Support",
+                model=model,
+            )
+        )
+
+        first_stream = await agent.run_stream("one")
+        await _collect_run_stream(first_stream)
+        await first_stream.result()
+
+        second_stream = await agent.run_stream("two")
+        await _collect_run_stream(second_stream)
+        second_result = await second_stream.result()
+
+        assert second_result.turn_count == 2
+        assert model.calls == [
+            [{"role": "user", "content": "one"}],
+            [
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": "first"},
+                {"role": "user", "content": "two"},
+            ],
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_run_stream_close_cancels_without_committing_state() -> None:
+    async def scenario() -> None:
+        model = _StreamingSequenceModel([], wait_for_cancel=True)
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Support",
+                model=model,
+            )
+        )
+
+        stream = await agent.run_stream("hello")
+        await asyncio.sleep(0)
+        await stream.aclose()
+
+        try:
+            await stream.result()
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("Expected cancelled stream result.")
+
+        assert agent.run_state is None
+
+    asyncio.run(scenario())
 
 
 def test_default_agent_fork_branches_without_mutating_persisted_state() -> None:

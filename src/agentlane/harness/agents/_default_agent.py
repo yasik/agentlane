@@ -6,6 +6,7 @@ branch execution on top of the runtime-facing harness ``Agent``.
 """
 
 import asyncio
+from collections.abc import Callable
 from uuid import uuid4
 
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
@@ -21,6 +22,7 @@ from .._hooks import RunnerHooks
 from .._lifecycle import AgentDescriptor
 from .._run import RunInput, RunResult, RunState, copy_run_state
 from .._runner import Runner
+from .._stream import RunStream
 from ._base import AgentBase
 
 
@@ -208,6 +210,32 @@ class DefaultAgent(AgentBase):
         """
         self._run_state = None
 
+    async def run_stream(
+        self,
+        input: RunInput,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunStream:
+        """Execute one primary-line run with live model streaming."""
+        stream_token = CancellationToken()
+        relay_task = _cancellation_relay_task(
+            source=cancellation_token,
+            target=stream_token,
+        )
+        stream = RunStream(on_close=stream_token.cancel)
+        if relay_task is not None:
+            stream.add_cleanup(_cancel_task_callback(relay_task))
+
+        stream_task = asyncio.create_task(
+            self._run_stream_task(
+                input=input,
+                stream=stream,
+                cancellation_token=stream_token,
+            )
+        )
+        stream.add_cleanup(_cancel_task_callback(stream_task))
+        return stream
+
     def _resolved_runner(self) -> Runner:
         """Return the configured runner, provisioning one lazily if needed."""
         if self._runner is None:
@@ -244,6 +272,86 @@ class DefaultAgent(AgentBase):
 
         # Custom runners may omit ``run_state`` on the returned result even
         # though the low-level lifecycle still persisted the completed state.
+        return RunResult(
+            final_output=result.final_output,
+            responses=list(result.responses),
+            turn_count=result.turn_count,
+            run_state=runtime_agent.run_state,
+        )
+
+    async def _run_stream_task(
+        self,
+        *,
+        input: RunInput,
+        stream: RunStream,
+        cancellation_token: CancellationToken,
+    ) -> None:
+        """Drive one high-level streamed run and commit final state on success."""
+        try:
+            async with self._run_lock:
+                effective_runner = self._resolved_runner()
+                initial_state = None if isinstance(input, RunState) else self._run_state
+
+                if self._runtime is None:
+                    async with single_threaded_runtime() as runtime:
+                        result = await self._run_stream_once(
+                            runtime=runtime,
+                            runner=effective_runner,
+                            input=input,
+                            initial_state=initial_state,
+                            agent_id=self._agent_id,
+                            stream=stream,
+                            cancellation_token=cancellation_token,
+                        )
+                else:
+                    async with runtime_scope(self._runtime) as runtime:
+                        result = await self._run_stream_once(
+                            runtime=runtime,
+                            runner=effective_runner,
+                            input=input,
+                            initial_state=initial_state,
+                            agent_id=self._agent_id,
+                            stream=stream,
+                            cancellation_token=cancellation_token,
+                        )
+
+                self._run_state = copy_run_state(result.run_state)
+        except BaseException as exc:
+            stream.fail(exc)
+        else:
+            stream.finish(result)
+
+    async def _run_stream_once(
+        self,
+        *,
+        runtime: RuntimeEngine,
+        runner: Runner,
+        input: RunInput,
+        initial_state: RunState | None,
+        agent_id: AgentId,
+        stream: RunStream,
+        cancellation_token: CancellationToken,
+    ) -> RunResult:
+        """Bind the low-level harness agent and stream one input locally."""
+        runtime_agent = RuntimeAgent.bind(
+            runtime,
+            agent_id,
+            runner=runner,
+            descriptor=self._descriptor,
+            run_state=initial_state,
+            hooks=self._hooks,
+        )
+        low_level_stream = await runtime_agent.enqueue_input_stream(
+            input,
+            cancellation_token=cancellation_token,
+        )
+        async for event in low_level_stream:
+            stream.emit(event)
+
+        result = await low_level_stream.result()
+        if result.run_state is not None:
+            return result
+
         return RunResult(
             final_output=result.final_output,
             responses=list(result.responses),
@@ -299,3 +407,33 @@ def _require_run_result(outcome: DeliveryOutcome) -> RunResult:
             "response payload."
         )
     return outcome.response_payload
+
+
+def _cancellation_relay_task(
+    *,
+    source: CancellationToken | None,
+    target: CancellationToken,
+) -> asyncio.Task[None] | None:
+    """Relay cancellation from an external token into the stream token."""
+    if source is None:
+        return None
+    return asyncio.create_task(_relay_cancellation(source=source, target=target))
+
+
+async def _relay_cancellation(
+    *,
+    source: CancellationToken,
+    target: CancellationToken,
+) -> None:
+    """Wait for one token to cancel and propagate it to another."""
+    await source.wait_cancelled()
+    target.cancel()
+
+
+def _cancel_task_callback(task: asyncio.Task[None]) -> Callable[[], None]:
+    """Return a cleanup callback that cancels the provided task."""
+
+    def cancel_task() -> None:
+        task.cancel()
+
+    return cancel_task

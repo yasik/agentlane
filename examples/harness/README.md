@@ -6,12 +6,13 @@ harness directly.
 ## Available demos
 
 1. [default_agent_quickstart](./default_agent_quickstart/): highest-level local quickstart using `agentlane.harness.agents.DefaultAgent` with no manual runtime or runner wiring.
-2. [customer_support_conversation](./customer_support_conversation/): real OpenAI-backed multi-turn support conversation with templated instructions and `RunState` resume.
-3. [tool_calling_search_answer](./tool_calling_search_answer/): real OpenAI-backed single-question demo showing the runner-owned tool loop with one mocked search result.
-4. [agent_as_tool_policy_specialist](./agent_as_tool_policy_specialist/): predefined agent-as-tool demo where a manager delegates a warranty question to a child policy specialist and then resumes.
-5. [default_agent_tool_note_writer](./default_agent_tool_note_writer/): generic `agent` tool demo where the model chooses a helper name, optional description, and a focused task.
-6. [handoff_to_returns_specialist](./handoff_to_returns_specialist/): predefined first-class handoff demo where support triage transfers the conversation to a returns specialist.
-7. [default_handoff_takeover](./default_handoff_takeover/): generic `handoff` demo where triage transfers the conversation to a fresh specialist created from `DefaultHandoff(...)`.
+2. [default_agent_streaming_quickstart](./default_agent_streaming_quickstart/): highest-level local streaming quickstart using `DefaultAgent.run_stream(...)`.
+3. [customer_support_conversation](./customer_support_conversation/): real OpenAI-backed multi-turn support conversation with templated instructions and `RunState` resume.
+4. [tool_calling_search_answer](./tool_calling_search_answer/): real OpenAI-backed single-question demo showing the runner-owned tool loop with one mocked search result.
+5. [agent_as_tool_policy_specialist](./agent_as_tool_policy_specialist/): predefined agent-as-tool demo where a manager delegates a warranty question to a child policy specialist and then resumes.
+6. [default_agent_tool_note_writer](./default_agent_tool_note_writer/): generic `agent` tool demo where the model chooses a helper name, optional description, and a focused task.
+7. [handoff_to_returns_specialist](./handoff_to_returns_specialist/): predefined first-class handoff demo where support triage transfers the conversation to a returns specialist.
+8. [default_handoff_takeover](./default_handoff_takeover/): generic `handoff` demo where triage transfers the conversation to a fresh specialist created from `DefaultHandoff(...)`.
 
 ## Run
 
@@ -20,6 +21,7 @@ All harness demos require `OPENAI_API_KEY` in the environment:
 ```bash
 export OPENAI_API_KEY=sk-...
 uv run python examples/harness/default_agent_quickstart/main.py
+uv run python examples/harness/default_agent_streaming_quickstart/main.py
 uv run python examples/harness/customer_support_conversation/main.py
 uv run python examples/harness/tool_calling_search_answer/main.py
 uv run python examples/harness/agent_as_tool_policy_specialist/main.py

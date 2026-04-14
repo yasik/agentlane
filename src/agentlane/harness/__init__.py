@@ -5,6 +5,7 @@ from ._hooks import RunnerHooks
 from ._lifecycle import AgentDescriptor, DefaultAgentTool, DefaultHandoff
 from ._run import RunInput, RunResult, RunState
 from ._runner import Runner
+from ._stream import RunStream
 from ._task import Task
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "RunInput",
     "RunResult",
     "RunState",
+    "RunStream",
     "Runner",
     "RunnerHooks",
     "Task",

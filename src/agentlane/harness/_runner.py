@@ -26,6 +26,8 @@ from agentlane.models import (
     Model,
     ModelBehaviorError,
     ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
     OutputSchema,
     PromptSpec,
     RunErrorDetails,
@@ -56,7 +58,8 @@ from ._lifecycle import (
     DefaultHandoffTool,
     HandoffTool,
 )
-from ._run import RunResult, RunState, copy_original_input, copy_run_state
+from ._run import RunInput, RunResult, RunState, copy_original_input, copy_run_state
+from ._stream import RunStream
 from ._task import Task
 
 
@@ -85,6 +88,17 @@ class RunnerTask(Protocol):
 
     @property
     def instructions(self) -> str | PromptSpec[Any] | None: ...
+
+
+class _StreamRunnableAgent(Protocol):
+    """Structural protocol for local streamed harness delivery."""
+
+    async def enqueue_input_stream(
+        self,
+        run_input: RunInput,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunStream: ...
 
 
 class Runner:
@@ -229,6 +243,141 @@ class Runner:
             # Always fire the end hook — result is None if the loop raised.
             await resolved_hooks.on_agent_end(agent, result)
 
+    def run_stream(
+        self,
+        agent: Task,
+        state: RunState,
+        *,
+        hooks: RunnerHooks | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunStream:
+        """Execute the generic harness loop with live model streaming."""
+        stream = RunStream(
+            on_close=(
+                cancellation_token.cancel if cancellation_token is not None else None
+            )
+        )
+        stream_task = asyncio.create_task(
+            self._run_stream_task(
+                agent=agent,
+                state=state,
+                stream=stream,
+                hooks=hooks,
+                cancellation_token=cancellation_token,
+            )
+        )
+        stream.add_cleanup(_cancel_task_callback(stream_task))
+        return stream
+
+    async def _run_stream_task(
+        self,
+        *,
+        agent: Task,
+        state: RunState,
+        stream: RunStream,
+        hooks: RunnerHooks | None,
+        cancellation_token: CancellationToken | None,
+    ) -> None:
+        """Drive one streamed run and resolve the provided stream handle."""
+        try:
+            result = await self._run_stream_internal(
+                agent=agent,
+                state=state,
+                emit=stream.emit,
+                hooks=hooks,
+                cancellation_token=cancellation_token,
+            )
+        except BaseException as exc:
+            stream.fail(exc)
+        else:
+            stream.finish(result)
+
+    async def _run_stream_internal(
+        self,
+        *,
+        agent: Task,
+        state: RunState,
+        emit: Callable[[ModelStreamEvent], None],
+        hooks: RunnerHooks | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunResult:
+        """Execute the generic harness loop while forwarding model events."""
+        resolved_hooks = hooks or RunnerHooks()
+        result: RunResult | None = None
+        runner_task = _narrow_runner_task(agent)
+        tool_call_counts: dict[str, int] = {}
+        tool_round_trips = 0
+
+        await resolved_hooks.on_agent_start(agent, state)
+        try:
+            while True:
+                state.turn_count += 1
+                _check_turn_limit(state.turn_count, self._max_turns)
+                visible_tools = _visible_tools(
+                    runner_task, tool_call_counts, tool_round_trips
+                )
+
+                messages = _build_request(runner_task, state)
+                response = await self._stream_model_call(
+                    agent=agent,
+                    runner_task=runner_task,
+                    messages=messages,
+                    tools=visible_tools,
+                    emit=emit,
+                    hooks=resolved_hooks,
+                    cancellation_token=cancellation_token,
+                )
+
+                state.responses.append(response)
+                tool_calls = _extract_tool_calls(response)
+                if tool_calls:
+                    handoff_call = _extract_handoff_call(
+                        tools=visible_tools,
+                        tool_calls=tool_calls,
+                    )
+                    if handoff_call is not None:
+                        return await self._execute_handoff_stream(
+                            agent=agent,
+                            runner_task=runner_task,
+                            state=state,
+                            response=response,
+                            handoff_call=handoff_call,
+                            emit=emit,
+                            hooks=resolved_hooks,
+                            cancellation_token=cancellation_token,
+                        )
+
+                    state.continuation_history.append(response)
+                    tool_messages = await self._execute_tool_calls(
+                        agent=agent,
+                        runner_task=runner_task,
+                        tools=visible_tools,
+                        tool_calls=tool_calls,
+                        response=response,
+                        hooks=resolved_hooks,
+                        cancellation_token=cancellation_token,
+                    )
+                    state.continuation_history.extend(tool_messages)
+
+                    tool_round_trips += 1
+                    for tc in tool_calls:
+                        name = tc.function.name or ""
+                        tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+
+                    continue
+
+                state.continuation_history.append(response)
+                _validate_terminal_response(response)
+                result = RunResult(
+                    final_output=_extract_direct_answer(response),
+                    responses=list(state.responses),
+                    turn_count=state.turn_count,
+                    run_state=copy_run_state(state),
+                )
+                return result
+        finally:
+            await resolved_hooks.on_agent_end(agent, result)
+
     async def _run_with_retry(
         self,
         *,
@@ -274,6 +423,50 @@ class Runner:
         await hooks.on_llm_end(agent, response)
 
         return response
+
+    async def _stream_model_call(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        messages: list[MessageDict],
+        tools: Tools | None,
+        emit: Callable[[ModelStreamEvent], None],
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> ModelResponse:
+        """Execute one streaming model turn and return the completed response.
+
+        Streaming runs intentionally avoid the outer retry wrapper used by
+        terminal runs. Once live events have been emitted to the caller, a
+        retry would replay another provider attempt on top of partial output.
+        """
+        model = _require_model(runner_task)
+        completed_response: ModelResponse | None = None
+
+        await hooks.on_llm_start(agent, messages)
+        async for event in model.stream_response(
+            messages,
+            extra_call_args=_model_args(runner_task),
+            schema=_schema(runner_task),
+            tools=tools,
+            cancellation_token=cancellation_token,
+        ):
+            emit(event)
+            if (
+                event.kind == ModelStreamEventKind.COMPLETED
+                and event.response is not None
+            ):
+                completed_response = event.response
+
+        if completed_response is None:
+            raise _model_behavior_error(
+                "Streaming model call completed without a terminal response.",
+                raw_response=None,
+            )
+
+        await hooks.on_llm_end(agent, completed_response)
+        return completed_response
 
     async def _execute_tool_calls(
         self,
@@ -530,6 +723,74 @@ class Runner:
         await hooks.on_tool_call_end(agent, handoff_call, handoff_result.final_output)
         return handoff_result
 
+    async def _execute_handoff_stream(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        state: RunState,
+        response: ModelResponse,
+        handoff_call: ToolCall,
+        emit: Callable[[ModelStreamEvent], None],
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> RunResult:
+        """Transfer control to another agent and continue streaming there."""
+        visible_tools = _tools(runner_task)
+        if visible_tools is None:
+            raise _model_behavior_error(
+                "Runner received a handoff call, but the agent exposes no tools.",
+                raw_response=response,
+            )
+
+        tool_definition = _require_handoff_tool_definition(
+            tools=visible_tools,
+            tool_call=handoff_call,
+            response=response,
+        )
+        parsed_input = _parse_delegated_task_input(
+            tool_call=handoff_call,
+            args_model=tool_definition.args_type(),
+        )
+        await hooks.on_tool_call_start(agent, handoff_call)
+
+        transferred_state = replace(
+            state,
+            continuation_history=list(state.continuation_history),
+            responses=list(state.responses),
+        )
+        transferred_state.continuation_history.append(response)
+        transferred_state.continuation_history.append(
+            _tool_result_message(
+                tool_call=handoff_call,
+                tool_name=tool_definition.name,
+                content=default_handoff_tool_result(tool_definition.name),
+            )
+        )
+        transferred_state.continuation_history.append(
+            parsed_input.task or default_handoff_task_message()
+        )
+
+        handoff_descriptor = _resolved_handoff_descriptor(
+            runner_task=runner_task,
+            tool_definition=tool_definition,
+        )
+        handoff_result = await self._deliver_handoff_stream(
+            agent=agent,
+            runner_task=runner_task,
+            tool_name=tool_definition.name,
+            descriptor=handoff_descriptor,
+            transferred_state=transferred_state,
+            emit=emit,
+            cancellation_token=cancellation_token,
+        )
+
+        if handoff_result.run_state is not None:
+            _overwrite_run_state(state, handoff_result.run_state)
+
+        await hooks.on_tool_call_end(agent, handoff_call, handoff_result.final_output)
+        return handoff_result
+
     async def _run_delegated_sub_agent(
         self,
         *,
@@ -627,6 +888,37 @@ class Runner:
             cancellation_token=cancellation_token,
         )
         return require_handoff_result(outcome)
+
+    async def _deliver_handoff_stream(
+        self,
+        *,
+        agent: Task,
+        runner_task: RunnerTask | None,
+        tool_name: str,
+        descriptor: AgentDescriptor,
+        transferred_state: RunState,
+        emit: Callable[[ModelStreamEvent], None],
+        cancellation_token: CancellationToken | None,
+    ) -> RunResult:
+        """Transfer the run locally to another agent and stream its events."""
+        runtime = _require_runtime_engine(agent)
+        child_agent = cast(
+            _StreamRunnableAgent,
+            type(agent).bind(
+                runtime,
+                delegated_agent_id(agent.id, tool_name, kind="handoff"),
+                runner=self,
+                descriptor=descriptor,
+                parent_tools=_base_tools(runner_task),
+            ),
+        )
+        child_stream = await child_agent.enqueue_input_stream(
+            transferred_state,
+            cancellation_token=cancellation_token,
+        )
+        async for event in child_stream:
+            emit(event)
+        return await child_stream.result()
 
 
 def _extract_handoff_call(
@@ -840,6 +1132,15 @@ def _require_runtime_engine(agent: Task) -> RuntimeEngine:
         "Harness sub-agent delegation requires an engine that supports "
         "runtime factory registration."
     )
+
+
+def _cancel_task_callback(task: asyncio.Task[None]) -> Callable[[], None]:
+    """Return a cleanup callback that cancels the provided task."""
+
+    def cancel_task() -> None:
+        task.cancel()
+
+    return cancel_task
 
 
 def _build_request(

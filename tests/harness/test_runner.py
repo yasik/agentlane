@@ -13,15 +13,21 @@ from agentlane.harness import (
     RunnerHooks,
     RunResult,
     RunState,
+    RunStream,
     Task,
 )
-from agentlane.harness._handoff import delegated_result_text
+from agentlane.harness._handoff import (
+    delegated_result_text,
+    normalize_delegation_tool_name,
+)
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import (
     MessageDict,
     Model,
     ModelBehaviorError,
     ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
     OutputSchema,
     PromptSpec,
     PromptTemplate,
@@ -127,6 +133,70 @@ class _SequenceModel(Model[ModelResponse]):
         if not isinstance(outcome, ModelResponse):
             raise AssertionError("Expected ModelResponse outcomes in runner tests.")
         return outcome
+
+
+class _StreamingSequenceModel(Model[ModelResponse]):
+    def __init__(self, outcomes: list[ModelResponse]) -> None:
+        self._outcomes = list(outcomes)
+        self.calls: list[list[MessageDict]] = []
+        self.call_options: list[dict[str, object]] = []
+
+    async def get_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: object | None = None,
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: object,
+    ) -> ModelResponse:
+        del messages, extra_call_args, schema, tools, cancellation_token, kwargs
+        raise AssertionError("Streaming tests should call stream_response directly.")
+
+    def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: object | None = None,
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: object,
+    ):
+        del cancellation_token
+        self.calls.append(_copy_messages(messages))
+        self.call_options.append(
+            {
+                "extra_call_args": extra_call_args,
+                "schema": schema,
+                "tools": tools,
+                "kwargs": dict(kwargs),
+            }
+        )
+
+        async def _stream():
+            if not self._outcomes:
+                raise AssertionError("Expected one queued model response.")
+            response = self._outcomes.pop(0)
+            content = get_content_or_none(response) or ""
+            if content:
+                yield ModelStreamEvent(
+                    kind=ModelStreamEventKind.TEXT_DELTA,
+                    text=content,
+                )
+            yield ModelStreamEvent(
+                kind=ModelStreamEventKind.COMPLETED,
+                response=response,
+            )
+
+        return _stream()
+
+
+async def _collect_runner_stream(stream: RunStream) -> list[ModelStreamEvent]:
+    """Collect one runner stream into a list of events."""
+    events: list[ModelStreamEvent] = []
+    async for event in stream:
+        events.append(event)
+    return events
 
 
 class _RecordingHooks(RunnerHooks):
@@ -419,6 +489,164 @@ def test_runner_forwards_native_model_call_options() -> None:
                 "kwargs": {},
             }
         ]
+
+    asyncio.run(scenario())
+
+
+def test_runner_run_stream_emits_events_and_returns_final_result() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        model = _StreamingSequenceModel([make_assistant_response(content="streamed")])
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="Streamer",
+                model=model,
+                instructions="Be concise.",
+            ),
+        )
+        state = RunState(
+            original_input="hello",
+            continuation_history=[],
+            responses=[],
+        )
+
+        stream = runner.run_stream(agent, state)
+        events = await _collect_runner_stream(stream)
+        result = await stream.result()
+
+        assert [event.kind for event in events] == [
+            ModelStreamEventKind.TEXT_DELTA,
+            ModelStreamEventKind.COMPLETED,
+        ]
+        assert result.final_output == "streamed"
+        assert state.turn_count == 1
+        assert model.calls == [
+            [
+                _message("system", "Be concise."),
+                _message("user", "hello"),
+            ]
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_runner_run_stream_continues_across_tool_call_turns() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        executed: list[str] = []
+
+        async def echo(
+            text: str,
+            cancellation_token: CancellationToken,
+        ) -> str:
+            del cancellation_token
+            executed.append(text)
+            return f"tool:{text}"
+
+        model = _StreamingSequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_1",
+                            arguments='{"text":"docs"}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="docs are ready"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="ToolStreamer",
+                model=model,
+                tools=Tools(tools=[echo]),
+            ),
+        )
+        state = RunState(
+            original_input="search docs",
+            continuation_history=[],
+            responses=[],
+        )
+
+        stream = runner.run_stream(agent, state)
+        events = await _collect_runner_stream(stream)
+        result = await stream.result()
+
+        assert executed == ["docs"]
+        assert result.final_output == "docs are ready"
+        assert [event.kind for event in events] == [
+            ModelStreamEventKind.COMPLETED,
+            ModelStreamEventKind.TEXT_DELTA,
+            ModelStreamEventKind.COMPLETED,
+        ]
+        assert state.turn_count == 2
+        assert len(state.responses) == 2
+
+    asyncio.run(scenario())
+
+
+def test_runner_run_stream_continues_across_first_class_handoff() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        child_descriptor = AgentDescriptor(
+            name="Returns Specialist",
+            model=_StreamingSequenceModel(
+                [make_assistant_response(content="handled by returns")]
+            ),
+            instructions="You handle returns.",
+            tools=None,
+        )
+        parent_model = _StreamingSequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="handoff_1",
+                            name=normalize_delegation_tool_name(child_descriptor.name),
+                            arguments='{"task":"Take over this return question."}',
+                        )
+                    ],
+                )
+            ]
+        )
+        agent = Agent.bind(
+            runtime,
+            AgentId.from_values("assistant-agent", "frontline-stream"),
+            runner,
+            descriptor=AgentDescriptor(
+                name="Frontline",
+                model=parent_model,
+                handoffs=(child_descriptor,),
+            ),
+        )
+        state = RunState(
+            original_input="Can I return this order?",
+            continuation_history=[],
+            responses=[],
+        )
+
+        stream = runner.run_stream(agent, state)
+        events = await _collect_runner_stream(stream)
+        result = await stream.result()
+
+        assert result.final_output == "handled by returns"
+        assert [event.kind for event in events] == [
+            ModelStreamEventKind.COMPLETED,
+            ModelStreamEventKind.TEXT_DELTA,
+            ModelStreamEventKind.COMPLETED,
+        ]
+        assert result.run_state is not None
+        assert result.run_state.turn_count == 2
 
     asyncio.run(scenario())
 

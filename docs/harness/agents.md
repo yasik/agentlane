@@ -3,7 +3,7 @@
 This page documents the runtime-facing
 [`agentlane.harness.Agent`](../../src/agentlane/harness/_agent.py).
 
-For the higher-level local wrapper that exposes `run(...)` directly, see
+For the higher-level local agent interface that exposes `run(...)` directly, see
 [Harness Default Agents](./default-agents.md).
 
 The runtime-facing harness `Agent` is where a long-lived agent definition meets

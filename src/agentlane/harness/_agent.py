@@ -25,6 +25,7 @@ from ._lifecycle import (
 )
 from ._run import RunInput, RunResult, RunState
 from ._runner import Runner
+from ._stream import RunStream
 from ._task import Task
 from ._tooling import merge_tools, resolve_tools
 
@@ -177,6 +178,21 @@ class Agent(Task):
     ) -> RunResult:
         """Queue one internal run input and wait for the final result."""
         return await self._lifecycle.enqueue_input(
+            agent=self,
+            runner=self._runner,
+            hooks=self._hooks,
+            run_input=run_input,
+            cancellation_token=cancellation_token,
+        )
+
+    async def enqueue_input_stream(
+        self,
+        run_input: RunInput,
+        *,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunStream:
+        """Queue one internal run input for live streaming."""
+        return await self._lifecycle.enqueue_input_stream(
             agent=self,
             runner=self._runner,
             hooks=self._hooks,

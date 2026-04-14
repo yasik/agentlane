@@ -23,8 +23,9 @@ from agentlane.harness.agents import AgentBase, DefaultAgent
 types. It defines three shared execution controls:
 
 1. `run(...)`
-2. `fork(...)`
-3. `reset()`
+2. `run_stream(...)`
+3. `fork(...)`
+4. `reset()`
 
 ## Two Authoring Styles
 
@@ -45,6 +46,17 @@ class SupportAgent(DefaultAgent):
 
 agent = SupportAgent()
 result = await agent.run("My order arrived damaged.")
+```
+
+### Streaming
+
+```python
+stream = await agent.run_stream("My order arrived damaged.")
+
+async for event in stream:
+    ...
+
+result = await stream.result()
 ```
 
 ### Direct Construction
@@ -72,6 +84,7 @@ result = await agent.run("My order arrived damaged.")
 2. optional runtime provisioning
 3. optional runner provisioning
 4. persisted `RunState` between repeated `run(...)` calls
+5. live streaming through `run_stream(...)`
 
 It delegates the real orchestration to the existing runtime-facing harness
 stack:
@@ -121,6 +134,10 @@ call.
 
 One `DefaultAgent` instance also serializes concurrent `run(...)` calls on
 itself so its local `RunState` stays coherent.
+
+`run_stream(...)` follows the same primary conversation line and the same
+serialization rule. A streamed run commits the updated `RunState` only after
+the stream completes successfully.
 
 ## Fork
 
