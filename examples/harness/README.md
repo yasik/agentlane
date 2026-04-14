@@ -6,7 +6,7 @@ harness directly.
 ## Available demos
 
 1. [default_agent_quickstart](./default_agent_quickstart/): highest-level local quickstart using `agentlane.harness.agents.DefaultAgent` with no manual runtime or runner wiring.
-2. [default_agent_streaming_quickstart](./default_agent_streaming_quickstart/): highest-level local streaming quickstart using `DefaultAgent.run_stream(...)`.
+2. [default_agent_streaming_quickstart](./default_agent_streaming_quickstart/): highest-level local streaming quickstart using `DefaultAgent.run_stream(...)`, including provider-native reasoning and preamble details.
 3. [customer_support_conversation](./customer_support_conversation/): real OpenAI-backed multi-turn support conversation with templated instructions and `RunState` resume.
 4. [tool_calling_search_answer](./tool_calling_search_answer/): real OpenAI-backed single-question demo showing the runner-owned tool loop with one mocked search result.
 5. [agent_as_tool_policy_specialist](./agent_as_tool_policy_specialist/): predefined agent-as-tool demo where a manager delegates a warranty question to a child policy specialist and then resumes.

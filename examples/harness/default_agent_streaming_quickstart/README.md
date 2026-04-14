@@ -8,8 +8,10 @@ It demonstrates:
 1. one `DefaultAgent` subclass with a normal `AgentDescriptor`,
 2. one mocked search tool,
 3. live text deltas from the model,
-4. streamed tool-call argument deltas, and
-5. final `RunResult` access after the stream completes.
+4. streamed reasoning summaries, when the provider emits them, plus OpenAI
+   phase / preamble details,
+5. streamed tool-call argument deltas, and
+6. final `RunResult` access after the stream completes.
 
 Run:
 
