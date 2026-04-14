@@ -40,6 +40,7 @@ from agentlane.models import (
 )
 from agentlane.runtime import CancellationToken, RuntimeEngine
 
+from ._cancellation import cancel_task_callback
 from ._handoff import (
     DefaultAgentToolInput,
     DelegatedTaskInput,
@@ -90,6 +91,7 @@ class RunnerTask(Protocol):
     def instructions(self) -> str | PromptSpec[Any] | None: ...
 
 
+@runtime_checkable
 class _StreamRunnableAgent(Protocol):
     """Structural protocol for local streamed harness delivery."""
 
@@ -266,7 +268,7 @@ class Runner:
                 cancellation_token=cancellation_token,
             )
         )
-        stream.add_cleanup(_cancel_task_callback(stream_task))
+        stream.add_cleanup(cancel_task_callback(stream_task))
         return stream
 
     async def _run_stream_task(
@@ -287,8 +289,11 @@ class Runner:
                 hooks=hooks,
                 cancellation_token=cancellation_token,
             )
+        except Exception as exc:
+            stream.fail(exc)
         except BaseException as exc:
             stream.fail(exc)
+            raise
         else:
             stream.finish(result)
 
@@ -902,16 +907,19 @@ class Runner:
     ) -> RunResult:
         """Transfer the run locally to another agent and stream its events."""
         runtime = _require_runtime_engine(agent)
-        child_agent = cast(
-            _StreamRunnableAgent,
-            type(agent).bind(
-                runtime,
-                delegated_agent_id(agent.id, tool_name, kind="handoff"),
-                runner=self,
-                descriptor=descriptor,
-                parent_tools=_base_tools(runner_task),
-            ),
+        bound_agent = type(agent).bind(
+            runtime,
+            delegated_agent_id(agent.id, tool_name, kind="handoff"),
+            runner=self,
+            descriptor=descriptor,
+            parent_tools=_base_tools(runner_task),
         )
+        if not isinstance(bound_agent, _StreamRunnableAgent):
+            raise RuntimeError(
+                "Streamed handoff requires the child agent to support "
+                "`enqueue_input_stream`."
+            )
+        child_agent = bound_agent
         child_stream = await child_agent.enqueue_input_stream(
             transferred_state,
             cancellation_token=cancellation_token,
@@ -1132,15 +1140,6 @@ def _require_runtime_engine(agent: Task) -> RuntimeEngine:
         "Harness sub-agent delegation requires an engine that supports "
         "runtime factory registration."
     )
-
-
-def _cancel_task_callback(task: asyncio.Task[None]) -> Callable[[], None]:
-    """Return a cleanup callback that cancels the provided task."""
-
-    def cancel_task() -> None:
-        task.cancel()
-
-    return cancel_task
 
 
 def _build_request(

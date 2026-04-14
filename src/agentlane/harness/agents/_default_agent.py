@@ -6,7 +6,6 @@ branch execution on top of the runtime-facing harness ``Agent``.
 """
 
 import asyncio
-from collections.abc import Callable
 from uuid import uuid4
 
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
@@ -18,6 +17,7 @@ from agentlane.runtime import (
 )
 
 from .._agent import Agent as RuntimeAgent
+from .._cancellation import cancel_task_callback, cancellation_relay_task
 from .._hooks import RunnerHooks
 from .._lifecycle import AgentDescriptor
 from .._run import RunInput, RunResult, RunState, copy_run_state
@@ -218,13 +218,13 @@ class DefaultAgent(AgentBase):
     ) -> RunStream:
         """Execute one primary-line run with live model streaming."""
         stream_token = CancellationToken()
-        relay_task = _cancellation_relay_task(
+        relay_task = cancellation_relay_task(
             source=cancellation_token,
             target=stream_token,
         )
         stream = RunStream(on_close=stream_token.cancel)
         if relay_task is not None:
-            stream.add_cleanup(_cancel_task_callback(relay_task))
+            stream.add_cleanup(cancel_task_callback(relay_task))
 
         stream_task = asyncio.create_task(
             self._run_stream_task(
@@ -233,7 +233,7 @@ class DefaultAgent(AgentBase):
                 cancellation_token=stream_token,
             )
         )
-        stream.add_cleanup(_cancel_task_callback(stream_task))
+        stream.add_cleanup(cancel_task_callback(stream_task))
         return stream
 
     def _resolved_runner(self) -> Runner:
@@ -316,8 +316,11 @@ class DefaultAgent(AgentBase):
                         )
 
                 self._run_state = copy_run_state(result.run_state)
+        except Exception as exc:
+            stream.fail(exc)
         except BaseException as exc:
             stream.fail(exc)
+            raise
         else:
             stream.finish(result)
 
@@ -407,33 +410,3 @@ def _require_run_result(outcome: DeliveryOutcome) -> RunResult:
             "response payload."
         )
     return outcome.response_payload
-
-
-def _cancellation_relay_task(
-    *,
-    source: CancellationToken | None,
-    target: CancellationToken,
-) -> asyncio.Task[None] | None:
-    """Relay cancellation from an external token into the stream token."""
-    if source is None:
-        return None
-    return asyncio.create_task(_relay_cancellation(source=source, target=target))
-
-
-async def _relay_cancellation(
-    *,
-    source: CancellationToken,
-    target: CancellationToken,
-) -> None:
-    """Wait for one token to cancel and propagate it to another."""
-    await source.wait_cancelled()
-    target.cancel()
-
-
-def _cancel_task_callback(task: asyncio.Task[None]) -> Callable[[], None]:
-    """Return a cleanup callback that cancels the provided task."""
-
-    def cancel_task() -> None:
-        task.cancel()
-
-    return cancel_task

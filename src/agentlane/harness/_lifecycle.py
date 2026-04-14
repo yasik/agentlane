@@ -18,7 +18,6 @@ Key invariants maintained here:
 import asyncio
 from asyncio import Future, get_running_loop
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, Self
 
@@ -33,6 +32,7 @@ from agentlane.models import (
 )
 from agentlane.runtime import CancellationToken
 
+from ._cancellation import cancel_task_callback, cancellation_relay_task
 from ._handoff import (
     DefaultAgentToolInput,
     DelegatedTaskInput,
@@ -408,12 +408,12 @@ class AgentLifecycle:
         """Queue one streamed run input and return its live stream handle."""
         internal_token = CancellationToken()
         stream = RunStream(on_close=internal_token.cancel)
-        relay_task = _cancellation_relay_task(
+        relay_task = cancellation_relay_task(
             source=cancellation_token,
             target=internal_token,
         )
         if relay_task is not None:
-            stream.add_cleanup(_cancel_task_callback(relay_task))
+            stream.add_cleanup(cancel_task_callback(relay_task))
 
         queued_input = _QueuedRunInput(
             run_input=run_input,
@@ -639,41 +639,8 @@ def _fail_queued_input(
     _set_future_exception(queued_input.future, exc)
 
 
-def _cancellation_relay_task(
-    *,
-    source: CancellationToken | None,
-    target: CancellationToken,
-) -> asyncio.Task[None] | None:
-    """Relay cancellation from one token into another when needed."""
-    if source is None:
-        return None
-
-    return asyncio.create_task(
-        _relay_cancellation(source=source, target=target),
-    )
-
-
-async def _relay_cancellation(
-    *,
-    source: CancellationToken,
-    target: CancellationToken,
-) -> None:
-    """Wait for one token to cancel and propagate it to another."""
-    await source.wait_cancelled()
-    target.cancel()
-
-
 def _consume_drain_task_result(task: asyncio.Task[None]) -> None:
     """Consume a background drain task result to avoid unhandled warnings."""
     if task.cancelled():
         return
     _ = task.exception()
-
-
-def _cancel_task_callback(task: asyncio.Task[None]) -> Callable[[], None]:
-    """Return a cleanup callback that cancels the provided task."""
-
-    def cancel_task() -> None:
-        task.cancel()
-
-    return cancel_task

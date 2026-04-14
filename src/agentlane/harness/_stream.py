@@ -60,6 +60,8 @@ class RunStream(AsyncIterator[ModelStreamEvent]):
         if self._on_close is not None:
             self._on_close()
         self._run_cleanups()
+        if not self._result_future.done():
+            self._result_future.set_exception(asyncio.CancelledError())
         self._queue.put_nowait(_STREAM_END)
 
     def emit(self, event: ModelStreamEvent) -> None:
