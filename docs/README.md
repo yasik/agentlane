@@ -83,7 +83,9 @@ mental model:
 5. If you want to understand prompt construction or tool exposure, read
    [Models Overview](./models/overview.md) and
    [Models: Prompt Templating](./models/prompt-templating.md).
-6. Run one of the examples under [examples/](../examples/README.md).
+6. If you specifically want streaming, read [Models Overview](./models/overview.md)
+   first, then [Harness Default Agents](./harness/default-agents.md).
+7. Run one of the examples under [examples/](../examples/README.md).
 
 ## Contents
 

@@ -108,6 +108,10 @@ provider event or chunk is still attached on `ModelStreamEvent.raw`, together
 with `provider_event_type`, so provider-specific detail is not lost at the
 adapter boundary.
 
+The harness now reuses this same event type directly. High-level agent
+streaming through `DefaultAgent.run_stream(...)` yields `ModelStreamEvent`
+through a harness `RunStream` handle instead of wrapping the per-event payload.
+
 ## Run-Scoped Context
 
 Some model-adjacent helpers live under `agentlane.models.run`.

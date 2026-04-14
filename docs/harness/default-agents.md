@@ -10,7 +10,7 @@ Use it when you want to:
 3. let the framework manage the local runtime and default runner for you.
 
 This is the primary local agent-building interface. Internally it uses the
-runtime-facing `agentlane.harness.Agent`, but from the developer standpoint it
+lower-level addressed `agentlane.harness.Agent`, but from the developer standpoint it
 is a first-class agent type, not a secondary adapter.
 
 ## Import Path
@@ -20,7 +20,7 @@ from agentlane.harness.agents import AgentBase, DefaultAgent
 ```
 
 `AgentBase` is the abstract base contract for future high-level harness agent
-types. It defines three shared execution controls:
+types. It defines four shared execution controls:
 
 1. `run(...)`
 2. `run_stream(...)`
@@ -133,11 +133,30 @@ The second call continues from the persisted `RunState` returned by the first
 call.
 
 One `DefaultAgent` instance also serializes concurrent `run(...)` calls on
-itself so its local `RunState` stays coherent.
+itself so its saved conversation state stays coherent.
 
-`run_stream(...)` follows the same primary conversation line and the same
+`run_stream(...)` follows that same saved conversation and the same
 serialization rule. A streamed run commits the updated `RunState` only after
 the stream completes successfully.
+
+## Streaming Semantics
+
+`run_stream(...)` returns a
+[`RunStream`](../../src/agentlane/harness/_stream.py).
+
+Use it like this:
+
+1. iterate the stream for live [`ModelStreamEvent`](../../src/agentlane/models/_streaming.py) values
+2. await `stream.result()` for the final `RunResult`
+
+Important details:
+
+1. `ModelStreamEventKind.COMPLETED` is model-call completion, not whole-run completion
+2. one streamed harness run may emit more than one `COMPLETED` event because of
+   tools or first-class handoff
+3. early close or cancellation does not commit partial `RunState`
+4. first-class handoff continues the outer stream because control transfers
+5. agent-as-tool stays internal in the current streaming contract
 
 ## Fork
 
@@ -168,8 +187,8 @@ After that call:
 `DefaultAgent.run(...)` also accepts `RunState` directly.
 
 That path is an explicit resume request. The agent does not combine the passed
-`RunState` with its stored baseline. It resumes from the provided state only,
-then stores the returned updated state afterward.
+`RunState` with its already saved conversation state. It resumes from the
+provided state only, then stores the returned updated state afterward.
 
 `DefaultAgent.fork(...)` also accepts `RunState`. That creates a branch from
 the provided state and still does not write the branch result back into the
@@ -177,7 +196,7 @@ agent's stored primary state.
 
 ## Reset
 
-`DefaultAgent.reset()` clears the agent's locally persisted `RunState`.
+`DefaultAgent.reset()` clears the agent's saved `RunState`.
 
 Use it when the same agent instance should start a new conversation instead
 of continuing the previous one.
@@ -186,7 +205,7 @@ of continuing the previous one.
 
 `DefaultAgent` is local and convenience-oriented.
 
-`agentlane.harness.Agent` is runtime-facing and message-oriented.
+`agentlane.harness.Agent` is the lower-level addressed harness agent.
 
 Use:
 

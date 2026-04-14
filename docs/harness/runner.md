@@ -102,6 +102,22 @@ first-class handoff, so one `run_stream(...)` may emit more than one
 Streaming remains local to the harness in this step. The runner and lifecycle
 handle it without changing runtime `send_message(...)` delivery semantics.
 
+## Streaming Boundaries
+
+The streamed runner behavior has a few important boundaries:
+
+1. first-class handoff keeps the stream going because control transfers to the
+   delegated agent
+2. agent-as-tool remains internal, so the child agent's own model events are
+   not surfaced on the parent stream
+3. streaming calls do not use the runner's outer retry wrapper after events
+   have started emitting, because replaying another provider attempt on top of
+   partial output would be incorrect
+4. if you send work through `runtime.send_message(...)`, you still receive one
+   final result after the run finishes
+5. live per-event streaming is available through the local harness streaming
+   APIs such as `DefaultAgent.run_stream(...)`
+
 ## Request Ownership
 
 One of the runner's main jobs is deciding how a high-level run turns into a

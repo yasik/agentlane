@@ -8,8 +8,9 @@ workflow.
 
 The pieces matter in relation to one another.
 [`Task`](../../src/agentlane/harness/_task.py) gives ordinary orchestration
-code a home above the runtime. The runtime-facing
-[`Agent`](../../src/agentlane/harness/_agent.py) binds addressed runs to one
+code a home above the runtime. The lower-level
+[`Agent`](../../src/agentlane/harness/_agent.py) is the harness agent type you
+bind to a runtime and address by `AgentId`. It binds addressed runs to one
 descriptor, one lifecycle, and one runner. The local
 [`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
 provides the smaller high-level `run(...)` and `run_stream(...)` surface. The
@@ -22,7 +23,7 @@ The runtime already knows how to deliver messages and preserve ordering. The
 harness adds a higher-level story on top of that:
 
 1. `Task` gives ordinary application orchestration a home above the runtime
-2. the runtime-facing `Agent` keeps static configuration and resumable
+2. the lower-level addressed `Agent` keeps static configuration and resumable
    conversation state together
 3. `DefaultAgent` provides the smaller local `run(...)` surface for
    straightforward usage
@@ -102,7 +103,7 @@ current turn.
 [`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
 sits one level above that lower-level path. It provisions a local runtime when
 needed, keeps a primary `RunState` between repeated `run(...)` and
-`run_stream(...)` calls, and still routes through the same runtime-facing
+`run_stream(...)` calls, and still routes through the same lower-level
 `Agent` plus `Runner` stack underneath.
 
 ## Request Ownership
@@ -112,17 +113,24 @@ The harness public boundary is deliberately not a low-level message-dict API.
 Instead:
 
 1. callers either use `DefaultAgent.run(...)` locally or send `RunInput` to the
-   runtime-facing `Agent`
+   lower-level addressed `Agent`
 2. the lifecycle turns that into a working `RunState`
 3. the runner turns `RunState` into canonical model messages
 4. provider clients receive the shared `agentlane.models` request shape
 
 That keeps raw provider wire formats out of application code.
 
+The same boundary applies to streaming. `DefaultAgent.run_stream(...)` is a
+local harness path built on top of the same lifecycle and runner ownership
+model. When you use `runtime.send_message(...)`, you still get one final result
+after the run finishes. Live per-event streaming is currently available through
+the local harness streaming APIs instead. Distributed transport streaming is a
+later concern.
+
 ## Where To Read Next
 
 Start with [Harness Tasks](./tasks.md) if you need orchestration without an LLM
 loop. Read [Harness Default Agents](./default-agents.md) for the smallest local
 developer surface. Read [Harness Agents](./agents.md) to understand the
-runtime-facing agent type. Read [Harness Runner](./runner.md) when you want the
+lower-level addressed agent type. Read [Harness Runner](./runner.md) when you want the
 actual loop behavior.

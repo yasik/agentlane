@@ -1,13 +1,14 @@
 # Harness Agents
 
-This page documents the runtime-facing
+This page documents the lower-level addressed
 [`agentlane.harness.Agent`](../../src/agentlane/harness/_agent.py).
 
 For the higher-level local agent interface that exposes `run(...)` directly, see
 [Harness Default Agents](./default-agents.md).
 
-The runtime-facing harness `Agent` is where a long-lived agent definition meets
-one concrete addressed conversation. It keeps static configuration in
+This lower-level harness `Agent` is the type you bind to a runtime and address
+by `AgentId`. It is where a long-lived agent definition meets one concrete
+conversation. It keeps static configuration in
 [`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py), persists the
 conversation as [`RunState`](../../src/agentlane/harness/_run.py), and hands
 execution to the [`Runner`](../../src/agentlane/harness/_runner.py).
@@ -16,7 +17,7 @@ That split is what makes an addressed agent feel stable across turns. The
 descriptor says what kind of agent this is. The run state says where one
 concrete interaction currently stands.
 
-## What The Runtime-Facing Agent Owns
+## What The Lower-Level Agent Owns
 
 1. the descriptor that defines instructions, tools, schema, and handoffs
 2. the lifecycle that queues later inputs while one run is active
@@ -27,7 +28,7 @@ model loop. The agent is the place where those pieces meet.
 
 ## Input And Recovery
 
-The public input surface is intentionally small. A runtime-facing agent
+The public input surface is intentionally small. This lower-level harness agent
 accepts:
 
 1. a `str` for a normal user turn
