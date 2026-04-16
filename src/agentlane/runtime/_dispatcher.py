@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import UnionType
-from typing import Union, cast, get_origin
+from typing import Union, cast, get_origin, get_type_hints
 
 from agentlane.messaging import (
     DeliveryOutcome,
@@ -241,9 +241,13 @@ def _validate_on_message_handler(
             f"`@on_message` handler on agent '{type(agent).__name__}' must declare "
             "an explicit payload type annotation."
         )
-    resolved_type = payload_parameter.annotation
+    resolved_type = get_type_hints(
+        handler,
+        globalns=getattr(handler, "__globals__", None),
+        localns=vars(type(agent)),
+    ).get(payload_parameter.name, payload_parameter.annotation)
     if not isinstance(resolved_type, type):
-        origin = get_origin(payload_parameter.annotation)
+        origin = get_origin(resolved_type)
         if origin not in (Union, UnionType):
             resolved_type = origin
 
