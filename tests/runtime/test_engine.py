@@ -509,6 +509,36 @@ def test_runtime_fails_when_on_message_handler_payload_annotation_not_concrete()
     asyncio.run(scenario())
 
 
+def test_runtime_resolves_string_payload_annotations() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+
+        class StringAnnotatedPayloadAgent(_ProtocolAgentMixin):
+            @on_message
+            async def handle(
+                self,
+                payload: "str",
+                context: "MessageContext",
+            ) -> object:
+                _ = context
+                return payload.upper()
+
+        runtime.register_factory(
+            "string-annotated-payload",
+            lambda _engine: StringAnnotatedPayloadAgent(),
+        )
+        outcome = await runtime.send_message(
+            "ping",
+            recipient=AgentId.from_values("string-annotated-payload", "k"),
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.DELIVERED
+        assert outcome.response_payload == "PING"
+
+    asyncio.run(scenario())
+
+
 def test_runtime_fails_when_on_message_handlers_are_ambiguous() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
