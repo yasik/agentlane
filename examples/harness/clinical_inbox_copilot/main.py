@@ -1,4 +1,4 @@
-"""Interactive streamed clinical inbox copilot demo with parallel specialist review."""
+"""Interactive streamed clinical copilot demo with parallel specialist review."""
 
 from __future__ import annotations
 
@@ -1184,7 +1184,7 @@ def print_final_summary(state: DemoUIState) -> None:
     CONSOLE.print(
         Panel(
             Text(state.final_output or "No final output captured.", style="white"),
-            title="[bold green]Final Copilot Response[/bold green]",
+            title="[bold green]Final Response[/bold green]",
             border_style="green",
         )
     )

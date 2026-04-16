@@ -1,16 +1,15 @@
-# Clinical Inbox Copilot
+# Clinical Decision Copilot
 
 This announcement-oriented demo combines a streamed top-level harness agent with
-runtime-driven parallel specialist review for a clinical inbox scenario.
+runtime-driven parallel specialist review for a clinical decision scenario.
 
 It demonstrates:
 
 1. interactive clinician input through the terminal
 2. `DefaultAgent.run_stream(...)` for top-level streaming
 3. visible model reasoning summaries, provider phases, and tool-call arguments
-4. one runtime `publish_message(...)` fan-out to parallel specialist agents
-5. one stateful aggregator that merges specialist findings back into the tool result
-6. polished `rich` console output suitable for VHS capture
+4. runtime `publish_message(...)` fan-out to parallel specialist agents
+5. stateful aggregator that merges specialist findings back into the tool result
 
 ## Run
 
