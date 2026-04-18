@@ -87,7 +87,7 @@ async def run_demo() -> None:
     print()
     print("The script adds two custom shims through `AgentDescriptor.shims`:")
     print("1. one shim appends an extra instruction line before each turn")
-    print("2. one shim persists its own counter in `RunState.shim_state`")
+    print("2. one shim persists its own counter in the `ShimState` at `RunState.shim_state`")
     print()
     print("User: My order arrived damaged. What should I do first?")
     print(f"Assistant: {first.final_output}")
@@ -95,7 +95,7 @@ async def run_demo() -> None:
     print("User: Please summarize the next step in one sentence.")
     print(f"Assistant: {second.final_output}")
     print()
-    print(f"Shim state: {run_state.shim_state}")
+    print(f"Shim state: {dict(run_state.shim_state)}")
     print(
         "Run summary:"
         f" {run_state.turn_count} turns,"

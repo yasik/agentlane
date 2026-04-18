@@ -1,8 +1,9 @@
 import asyncio
+from collections.abc import Mapping
 
 from pydantic import BaseModel
 
-from agentlane.harness import Agent, AgentDescriptor, Runner
+from agentlane.harness import Agent, AgentDescriptor, Runner, ShimState
 from agentlane.harness._tooling import merge_tools
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import (
@@ -111,7 +112,7 @@ def _append_instruction(
     return f"{current}\n{extra}"
 
 
-def _shim_counter_value(shim_state: dict[str, object], key: str) -> int:
+def _shim_counter_value(shim_state: Mapping[str, object], key: str) -> int:
     """Read one integer counter from shim state for tests."""
     value = shim_state.get(key, 0)
     if isinstance(value, bool):
@@ -353,6 +354,7 @@ def test_default_agent_shim_state_persists_across_runs() -> None:
         assert model.calls[1][0]["content"] == "Base\npersist-counter=1"
         if agent.run_state is None:
             raise AssertionError("Expected persisted run state.")
+        assert isinstance(agent.run_state.shim_state, ShimState)
         assert agent.run_state.shim_state == {"persist-counter": 2}
 
     asyncio.run(scenario())

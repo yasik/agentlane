@@ -65,9 +65,9 @@ from ._run import (
     RunInput,
     RunResult,
     RunState,
-    copy_generic_value,
     copy_original_input,
     copy_run_state,
+    copy_shim_state,
 )
 from ._stream import RunStream
 from ._task import Task
@@ -1109,9 +1109,7 @@ def _overwrite_run_state(target: RunState, source: RunState) -> None:
     target.original_input = copy_original_input(source.original_input)
     target.continuation_history = list(source.continuation_history)
     target.responses = list(source.responses)
-    target.shim_state = {
-        key: copy_generic_value(value) for key, value in source.shim_state.items()
-    }
+    target.shim_state = copy_shim_state(source.shim_state)
     target.turn_count = source.turn_count
 
 

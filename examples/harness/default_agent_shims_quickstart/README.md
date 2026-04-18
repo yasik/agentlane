@@ -8,7 +8,7 @@ It keeps the core agent surface unchanged and adds behavior through
 The script defines two small shims:
 
 1. one appends an extra instruction line before each model turn,
-2. one persists a completed-turn counter in `RunState.shim_state`.
+2. one persists a completed-turn counter in the `ShimState` stored at `RunState.shim_state`.
 
 ## Run
 
@@ -20,5 +20,5 @@ OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_shims_quickst
 
 1. simple one-class `Shim` definitions for the common path
 2. `PreparedTurn` instruction mutation
-3. persisted shim-owned state in `RunState.shim_state`
+3. persisted shim-owned state in the mapping-backed `ShimState` stored at `RunState.shim_state`
 4. repeated `run(...)` calls continuing the same shim-aware conversation

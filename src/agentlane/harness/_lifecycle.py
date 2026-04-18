@@ -49,6 +49,7 @@ from ._run import (
     RunInput,
     RunResult,
     RunState,
+    ShimState,
     copy_history_item,
     copy_original_input,
     copy_run_state,
@@ -594,7 +595,7 @@ def _next_run_state(
             original_input=copy_original_input(run_input),
             continuation_history=[],
             responses=[],
-            shim_state={},
+            shim_state=ShimState(),
         )
 
     # Case 3: continuation — fork from the current baseline

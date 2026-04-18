@@ -4,17 +4,37 @@ This module defines the canonical data shapes that flow between the agent
 lifecycle and the runner.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 from pydantic import BaseModel
 
 from agentlane.models import MessageDict, ModelResponse, PromptSpec
+from agentlane.models.run import DefaultRunContext
 
 
-def _empty_shim_state() -> dict[str, object]:
-    """Return one typed empty shim-state mapping."""
-    return {}
+class ShimState(DefaultRunContext):
+    """Persisted shim-owned state stored in one harness `RunState`.
+
+    This keeps the same mapping-style access as `DefaultRunContext` while
+    making the persisted nature of shim-owned state explicit at the harness
+    boundary.
+    """
+
+    def __eq__(self, other: object) -> bool:
+        """Compare shim state by stored mapping contents."""
+        if isinstance(other, DefaultRunContext):
+            return self.context == other.context
+        if isinstance(other, Mapping):
+            other_mapping = cast(Mapping[str, object], other)
+            return self.context == dict(other_mapping)
+        return NotImplemented
+
+
+def _empty_shim_state() -> ShimState:
+    """Return one typed empty persisted shim-state container."""
+    return ShimState()
 
 
 type RunMessageContent = (
@@ -57,7 +77,7 @@ class RunState:
     responses: list[ModelResponse]
     """Raw model responses accumulated across turns."""
 
-    shim_state: dict[str, object] = field(default_factory=_empty_shim_state)
+    shim_state: ShimState = field(default_factory=_empty_shim_state)
     """Persisted shim-owned state that must survive resumed runs."""
 
     turn_count: int = 0
@@ -102,11 +122,15 @@ def copy_run_state(run_state: RunState | None) -> RunState | None:
             copy_history_item(item) for item in run_state.continuation_history
         ],
         responses=list(run_state.responses),
-        shim_state={
-            key: copy_generic_value(value)
-            for key, value in run_state.shim_state.items()
-        },
+        shim_state=copy_shim_state(run_state.shim_state),
         turn_count=run_state.turn_count,
+    )
+
+
+def copy_shim_state(shim_state: ShimState) -> ShimState:
+    """Return an isolated copy of one persisted shim-state container."""
+    return ShimState(
+        context={key: copy_generic_value(value) for key, value in shim_state.items()}
     )
 
 

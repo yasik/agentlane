@@ -92,7 +92,8 @@ concrete agent instance before the first queued run starts.
 
 Those bound sessions are then reused on later runs for the same addressed
 agent. This allows shims to keep private in-memory state per agent instance
-while still writing resumable state into `RunState.shim_state` when needed.
+while still writing resumable state into the persisted `ShimState` stored on
+`RunState.shim_state` when needed.
 
 For the actual shim contract, see [Harness Shims](./shims.md).
 

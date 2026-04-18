@@ -103,6 +103,9 @@ other in-memory state that should not survive a resumed run.
 `PreparedTurn.run_state.shim_state` is copied into the saved
 [`RunState`](../../src/agentlane/harness/_run.py).
 
+It is typed as [`ShimState`](../../src/agentlane/harness/_run.py), a persisted
+mapping-backed state container for shim-owned resumable state.
+
 Use this when a shim needs state to survive:
 
 1. later `run(...)` calls on the same `DefaultAgent`,
