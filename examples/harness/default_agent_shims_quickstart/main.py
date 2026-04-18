@@ -30,6 +30,9 @@ class ReplyPrefixShim(Shim):
         return "reply-prefix"
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
+        # `PreparedTurn.instructions` starts from the descriptor instructions on
+        # each model turn, so this extra line is applied once per turn request
+        # rather than accumulating across later runs.
         if isinstance(turn.instructions, str):
             turn.instructions = (
                 f"{turn.instructions}\n"
@@ -50,8 +53,7 @@ class TurnCounterShim(Shim):
         response: ModelResponse,
     ) -> None:
         del response
-        count = int(turn.run_state.shim_state.get("completed-turns", 0))
-        turn.run_state.shim_state["completed-turns"] = count + 1
+        await turn.run_state.shim_state.increment("completed-turns")
 
 
 class SupportAgent(DefaultAgent):
@@ -86,8 +88,11 @@ async def run_demo() -> None:
     print(f"Model: {MODEL_NAME}")
     print()
     print("The script adds two custom shims through `AgentDescriptor.shims`:")
-    print("1. one shim appends an extra instruction line before each turn")
-    print("2. one shim persists its own counter in the `ShimState` at `RunState.shim_state`")
+    print("1. one shim appends an extra instruction line before each turn request")
+    print(
+        "2. one shim updates a persisted counter through the `ShimState` helper"
+        " methods at `RunState.shim_state`"
+    )
     print()
     print("User: My order arrived damaged. What should I do first?")
     print(f"Assistant: {first.final_output}")
