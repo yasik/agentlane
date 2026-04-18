@@ -11,7 +11,8 @@ by `AgentId`. It is where a long-lived agent definition meets one concrete
 conversation. It keeps static configuration in
 [`AgentDescriptor`](../../src/agentlane/harness/_lifecycle.py), persists the
 conversation as [`RunState`](../../src/agentlane/harness/_run.py), and hands
-execution to the [`Runner`](../../src/agentlane/harness/_runner.py).
+execution to any bound shims and then to the
+[`Runner`](../../src/agentlane/harness/_runner.py).
 
 That split is what makes an addressed agent feel stable across turns. The
 descriptor says what kind of agent this is. The run state says where one
@@ -19,9 +20,11 @@ concrete interaction currently stands.
 
 ## What The Lower-Level Agent Owns
 
-1. the descriptor that defines instructions, tools, schema, and handoffs
+1. the descriptor that defines instructions, tools, schema, handoffs, and
+   optional shims
 2. the lifecycle that queues later inputs while one run is active
-3. the runner that executes each run
+3. any bound shims declared by the descriptor
+4. the runner that executes each run
 
 The runner does not own long-lived agent state. The lifecycle does not own the
 model loop. The agent is the place where those pieces meet.
@@ -32,12 +35,20 @@ The public input surface is intentionally small. This lower-level harness agent
 accepts:
 
 1. a `str` for a normal user turn
-2. a `list[object]` for richer multi-item input
+2. a list of supported run-history items for richer multi-item input
 3. a [`RunState`](../../src/agentlane/harness/_run.py) when resuming an
    existing conversation
 
 That is enough to support normal chat-like turns, richer prompt input, and
 recovery after a restart.
+
+Supported run-history items include:
+
+1. canonical message dicts,
+2. prior `ModelResponse` values,
+3. `PromptSpec` values, and
+4. user-side content values such as strings, JSON-like values, or Pydantic
+   models.
 
 When you ask an agent for its current run state through
 [`Agent.run_state`](../../src/agentlane/harness/_agent.py), you get a snapshot
@@ -73,6 +84,17 @@ That means:
 
 This is what makes resumable state practical. The framework does not need to
 guess how to merge multiple overlapping runs for the same agent instance.
+
+## Shims
+
+If the descriptor includes shims, the lifecycle binds them once for the
+concrete agent instance before the first queued run starts.
+
+Those bound sessions are then reused on later runs for the same addressed
+agent. This allows shims to keep private in-memory state per agent instance
+while still writing resumable state into `RunState.shim_state` when needed.
+
+For the actual shim contract, see [Harness Shims](./shims.md).
 
 ## When To Read The Runner Docs
 

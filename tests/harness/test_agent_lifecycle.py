@@ -9,7 +9,8 @@ from agentlane.harness import (
     RunState,
     Task,
 )
-from agentlane.harness._run import copy_run_state
+from agentlane.harness._run import RunHistoryItem, copy_run_state
+from agentlane.harness.shims import BoundHarnessShim, HarnessShim, ShimBindingContext
 from agentlane.messaging import AgentId, DeliveryStatus
 from agentlane.models import ModelResponse
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
@@ -51,6 +52,20 @@ def _require_run_result(payload: object | None) -> RunResult:
     if not isinstance(payload, RunResult):
         raise AssertionError("Expected a `RunResult` payload from the runtime.")
     return payload
+
+
+class _NoopBoundShim(BoundHarnessShim):
+    pass
+
+
+class _NoopShim(HarnessShim):
+    @property
+    def name(self) -> str:
+        return "noop"
+
+    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
+        _ = context
+        return _NoopBoundShim()
 
 
 class _RecordingRunner(Runner):
@@ -98,7 +113,7 @@ class _RecordingRunner(Runner):
 
 class _TestableAgent(Agent):
     async def queue_for_test(
-        self, run_input: str | list[object] | RunState
+        self, run_input: str | list[RunHistoryItem] | RunState
     ) -> RunResult:
         return await self._enqueue_input(run_input)
 
@@ -116,7 +131,6 @@ def test_agent_starts_new_run_with_string_input() -> None:
                 name="Support",
                 description="Handles support requests",
                 instructions="You are a helpful support agent.",
-                skills=("triage",),
             ),
         )
 
@@ -155,9 +169,8 @@ def test_agent_continues_existing_run_after_idle() -> None:
                 name="Planner",
                 description="Plans next steps",
                 instructions="You plan carefully.",
-                skills=("analysis",),
+                shims=(_NoopShim(),),
                 context={"team": "ops"},
-                memory={"kind": "ephemeral"},
             ),
         )
 
@@ -173,9 +186,8 @@ def test_agent_continues_existing_run_after_idle() -> None:
         assert agent.name == "Planner"
         assert agent.description == "Plans next steps"
         assert agent.instructions == "You plan carefully."
-        assert agent.skills == ("analysis",)
+        assert len(agent.shims or ()) == 1
         assert agent.context == {"team": "ops"}
-        assert agent.memory == {"kind": "ephemeral"}
         assert not agent.is_running
         assert agent.pending_input_count == 0
         assert len(runner.calls) == 2

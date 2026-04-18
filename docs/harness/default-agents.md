@@ -85,13 +85,15 @@ result = await agent.run("My order arrived damaged.")
 3. optional runner provisioning
 4. persisted `RunState` between repeated `run(...)` calls
 5. live streaming through `run_stream(...)`
+6. binding and reuse of any configured harness shims
 
 It delegates the real orchestration to the existing runtime-facing harness
 stack:
 
 1. `agentlane.harness.Agent`
 2. `AgentLifecycle`
-3. `Runner`
+3. bound shims, when configured
+4. `Runner`
 
 ## Runtime Behavior
 
@@ -138,6 +140,9 @@ itself so its saved conversation state stays coherent.
 `run_stream(...)` follows that same saved conversation and the same
 serialization rule. A streamed run commits the updated `RunState` only after
 the stream completes successfully.
+
+If the descriptor declares shims, `DefaultAgent` binds them once for that
+concrete agent instance and reuses those bound sessions across repeated runs.
 
 ## Streaming Semantics
 
@@ -212,3 +217,5 @@ Use:
 1. `DefaultAgent` for the smallest local developer surface
 2. `Agent` when you want direct runtime addressing, explicit binding, or lower
    level orchestration control
+3. [Harness Shims](./shims.md) when you need to extend instructions, tools, or
+   turn context without changing the core harness types

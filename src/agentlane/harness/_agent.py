@@ -23,11 +23,13 @@ from ._lifecycle import (
     DefaultHandoffTool,
     HandoffTool,
 )
-from ._run import RunInput, RunResult, RunState
+from ._run import RunHistoryItem, RunInput, RunResult, RunState
 from ._runner import Runner
 from ._stream import RunStream
 from ._task import Task
 from ._tooling import merge_tools, resolve_tools
+from .shims import HarnessShim
+from .shims._manager import BoundShimManager
 
 
 class Agent(Task):
@@ -117,9 +119,9 @@ class Agent(Task):
         return merge_tools(base_tools, self._handoff_tools())
 
     @property
-    def skills(self) -> tuple[object, ...] | None:
-        """Return the configured skills for this agent."""
-        return self._descriptor.skills
+    def shims(self) -> tuple[HarnessShim, ...] | None:
+        """Return the configured shim definitions for this agent."""
+        return self._descriptor.shims
 
     @property
     def context(self) -> object | None:
@@ -127,9 +129,9 @@ class Agent(Task):
         return self._descriptor.context
 
     @property
-    def memory(self) -> object | None:
-        """Return the opaque memory reference for this agent."""
-        return self._descriptor.memory
+    def bound_shim_manager(self) -> BoundShimManager | None:
+        """Return the bound shim manager for this agent instance, if any."""
+        return self._lifecycle.bound_shim_manager
 
     @property
     def handoffs(self) -> tuple[AgentDescriptor, ...] | None:
@@ -231,7 +233,7 @@ class Agent(Task):
     @on_message
     async def handle_list(
         self,
-        payload: list[object],
+        payload: list[RunHistoryItem],
         context: MessageContext,
     ) -> object:
         """Handle one inbound list-based run input."""

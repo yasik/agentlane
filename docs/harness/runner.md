@@ -11,7 +11,9 @@ loop, [`RunnerHooks`](../../src/agentlane/harness/_hooks.py) exposes useful
 observation points, and
 [`DefaultAgentTool`](../../src/agentlane/harness/_lifecycle.py) plus
 [`DefaultHandoff`](../../src/agentlane/harness/_lifecycle.py) are the bridge
-that lets delegation appear to the model as part of the same tool surface.
+that lets delegation appear to the model as part of the same tool surface. If
+shims are configured, the runner also consumes the prepared turn they build for
+each model call.
 
 The runner is used both by:
 
@@ -24,11 +26,13 @@ The runner is used both by:
 
 At a high level, one run looks like this:
 
-1. build the next request from instructions and current history
-2. call the model
-3. record the raw response
-4. inspect the response
-5. either finish, execute tools, or hand off to another agent
+1. prepare the next turn from instructions and current history
+2. let shims adjust that prepared turn
+3. build the next request
+4. call the model
+5. record the raw response
+6. inspect the response
+7. either finish, execute tools, or hand off to another agent
 
 ```text
 queued run input
@@ -48,6 +52,12 @@ queued run input
               v
 +---------------------------+
 | Runner.run                |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| prepare turn              |
+| shims may mutate it       |
 +-------------+-------------+
               |
               v
@@ -79,6 +89,25 @@ queued run input
 
 The lifecycle owns queueing and persistence around this loop. The runner owns
 the loop itself.
+
+## Prepared Turns And Shims
+
+Before each model call, the runner works from one
+[`PreparedTurn`](../../src/agentlane/harness/shims/_types.py).
+
+That object carries the effective:
+
+1. instructions
+2. tools
+3. model arguments
+4. working `RunState`
+5. one-turn context items
+6. per-run transient state
+
+If bound shims exist, they are called in descriptor order to adjust that
+prepared turn before the runner builds the canonical message list. They may
+also replace that final message list for one model call when
+`transform_messages(...)` is needed.
 
 ## Streaming
 
@@ -125,10 +154,11 @@ canonical model request.
 
 That means the runner is the place where:
 
-1. instructions are combined with accumulated run history
-2. visible tools are attached to the request
-3. the structured-output schema is forwarded
-4. model arguments are passed through
+1. prepared instructions are combined with accumulated run history
+2. any one-turn context items are added
+3. visible tools are attached to the request
+4. the structured-output schema is forwarded
+5. model arguments are passed through
 
 This is why the harness public API does not require application code to build
 raw message dictionaries itself.

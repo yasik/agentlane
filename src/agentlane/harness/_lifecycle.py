@@ -44,16 +44,19 @@ from ._handoff import (
 )
 from ._hooks import RunnerHooks
 from ._run import (
+    RunHistoryItem,
     RunInput,
     RunResult,
     RunState,
-    copy_item,
+    copy_history_item,
     copy_original_input,
     copy_run_state,
 )
 from ._stream import RunStream
 from ._task import Task
 from ._tooling import INHERIT_TOOLS, ToolConfig
+from .shims import HarnessShim, ShimBindingContext
+from .shims._manager import BoundShimManager
 
 
 class _EmptyAgentToolArgs(BaseModel):
@@ -122,14 +125,11 @@ class AgentDescriptor:
     ``None`` means "expose no tools explicitly".
     """
 
-    skills: tuple[object, ...] | None = None
-    """Skills associated with the agent in later phases."""
+    shims: tuple[HarnessShim, ...] | None = None
+    """Ordered mutating shim definitions bound per agent instance."""
 
     context: object | None = None
     """Opaque context reference reserved for later phases."""
-
-    memory: object | None = None
-    """Opaque memory reference reserved for later phases."""
 
     handoffs: tuple[Self, ...] | None = None
     """Predefined delegated child agents exposed as model-visible tools."""
@@ -332,11 +332,13 @@ class AgentLifecycle:
 
         self._pending_inputs: deque[_QueuedRunInput] = deque()
         self._is_running = False
+        self._bound_shim_manager: BoundShimManager | None = None
 
         # Guards `_pending_inputs` and `_is_running`. Held only for queue
         # bookkeeping — never during expensive operations like state copies
         # or runner invocations.
         self._lock = asyncio.Lock()
+        self._shim_bind_lock = asyncio.Lock()
 
     @property
     def is_running(self) -> bool:
@@ -351,6 +353,26 @@ class AgentLifecycle:
     def run_state_snapshot(self) -> RunState | None:
         """Return an isolated copy suitable for persistence or inspection."""
         return copy_run_state(self._run_state)
+
+    @property
+    def bound_shim_manager(self) -> BoundShimManager | None:
+        """Return the already-bound shim manager, if any."""
+        return self._bound_shim_manager
+
+    async def ensure_shims_bound(self, *, agent: Task) -> BoundShimManager:
+        """Bind the descriptor's shim definitions once for this agent instance."""
+        if self._bound_shim_manager is not None:
+            return self._bound_shim_manager
+
+        async with self._shim_bind_lock:
+            if self._bound_shim_manager is None:
+                self._bound_shim_manager = await BoundShimManager.bind(
+                    shims=self._descriptor.shims,
+                    context=ShimBindingContext(
+                        task=agent,
+                    ),
+                )
+            return self._bound_shim_manager
 
     async def enqueue_input(
         self,
@@ -368,6 +390,7 @@ class AgentLifecycle:
         If the agent is already running, the input is simply appended; the
         active drainer will pick it up after the current turn finishes.
         """
+        await self.ensure_shims_bound(agent=agent)
         queued_input = _QueuedRunInput(
             run_input=run_input,
             future=get_running_loop().create_future(),
@@ -406,6 +429,7 @@ class AgentLifecycle:
         cancellation_token: CancellationToken | None = None,
     ) -> RunStream:
         """Queue one streamed run input and return its live stream handle."""
+        await self.ensure_shims_bound(agent=agent)
         internal_token = CancellationToken()
         stream = RunStream(on_close=internal_token.cancel)
         relay_task = cancellation_relay_task(
@@ -572,6 +596,7 @@ def _next_run_state(
             original_input=copy_original_input(run_input),
             continuation_history=[],
             responses=[],
+            shim_state={},
         )
 
     # Case 3: continuation — fork from the current baseline
@@ -583,7 +608,10 @@ def _next_run_state(
     return next_state
 
 
-def _append_run_input(history: list[object], run_input: str | list[object]) -> None:
+def _append_run_input(
+    history: list[RunHistoryItem],
+    run_input: str | list[RunHistoryItem],
+) -> None:
     """Append one raw run input onto continuation history.
 
     Strings are appended directly. Lists are iterated and each item is
@@ -594,7 +622,7 @@ def _append_run_input(history: list[object], run_input: str | list[object]) -> N
         return
 
     for item in run_input:
-        history.append(copy_item(item))
+        history.append(copy_history_item(item))
 
 
 def _set_future_result(future: Future[RunResult], value: RunResult) -> None:

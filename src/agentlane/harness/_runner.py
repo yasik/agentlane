@@ -38,6 +38,7 @@ from agentlane.models import (
     ToolSpec,
     retry_on_errors,
 )
+from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken, RuntimeEngine
 
 from ._cancellation import cancel_task_callback
@@ -59,9 +60,19 @@ from ._lifecycle import (
     DefaultHandoffTool,
     HandoffTool,
 )
-from ._run import RunInput, RunResult, RunState, copy_original_input, copy_run_state
+from ._run import (
+    RunHistoryItem,
+    RunInput,
+    RunResult,
+    RunState,
+    copy_generic_value,
+    copy_original_input,
+    copy_run_state,
+)
 from ._stream import RunStream
 from ._task import Task
+from .shims import PreparedTurn
+from .shims._manager import BoundShimManager
 
 
 @runtime_checkable
@@ -163,6 +174,8 @@ class Runner:
         # Narrow the agent to the runner protocol once per run. All helper
         # functions receive the narrowed value instead of re-checking.
         runner_task = _narrow_runner_task(agent)
+        shim_manager = _shim_manager(agent)
+        transient_state = DefaultRunContext()
 
         # Incremental tool-usage counters — updated after each tool batch
         # so we never re-scan all prior responses.
@@ -172,29 +185,49 @@ class Runner:
         # Hook receives the same working copy — safe because the lifecycle
         # already isolated it before calling us.
         await resolved_hooks.on_agent_start(agent, state)
+        if shim_manager is not None:
+            await shim_manager.on_run_start(state, transient_state)
         try:
             while True:
                 state.turn_count += 1
                 _check_turn_limit(state.turn_count, self._max_turns)
-                visible_tools = _visible_tools(
-                    runner_task, tool_call_counts, tool_round_trips
+                prepared_turn = PreparedTurn(
+                    run_state=state,
+                    instructions=(
+                        runner_task.instructions if runner_task is not None else None
+                    ),
+                    tools=_visible_tools(
+                        runner_task, tool_call_counts, tool_round_trips
+                    ),
+                    model_args=_model_args(runner_task),
+                    transient_state=transient_state,
                 )
+                if shim_manager is not None:
+                    await shim_manager.prepare_turn(prepared_turn)
 
-                messages = _build_request(runner_task, state)
+                messages = _build_request(prepared_turn)
+                if shim_manager is not None:
+                    messages = await shim_manager.transform_messages(
+                        prepared_turn,
+                        messages,
+                    )
                 response = await self._run_with_retry(
                     agent=agent,
                     runner_task=runner_task,
                     messages=messages,
-                    tools=visible_tools,
+                    tools=prepared_turn.tools,
+                    model_args=prepared_turn.model_args,
                     hooks=resolved_hooks,
                     cancellation_token=cancellation_token,
                 )
 
                 state.responses.append(response)
+                if shim_manager is not None:
+                    await shim_manager.on_model_response(prepared_turn, response)
                 tool_calls = _extract_tool_calls(response)
                 if tool_calls:
                     handoff_call = _extract_handoff_call(
-                        tools=visible_tools,
+                        tools=prepared_turn.tools,
                         tool_calls=tool_calls,
                     )
                     if handoff_call is not None:
@@ -204,6 +237,7 @@ class Runner:
                             state=state,
                             response=response,
                             handoff_call=handoff_call,
+                            tools=prepared_turn.tools,
                             hooks=resolved_hooks,
                             cancellation_token=cancellation_token,
                         )
@@ -216,7 +250,7 @@ class Runner:
                     tool_messages = await self._execute_tool_calls(
                         agent=agent,
                         runner_task=runner_task,
-                        tools=visible_tools,
+                        tools=prepared_turn.tools,
                         tool_calls=tool_calls,
                         response=response,
                         hooks=resolved_hooks,
@@ -242,6 +276,8 @@ class Runner:
                 )
                 return result
         finally:
+            if shim_manager is not None:
+                await shim_manager.on_run_end(result, transient_state)
             # Always fire the end hook — result is None if the loop raised.
             await resolved_hooks.on_agent_end(agent, result)
 
@@ -310,34 +346,56 @@ class Runner:
         resolved_hooks = hooks or RunnerHooks()
         result: RunResult | None = None
         runner_task = _narrow_runner_task(agent)
+        shim_manager = _shim_manager(agent)
+        transient_state = DefaultRunContext()
         tool_call_counts: dict[str, int] = {}
         tool_round_trips = 0
 
         await resolved_hooks.on_agent_start(agent, state)
+        if shim_manager is not None:
+            await shim_manager.on_run_start(state, transient_state)
         try:
             while True:
                 state.turn_count += 1
                 _check_turn_limit(state.turn_count, self._max_turns)
-                visible_tools = _visible_tools(
-                    runner_task, tool_call_counts, tool_round_trips
+                prepared_turn = PreparedTurn(
+                    run_state=state,
+                    instructions=(
+                        runner_task.instructions if runner_task is not None else None
+                    ),
+                    tools=_visible_tools(
+                        runner_task, tool_call_counts, tool_round_trips
+                    ),
+                    model_args=_model_args(runner_task),
+                    transient_state=transient_state,
                 )
+                if shim_manager is not None:
+                    await shim_manager.prepare_turn(prepared_turn)
 
-                messages = _build_request(runner_task, state)
+                messages = _build_request(prepared_turn)
+                if shim_manager is not None:
+                    messages = await shim_manager.transform_messages(
+                        prepared_turn,
+                        messages,
+                    )
                 response = await self._stream_model_call(
                     agent=agent,
                     runner_task=runner_task,
                     messages=messages,
-                    tools=visible_tools,
+                    tools=prepared_turn.tools,
+                    model_args=prepared_turn.model_args,
                     emit=emit,
                     hooks=resolved_hooks,
                     cancellation_token=cancellation_token,
                 )
 
                 state.responses.append(response)
+                if shim_manager is not None:
+                    await shim_manager.on_model_response(prepared_turn, response)
                 tool_calls = _extract_tool_calls(response)
                 if tool_calls:
                     handoff_call = _extract_handoff_call(
-                        tools=visible_tools,
+                        tools=prepared_turn.tools,
                         tool_calls=tool_calls,
                     )
                     if handoff_call is not None:
@@ -347,6 +405,7 @@ class Runner:
                             state=state,
                             response=response,
                             handoff_call=handoff_call,
+                            tools=prepared_turn.tools,
                             emit=emit,
                             hooks=resolved_hooks,
                             cancellation_token=cancellation_token,
@@ -356,7 +415,7 @@ class Runner:
                     tool_messages = await self._execute_tool_calls(
                         agent=agent,
                         runner_task=runner_task,
-                        tools=visible_tools,
+                        tools=prepared_turn.tools,
                         tool_calls=tool_calls,
                         response=response,
                         hooks=resolved_hooks,
@@ -381,6 +440,8 @@ class Runner:
                 )
                 return result
         finally:
+            if shim_manager is not None:
+                await shim_manager.on_run_end(result, transient_state)
             await resolved_hooks.on_agent_end(agent, result)
 
     async def _run_with_retry(
@@ -390,6 +451,7 @@ class Runner:
         runner_task: RunnerTask | None,
         messages: list[MessageDict],
         tools: Tools | None,
+        model_args: dict[str, object] | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> ModelResponse:
@@ -399,6 +461,7 @@ class Runner:
             runner_task=runner_task,
             messages=messages,
             tools=tools,
+            model_args=model_args,
             hooks=hooks,
             cancellation_token=cancellation_token,
         )
@@ -411,6 +474,7 @@ class Runner:
         runner_task: RunnerTask | None,
         messages: list[MessageDict],
         tools: Tools | None,
+        model_args: dict[str, object] | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> ModelResponse:
@@ -420,7 +484,7 @@ class Runner:
         await hooks.on_llm_start(agent, messages)
         response = await model(
             messages,
-            extra_call_args=_model_args(runner_task),
+            extra_call_args=model_args,
             schema=_schema(runner_task),
             tools=tools,
             cancellation_token=cancellation_token,
@@ -436,6 +500,7 @@ class Runner:
         runner_task: RunnerTask | None,
         messages: list[MessageDict],
         tools: Tools | None,
+        model_args: dict[str, object] | None,
         emit: Callable[[ModelStreamEvent], None],
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
@@ -452,7 +517,7 @@ class Runner:
         await hooks.on_llm_start(agent, messages)
         async for event in model.stream_response(
             messages,
-            extra_call_args=_model_args(runner_task),
+            extra_call_args=model_args,
             schema=_schema(runner_task),
             tools=tools,
             cancellation_token=cancellation_token,
@@ -666,19 +731,19 @@ class Runner:
         state: RunState,
         response: ModelResponse,
         handoff_call: ToolCall,
+        tools: Tools | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> RunResult:
         """Transfer control to another agent and return its final result."""
-        visible_tools = _tools(runner_task)
-        if visible_tools is None:
+        if tools is None:
             raise _model_behavior_error(
                 "Runner received a handoff call, but the agent exposes no tools.",
                 raw_response=response,
             )
 
         tool_definition = _require_handoff_tool_definition(
-            tools=visible_tools,
+            tools=tools,
             tool_call=handoff_call,
             response=response,
         )
@@ -736,20 +801,20 @@ class Runner:
         state: RunState,
         response: ModelResponse,
         handoff_call: ToolCall,
+        tools: Tools | None,
         emit: Callable[[ModelStreamEvent], None],
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> RunResult:
         """Transfer control to another agent and continue streaming there."""
-        visible_tools = _tools(runner_task)
-        if visible_tools is None:
+        if tools is None:
             raise _model_behavior_error(
                 "Runner received a handoff call, but the agent exposes no tools.",
                 raw_response=response,
             )
 
         tool_definition = _require_handoff_tool_definition(
-            tools=visible_tools,
+            tools=tools,
             tool_call=handoff_call,
             response=response,
         )
@@ -803,7 +868,7 @@ class Runner:
         runner_task: RunnerTask | None,
         tool_name: str,
         descriptor: AgentDescriptor,
-        run_input: list[object],
+        run_input: list[RunHistoryItem],
         cancellation_token: CancellationToken | None,
     ) -> str:
         """Run one delegated sub-agent as a subroutine and return text output."""
@@ -1044,6 +1109,9 @@ def _overwrite_run_state(target: RunState, source: RunState) -> None:
     target.original_input = copy_original_input(source.original_input)
     target.continuation_history = list(source.continuation_history)
     target.responses = list(source.responses)
+    target.shim_state = {
+        key: copy_generic_value(value) for key, value in source.shim_state.items()
+    }
     target.turn_count = source.turn_count
 
 
@@ -1106,7 +1174,7 @@ def _parse_default_agent_tool_input(
     return parsed_input
 
 
-def _agent_tool_run_input(parsed_input: BaseModel) -> list[object]:
+def _agent_tool_run_input(parsed_input: BaseModel) -> list[RunHistoryItem]:
     """Build the downstream run input for a predefined agent-as-tool call.
 
     Agent-as-tool always forwards the validated structured payload that the
@@ -1142,18 +1210,15 @@ def _require_runtime_engine(agent: Task) -> RuntimeEngine:
     )
 
 
-def _build_request(
-    runner_task: RunnerTask | None,
-    state: RunState,
-) -> list[MessageDict]:
+def _build_request(turn: PreparedTurn) -> list[MessageDict]:
     """Build the full model request from agent config and run state."""
     messages: list[MessageDict] = []
 
-    messages.extend(
-        _instruction_messages(runner_task.instructions if runner_task else None)
-    )
-    messages.extend(_input_to_messages(state.original_input))
-    for item in state.continuation_history:
+    messages.extend(_instruction_messages(turn.instructions))
+    messages.extend(_input_to_messages(turn.run_state.original_input))
+    for item in turn.run_state.continuation_history:
+        messages.extend(_history_item_to_messages(item))
+    for item in turn.context_items:
         messages.extend(_history_item_to_messages(item))
 
     return messages
@@ -1170,7 +1235,9 @@ def _instruction_messages(
     return [_normalize_message({"role": "system", "content": instructions})]
 
 
-def _input_to_messages(run_input: str | list[object]) -> list[MessageDict]:
+def _input_to_messages(
+    run_input: str | list[RunHistoryItem],
+) -> list[MessageDict]:
     """Render the original run input into canonical model messages."""
     if isinstance(run_input, str):
         return [_normalize_message({"role": "user", "content": run_input})]
@@ -1184,13 +1251,12 @@ def _input_to_messages(run_input: str | list[object]) -> list[MessageDict]:
     return messages
 
 
-def _history_item_to_messages(item: object) -> list[MessageDict]:
+def _history_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
     """Render one continuation item into canonical model messages.
 
-    The run-state boundary is intentionally generic (``list[object]``).
-    The runner applies a simple convention: ``ModelResponse`` objects are
-    assistant turns, canonical message dicts pass through unchanged, and
-    everything else is user-side input.
+    ``RunHistoryItem`` names the supported shapes explicitly. ``ModelResponse``
+    objects are assistant turns, canonical message dicts pass through
+    unchanged, and the remaining item kinds are treated as user-side input.
     """
     if isinstance(item, ModelResponse):
         return [_assistant_message_from_response(item)]
@@ -1200,11 +1266,10 @@ def _history_item_to_messages(item: object) -> list[MessageDict]:
     return _user_item_to_messages(item)
 
 
-def _user_item_to_messages(item: object) -> list[MessageDict]:
+def _user_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
     """Render one user-side continuation item into canonical model messages."""
     if isinstance(item, PromptSpec):
-        prompt_spec = cast(PromptSpec[Any], item)
-        return _prompt_messages("user", prompt_spec)
+        return _prompt_messages("user", item)
     return [_normalize_message({"role": "user", "content": item})]
 
 
@@ -1274,6 +1339,14 @@ def _narrow_runner_task(agent: Task) -> RunnerTask | None:
     if isinstance(agent, RunnerTask):
         return agent
     return None
+
+
+def _shim_manager(agent: Task) -> BoundShimManager | None:
+    """Return the bound shim manager exposed by the task, if any."""
+    manager = getattr(agent, "bound_shim_manager", None)
+    if not isinstance(manager, BoundShimManager):
+        return None
+    return manager
 
 
 def _require_model(runner_task: RunnerTask | None) -> Model[ModelResponse]:

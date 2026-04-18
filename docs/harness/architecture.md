@@ -14,8 +14,11 @@ bind to a runtime and address by `AgentId`. It binds addressed runs to one
 descriptor, one lifecycle, and one runner. The local
 [`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
 provides the smaller high-level `run(...)` and `run_stream(...)` surface. The
-[`Runner`](../../src/agentlane/harness/_runner.py) then conducts the actual
-model loop and produces a [`RunResult`](../../src/agentlane/harness/_run.py).
+[`agentlane.harness.shims`](../../src/agentlane/harness/shims/__init__.py)
+package provides the mutating extension seam for instructions, tools, and
+per-run context shaping. The [`Runner`](../../src/agentlane/harness/_runner.py)
+then conducts the actual model loop and produces a
+[`RunResult`](../../src/agentlane/harness/_run.py).
 
 ## What The Harness Adds
 
@@ -29,8 +32,10 @@ harness adds a higher-level story on top of that:
    straightforward usage
 4. `DefaultAgent` also provides `run_stream(...)` for live model events on that
    same primary conversation line
-5. `Runner` executes the model loop for one run
-6. tools and handoffs become first-class parts of that loop
+5. shims can adjust effective instructions, tools, and transient turn context
+   without widening the core harness types
+6. `Runner` executes the model loop for one run
+7. tools and handoffs become first-class parts of that loop
 
 That separation matters because queueing and persistence are different problems
 from model reasoning. The harness keeps them apart.
@@ -70,6 +75,13 @@ Application / caller
               |
               v
 +---------------------------+
+| Bound shims               |
+| turn preparation +        |
+| optional message changes  |
++-------------+-------------+
+              |
+              v
++---------------------------+
 | Runner                    |
 | model loop                |
 | tools + handoffs          |
@@ -91,6 +103,10 @@ The harness owns the meaning of a run.
 
 The lifecycle owns sequencing. If multiple inputs arrive for the same concrete
 agent, it queues them and makes sure only one run is active at a time.
+
+Bound shims sit between lifecycle and runner. They are bound once for the
+concrete agent instance, then get a chance to shape each prepared turn before
+the runner builds the next model request.
 
 The runner owns the model loop inside that run. It builds the next request,
 calls the model, inspects the response, executes tools or handoffs, and either
@@ -115,8 +131,10 @@ Instead:
 1. callers either use `DefaultAgent.run(...)` locally or send `RunInput` to the
    lower-level addressed `Agent`
 2. the lifecycle turns that into a working `RunState`
-3. the runner turns `RunState` into canonical model messages
-4. provider clients receive the shared `agentlane.models` request shape
+3. bound shims can adjust the prepared turn and, if needed, the final message
+   list for the next model call
+4. the runner turns that prepared turn into canonical model messages
+5. provider clients receive the shared `agentlane.models` request shape
 
 That keeps raw provider wire formats out of application code.
 
@@ -131,6 +149,7 @@ later concern.
 
 Start with [Harness Tasks](./tasks.md) if you need orchestration without an LLM
 loop. Read [Harness Default Agents](./default-agents.md) for the smallest local
-developer surface. Read [Harness Agents](./agents.md) to understand the
-lower-level addressed agent type. Read [Harness Runner](./runner.md) when you want the
-actual loop behavior.
+developer surface. Read [Harness Shims](./shims.md) if you need to extend run
+behavior without changing the core harness types. Read [Harness Agents](./agents.md)
+to understand the lower-level addressed agent type. Read [Harness Runner](./runner.md)
+when you want the actual loop behavior.
