@@ -18,6 +18,7 @@ Key invariants maintained here:
 import asyncio
 from asyncio import Future, get_running_loop
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, Self
 
@@ -55,7 +56,7 @@ from ._run import (
 from ._stream import RunStream
 from ._task import Task
 from ._tooling import INHERIT_TOOLS, ToolConfig
-from .shims import HarnessShim, ShimBindingContext
+from .shims import Shim, ShimBindingContext
 from .shims._manager import BoundShimManager
 
 
@@ -125,11 +126,8 @@ class AgentDescriptor:
     ``None`` means "expose no tools explicitly".
     """
 
-    shims: tuple[HarnessShim, ...] | None = None
+    shims: Sequence[Shim] | None = None
     """Ordered mutating shim definitions bound per agent instance."""
-
-    context: object | None = None
-    """Opaque context reference reserved for later phases."""
 
     handoffs: tuple[Self, ...] | None = None
     """Predefined delegated child agents exposed as model-visible tools."""

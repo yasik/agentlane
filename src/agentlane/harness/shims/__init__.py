@@ -1,11 +1,11 @@
 """Generic mutating extensibility primitives for the harness."""
 
-from ._base import BoundHarnessShim, HarnessShim
+from ._base import BoundShim, Shim
 from ._types import PreparedTurn, ShimBindingContext
 
 __all__ = [
-    "BoundHarnessShim",
-    "HarnessShim",
+    "BoundShim",
+    "Shim",
     "PreparedTurn",
     "ShimBindingContext",
 ]

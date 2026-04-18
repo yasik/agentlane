@@ -18,7 +18,7 @@ OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_shims_quickst
 
 ## What It Shows
 
-1. custom `HarnessShim` and `BoundHarnessShim` definitions
+1. simple one-class `Shim` definitions for the common path
 2. `PreparedTurn` instruction mutation
 3. persisted shim-owned state in `RunState.shim_state`
 4. repeated `run(...)` calls continuing the same shim-aware conversation

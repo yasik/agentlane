@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 
 from agentlane.harness import (
     Agent,
@@ -10,7 +11,7 @@ from agentlane.harness import (
     Task,
 )
 from agentlane.harness._run import RunHistoryItem, copy_run_state
-from agentlane.harness.shims import BoundHarnessShim, HarnessShim, ShimBindingContext
+from agentlane.harness.shims import Shim
 from agentlane.messaging import AgentId, DeliveryStatus
 from agentlane.models import ModelResponse
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
@@ -54,18 +55,10 @@ def _require_run_result(payload: object | None) -> RunResult:
     return payload
 
 
-class _NoopBoundShim(BoundHarnessShim):
-    pass
-
-
-class _NoopShim(HarnessShim):
+class _NoopShim(Shim):
     @property
     def name(self) -> str:
         return "noop"
-
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        _ = context
-        return _NoopBoundShim()
 
 
 class _RecordingRunner(Runner):
@@ -170,7 +163,6 @@ def test_agent_continues_existing_run_after_idle() -> None:
                 description="Plans next steps",
                 instructions="You plan carefully.",
                 shims=(_NoopShim(),),
-                context={"team": "ops"},
             ),
         )
 
@@ -186,8 +178,8 @@ def test_agent_continues_existing_run_after_idle() -> None:
         assert agent.name == "Planner"
         assert agent.description == "Plans next steps"
         assert agent.instructions == "You plan carefully."
-        assert len(agent.shims or ()) == 1
-        assert agent.context == {"team": "ops"}
+        agent_shims: Sequence[Shim] = agent.shims or ()
+        assert len(agent_shims) == 1
         assert not agent.is_running
         assert agent.pending_input_count == 0
         assert len(runner.calls) == 2

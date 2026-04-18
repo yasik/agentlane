@@ -1,39 +1,40 @@
 """Private shim-session manager for one bound harness agent."""
 
+from collections.abc import Sequence
 from typing import Any, Self
 
 from agentlane.models import MessageDict, ModelResponse
 from agentlane.models.run import RunContext
 
 from .._run import RunResult, RunState
-from ._base import BoundHarnessShim, HarnessShim
+from ._base import BoundShim, Shim
 from ._types import PreparedTurn, ShimBindingContext
 
 
 class BoundShimManager:
     """Ordered bound shim sessions for one concrete agent instance."""
 
-    def __init__(self, sessions: tuple[BoundHarnessShim, ...]) -> None:
+    def __init__(self, sessions: tuple[BoundShim, ...]) -> None:
         self._sessions = sessions
 
     @classmethod
     async def bind(
         cls,
         *,
-        shims: tuple[HarnessShim, ...] | None,
+        shims: Sequence[Shim] | None,
         context: ShimBindingContext,
     ) -> Self:
         """Bind all declared shim definitions in descriptor order."""
         if not shims:
             return cls(())
 
-        sessions: list[BoundHarnessShim] = []
+        sessions: list[BoundShim] = []
         for shim in shims:
             sessions.append(await shim.bind(context))
         return cls(tuple(sessions))
 
     @property
-    def sessions(self) -> tuple[BoundHarnessShim, ...]:
+    def sessions(self) -> tuple[BoundShim, ...]:
         """Return the bound shim sessions in execution order."""
         return self._sessions
 

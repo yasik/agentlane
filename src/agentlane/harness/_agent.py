@@ -1,5 +1,6 @@
 """Default harness agent primitive."""
 
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel
@@ -28,7 +29,7 @@ from ._runner import Runner
 from ._stream import RunStream
 from ._task import Task
 from ._tooling import merge_tools, resolve_tools
-from .shims import HarnessShim
+from .shims import Shim
 from .shims._manager import BoundShimManager
 
 
@@ -119,14 +120,9 @@ class Agent(Task):
         return merge_tools(base_tools, self._handoff_tools())
 
     @property
-    def shims(self) -> tuple[HarnessShim, ...] | None:
+    def shims(self) -> Sequence[Shim] | None:
         """Return the configured shim definitions for this agent."""
         return self._descriptor.shims
-
-    @property
-    def context(self) -> object | None:
-        """Return the opaque context reference for this agent."""
-        return self._descriptor.context
 
     @property
     def bound_shim_manager(self) -> BoundShimManager | None:

@@ -6,9 +6,9 @@ from agentlane.harness import Agent, AgentDescriptor, Runner
 from agentlane.harness._tooling import merge_tools
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import (
-    BoundHarnessShim,
-    HarnessShim,
+    BoundShim,
     PreparedTurn,
+    Shim,
     ShimBindingContext,
 )
 from agentlane.messaging import AgentId
@@ -121,15 +121,7 @@ def _shim_counter_value(shim_state: dict[str, object], key: str) -> int:
     raise AssertionError(f"Expected integer shim state for `{key}`.")
 
 
-class _AppendInstructionBoundShim(BoundHarnessShim):
-    def __init__(self, line: str) -> None:
-        self._line = line
-
-    async def prepare_turn(self, turn: PreparedTurn) -> None:
-        turn.instructions = _append_instruction(turn.instructions, self._line)
-
-
-class _AppendInstructionShim(HarnessShim):
+class _AppendInstructionShim(Shim):
     def __init__(self, name: str, line: str) -> None:
         self._name = name
         self._line = line
@@ -138,12 +130,15 @@ class _AppendInstructionShim(HarnessShim):
     def name(self) -> str:
         return self._name
 
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        _ = context
-        return _AppendInstructionBoundShim(self._line)
+    async def prepare_turn(self, turn: PreparedTurn) -> None:
+        turn.instructions = _append_instruction(turn.instructions, self._line)
 
 
-class _RewriteLastUserMessageBoundShim(BoundHarnessShim):
+class _RewriteLastUserMessageShim(Shim):
+    @property
+    def name(self) -> str:
+        return "rewrite-last-user"
+
     async def transform_messages(
         self,
         turn: PreparedTurn,
@@ -162,16 +157,6 @@ class _RewriteLastUserMessageBoundShim(BoundHarnessShim):
         return rewritten
 
 
-class _RewriteLastUserMessageShim(HarnessShim):
-    @property
-    def name(self) -> str:
-        return "rewrite-last-user"
-
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        _ = context
-        return _RewriteLastUserMessageBoundShim()
-
-
 class _EchoArgs(BaseModel):
     text: str
 
@@ -183,15 +168,7 @@ async def _echo_from_shim(
     return f"echo:{args.text}"
 
 
-class _AddEchoToolBoundShim(BoundHarnessShim):
-    def __init__(self, tool: Tool[_EchoArgs, str]) -> None:
-        self._tool = tool
-
-    async def prepare_turn(self, turn: PreparedTurn) -> None:
-        turn.tools = merge_tools(turn.tools, (self._tool,))
-
-
-class _AddEchoToolShim(HarnessShim):
+class _AddEchoToolShim(Shim):
     def __init__(self) -> None:
         self._tool = Tool(
             name="echo_from_shim",
@@ -204,12 +181,15 @@ class _AddEchoToolShim(HarnessShim):
     def name(self) -> str:
         return "add-echo-tool"
 
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        _ = context
-        return _AddEchoToolBoundShim(self._tool)
+    async def prepare_turn(self, turn: PreparedTurn) -> None:
+        turn.tools = merge_tools(turn.tools, (self._tool,))
 
 
-class _PersistCounterBoundShim(BoundHarnessShim):
+class _PersistCounterShim(Shim):
+    @property
+    def name(self) -> str:
+        return "persist-counter"
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         count = _shim_counter_value(turn.run_state.shim_state, "persist-counter")
         turn.instructions = _append_instruction(
@@ -227,17 +207,7 @@ class _PersistCounterBoundShim(BoundHarnessShim):
         turn.run_state.shim_state["persist-counter"] = count + 1
 
 
-class _PersistCounterShim(HarnessShim):
-    @property
-    def name(self) -> str:
-        return "persist-counter"
-
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        _ = context
-        return _PersistCounterBoundShim()
-
-
-class _PrivateCounterBoundShim(BoundHarnessShim):
+class _PrivateCounterBoundShim(BoundShim):
     def __init__(self) -> None:
         self._count = 0
 
@@ -249,31 +219,25 @@ class _PrivateCounterBoundShim(BoundHarnessShim):
         )
 
 
-class _PrivateCounterShim(HarnessShim):
+class _PrivateCounterShim(Shim):
     @property
     def name(self) -> str:
         return "private-counter"
 
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
+    async def bind(self, context: ShimBindingContext) -> BoundShim:
         _ = context
         return _PrivateCounterBoundShim()
 
 
-class _FailAfterMutationBoundShim(BoundHarnessShim):
-    async def prepare_turn(self, turn: PreparedTurn) -> None:
-        if turn.run_state.turn_count >= 1:
-            turn.run_state.shim_state["marker"] = "before-failure"
-            raise RuntimeError("shim failure")
-
-
-class _FailAfterMutationShim(HarnessShim):
+class _FailAfterMutationShim(Shim):
     @property
     def name(self) -> str:
         return "fail-after-mutation"
 
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        _ = context
-        return _FailAfterMutationBoundShim()
+    async def prepare_turn(self, turn: PreparedTurn) -> None:
+        if turn.run_state.turn_count >= 1:
+            turn.run_state.shim_state["marker"] = "before-failure"
+            raise RuntimeError("shim failure")
 
 
 def test_default_agent_applies_shims_in_descriptor_order() -> None:

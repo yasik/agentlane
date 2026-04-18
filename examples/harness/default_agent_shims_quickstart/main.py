@@ -9,12 +9,7 @@ from agentlane_openai import ResponsesClient
 
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.shims import (
-    BoundHarnessShim,
-    HarnessShim,
-    PreparedTurn,
-    ShimBindingContext,
-)
+from agentlane.harness.shims import PreparedTurn, Shim
 from agentlane.models import Config, ModelResponse
 
 MODEL_NAME = "gpt-5.4-mini"
@@ -27,8 +22,12 @@ MODEL = ResponsesClient(
 )
 
 
-class ReplyPrefixBoundShim(BoundHarnessShim):
-    """Append one extra instruction line before each model turn."""
+class ReplyPrefixShim(Shim):
+    """Simple instruction-augmentation shim."""
+
+    @property
+    def name(self) -> str:
+        return "reply-prefix"
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         if isinstance(turn.instructions, str):
@@ -38,20 +37,12 @@ class ReplyPrefixBoundShim(BoundHarnessShim):
             )
 
 
-class ReplyPrefixShim(HarnessShim):
-    """Simple instruction-augmentation shim."""
+class TurnCounterShim(Shim):
+    """Persist how many model turns have completed for this conversation."""
 
     @property
     def name(self) -> str:
-        return "reply-prefix"
-
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        del context
-        return ReplyPrefixBoundShim()
-
-
-class TurnCounterBoundShim(BoundHarnessShim):
-    """Persist how many model turns have completed for this conversation."""
+        return "turn-counter"
 
     async def on_model_response(
         self,
@@ -61,18 +52,6 @@ class TurnCounterBoundShim(BoundHarnessShim):
         del response
         count = int(turn.run_state.shim_state.get("completed-turns", 0))
         turn.run_state.shim_state["completed-turns"] = count + 1
-
-
-class TurnCounterShim(HarnessShim):
-    """Persist one small shim-owned counter in `RunState`."""
-
-    @property
-    def name(self) -> str:
-        return "turn-counter"
-
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        del context
-        return TurnCounterBoundShim()
 
 
 class SupportAgent(DefaultAgent):

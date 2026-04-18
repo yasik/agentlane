@@ -19,25 +19,23 @@ adding new special-case fields to the core harness types.
 
 ```python
 from agentlane.harness.shims import (
-    BoundHarnessShim,
-    HarnessShim,
     PreparedTurn,
-    ShimBindingContext,
+    Shim,
 )
 ```
 
-## The Two Shim Types
+## The Common Shim Shape
 
-There are two related contracts.
+Most shims should be one class.
 
-`HarnessShim` is the definition-time object. It carries static configuration and
-binds itself once for each concrete agent instance.
+Subclass `Shim` and override the lifecycle callbacks you need. That is enough
+for instruction changes, tool changes, message rewrites, and persisted shim
+state in most cases.
 
-`BoundHarnessShim` is the per-agent session. It receives lifecycle callbacks and
-may keep private in-memory state that belongs only to that one bound agent.
-
-That split is important because one shim definition may be reused across many
-agents without leaking mutable state between them.
+Internally, the harness still creates one per-agent bound session for each
+shim. You only need to think about that lower-level `BoundShim` contract when
+your shim needs private in-memory state for one concrete agent instance or
+custom bind-time setup.
 
 ## Where Shims Are Declared
 
@@ -146,25 +144,19 @@ work.
 ```python
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.shims import BoundHarnessShim, HarnessShim, PreparedTurn
+from agentlane.harness.shims import PreparedTurn, Shim
 
 
-class ReplyPrefixBoundShim(BoundHarnessShim):
+class ReplyPrefixShim(Shim):
+    @property
+    def name(self) -> str:
+        return "reply-prefix"
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         if isinstance(turn.instructions, str):
             turn.instructions = (
                 f"{turn.instructions}\nAlways start every reply with `Support:`."
             )
-
-
-class ReplyPrefixShim(HarnessShim):
-    @property
-    def name(self) -> str:
-        return "reply-prefix"
-
-    async def bind(self, context: ShimBindingContext) -> BoundHarnessShim:
-        del context
-        return ReplyPrefixBoundShim()
 
 
 agent = DefaultAgent(
@@ -178,6 +170,15 @@ agent = DefaultAgent(
 
 result = await agent.run("My order arrived damaged.")
 ```
+
+## Advanced Bound Sessions
+
+Use `BoundShim` only when a shim needs private per-agent in-memory state or
+custom setup when the shim is attached to one concrete agent instance.
+
+In that case, override `Shim.bind(...)` and return a custom `BoundShim`
+session. One `Shim` definition may then be safely reused across many agents
+without leaking mutable state between them.
 
 For a runnable example, see
 [examples/harness/default_agent_shims_quickstart](../../examples/harness/default_agent_shims_quickstart/README.md).
