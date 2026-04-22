@@ -168,6 +168,7 @@ def _validate_name(name: str, *, root: Path, skill_file: Path) -> str:
             name,
             skill_file,
         )
+        break
     if root.name != name:
         logger.warning(
             "Skill `%s` in %s does not match parent directory `%s`; continuing anyway.",
@@ -214,7 +215,7 @@ def _validate_metadata(raw_metadata: object) -> dict[str, str] | None:
             "Ignoring non-mapping skill metadata of type %s.",
             type(raw_metadata).__name__,
         )
-        return {}
+        return None
 
     normalized: dict[str, str] = {}
     for key, value in cast(dict[object, object], raw_metadata).items():
@@ -235,4 +236,4 @@ def _coerce_optional_string(frontmatter: dict[str, object], key: str) -> str | N
     value = frontmatter.get(key)
     if value is None:
         return None
-    return str(value)
+    return str(value).strip()

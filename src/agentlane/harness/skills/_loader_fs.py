@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ._discovery import default_skill_roots
 from ._loader import SkillLoader
-from ._parser import parse_skill_file
+from ._parser import ParsedSkillFile, parse_skill_file
 from ._types import LoadedSkill, SkillManifest, SkillResource
 
 
@@ -22,11 +22,12 @@ class FilesystemSkillLoader(SkillLoader):
             roots=roots,
             include_default_roots=include_default_roots,
         )
+        self._parsed_by_name: dict[str, ParsedSkillFile] = {}
 
     async def discover(self) -> Sequence[SkillManifest]:
         """Discover valid skills from the configured filesystem roots."""
         manifests: list[SkillManifest] = []
-        seen_names: set[str] = set()
+        parsed_by_name: dict[str, ParsedSkillFile] = {}
 
         for root in self._roots:
             if not root.exists() or not root.is_dir():
@@ -44,16 +45,26 @@ class FilesystemSkillLoader(SkillLoader):
                 if parsed is None:
                     continue
 
-                if parsed.manifest.name in seen_names:
+                if parsed.manifest.name in parsed_by_name:
                     continue
 
-                seen_names.add(parsed.manifest.name)
+                parsed_by_name[parsed.manifest.name] = parsed
                 manifests.append(parsed.manifest)
 
+        self._parsed_by_name = parsed_by_name
         return tuple(manifests)
 
     async def load(self, name: str) -> LoadedSkill:
         """Load one discovered skill by name."""
+        cached = self._parsed_by_name.get(name)
+        if cached is not None:
+            return LoadedSkill(
+                manifest=cached.manifest,
+                instructions=cached.instructions,
+                resources=_list_skill_resources(cached.manifest.root),
+            )
+
+        # Fallback scan for skills loaded without a prior discover() call.
         for root in self._roots:
             if not root.exists() or not root.is_dir():
                 continue

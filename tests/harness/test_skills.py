@@ -3,6 +3,7 @@ import json
 import logging
 from pathlib import Path
 
+import pytest
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from agentlane.harness import AgentDescriptor, ShimState
@@ -10,6 +11,7 @@ from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.skills import (
     FilesystemSkillLoader,
     LoadedSkill,
+    SkillCatalog,
     SkillLoader,
     SkillManifest,
     SkillResource,
@@ -21,6 +23,11 @@ from agentlane.harness.skills._constraints import (
     SKILL_MAX_FILE_LINES,
 )
 from agentlane.harness.skills._parser import parse_skill_file
+from agentlane.harness.skills._prompt import (
+    SkillsSystemPromptContext,
+    render_loaded_skill,
+    render_skills_system_prompt,
+)
 from agentlane.harness.skills._shim import ActivateSkillInput
 from agentlane.models import MessageDict, Model, ModelResponse, ToolCall, Tools
 from agentlane.runtime import CancellationToken
@@ -627,5 +634,283 @@ def test_skills_shim_omits_prompt_and_tool_when_no_skills_are_discovered() -> No
             },
         ]
         assert model.call_options[0]["tools"] is None
+
+    asyncio.run(scenario())
+
+
+def _make_manifest(name: str, description: str = "Test skill.") -> SkillManifest:
+    return SkillManifest(
+        name=name,
+        description=description,
+        skill_file=Path(f"/skills/{name}/SKILL.md"),
+        root=Path(f"/skills/{name}"),
+    )
+
+
+def test_skill_catalog_get_returns_manifest_for_known_name() -> None:
+    manifest = _make_manifest("refund-policy")
+    catalog = SkillCatalog(manifests=[manifest], loader=_EmptySkillLoader())
+
+    assert catalog.get("refund-policy") is manifest
+
+
+def test_skill_catalog_get_returns_none_for_unknown_name() -> None:
+    manifest = _make_manifest("refund-policy")
+    catalog = SkillCatalog(manifests=[manifest], loader=_EmptySkillLoader())
+
+    assert catalog.get("unknown") is None
+
+
+def test_skill_catalog_has_returns_true_for_known_and_false_for_unknown() -> None:
+    manifest = _make_manifest("refund-policy")
+    catalog = SkillCatalog(manifests=[manifest], loader=_EmptySkillLoader())
+
+    assert catalog.has("refund-policy") is True
+    assert catalog.has("unknown") is False
+
+
+def test_skill_catalog_names_returns_stable_order() -> None:
+    manifests = [
+        _make_manifest("alpha"),
+        _make_manifest("beta"),
+        _make_manifest("gamma"),
+    ]
+    catalog = SkillCatalog(manifests=manifests, loader=_EmptySkillLoader())
+
+    assert catalog.names() == ("alpha", "beta", "gamma")
+
+
+def test_skill_catalog_iter_and_len() -> None:
+    manifests = [_make_manifest("a"), _make_manifest("b")]
+    catalog = SkillCatalog(manifests=manifests, loader=_EmptySkillLoader())
+
+    assert len(catalog) == 2
+    assert list(catalog) == manifests
+
+
+def test_skill_catalog_empty() -> None:
+    catalog = SkillCatalog(manifests=[], loader=_EmptySkillLoader())
+
+    assert len(catalog) == 0
+    assert catalog.names() == ()
+    assert list(catalog) == []
+    assert catalog.get("anything") is None
+    assert catalog.has("anything") is False
+
+
+def test_skill_catalog_load_raises_key_error_for_unknown_name() -> None:
+    manifest = _make_manifest("refund-policy")
+    catalog = SkillCatalog(manifests=[manifest], loader=_EmptySkillLoader())
+
+    with pytest.raises(KeyError):
+        asyncio.run(catalog.load("unknown"))
+
+
+def test_skill_catalog_load_delegates_to_loader() -> None:
+    loaded_skill = LoadedSkill(
+        manifest=_make_manifest("refund-policy"),
+        instructions="# Refund Policy",
+        resources=(),
+    )
+    loader = _MemorySkillLoader(loaded_skill)
+    catalog = SkillCatalog(manifests=[loaded_skill.manifest], loader=loader)
+
+    result = asyncio.run(catalog.load("refund-policy"))
+
+    assert result is loaded_skill
+    assert loader.load_calls == ["refund-policy"]
+
+
+# ---------------------------------------------------------------------------
+# Prompt rendering unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_render_skills_system_prompt_includes_skill_metadata() -> None:
+    manifests = (
+        _make_manifest("refund-policy", "Handle refund questions."),
+        _make_manifest("shipping-info", "Provide shipping details."),
+    )
+    context = SkillsSystemPromptContext(tool_name="activate_skill", skills=manifests)
+    result = render_skills_system_prompt(
+        template=(
+            "<skills>{% for skill in skills %}"
+            "<skill><name>{{ skill.name }}</name></skill>"
+            "{% endfor %}</skills>"
+        ),
+        context=context,
+    )
+
+    assert "<name>refund-policy</name>" in result
+    assert "<name>shipping-info</name>" in result
+
+
+def test_render_loaded_skill_includes_instructions_and_resources() -> None:
+    loaded_skill = LoadedSkill(
+        manifest=_make_manifest("refund-policy"),
+        instructions="# Refund Policy\n\nFollow these steps.",
+        resources=(
+            SkillResource(path="scripts/run.py"),
+            SkillResource(path="references/policy.md"),
+        ),
+    )
+    result = render_loaded_skill(loaded_skill)
+
+    assert '<skill_content name="refund-policy">' in result
+    assert "# Refund Policy" in result
+    assert "Follow these steps." in result
+    assert "Skill directory: /skills/refund-policy" in result
+    assert "<file>scripts/run.py</file>" in result
+    assert "<file>references/policy.md</file>" in result
+    assert "</skill_content>" in result
+
+
+def test_render_loaded_skill_with_empty_resources() -> None:
+    loaded_skill = LoadedSkill(
+        manifest=_make_manifest("simple-skill"),
+        instructions="Just do the thing.",
+        resources=(),
+    )
+    result = render_loaded_skill(loaded_skill)
+
+    assert '<skill_content name="simple-skill">' in result
+    assert "Just do the thing." in result
+    assert "<skill_resources>" in result
+
+
+def test_filesystem_skill_loader_load_raises_key_error_for_unknown_name(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        root=tmp_path,
+        name="refund-policy",
+        description="Handle refund questions.",
+        body="# Refund Policy",
+    )
+    loader = FilesystemSkillLoader(roots=(tmp_path,), include_default_roots=False)
+
+    async def scenario() -> None:
+        await loader.discover()
+        with pytest.raises(KeyError):
+            await loader.load("nonexistent-skill")
+
+    asyncio.run(scenario())
+
+
+def test_filesystem_skill_loader_load_uses_cache_from_discover(
+    tmp_path: Path,
+) -> None:
+    _write_skill(
+        root=tmp_path,
+        name="refund-policy",
+        description="Handle refund questions.",
+        body="# Refund Policy",
+    )
+    loader = FilesystemSkillLoader(roots=(tmp_path,), include_default_roots=False)
+
+    async def scenario() -> None:
+        manifests = await loader.discover()
+        assert len(manifests) == 1
+
+        loaded = await loader.load("refund-policy")
+        assert loaded.manifest.name == "refund-policy"
+        assert loaded.instructions == "# Refund Policy"
+
+    asyncio.run(scenario())
+
+
+class _MultiSkillLoader(SkillLoader):
+    """Loader that exposes multiple skills for multi-activation tests."""
+
+    def __init__(self, skills: list[LoadedSkill]) -> None:
+        self._skills = {skill.manifest.name: skill for skill in skills}
+        self.load_calls: list[str] = []
+
+    async def discover(self) -> tuple[SkillManifest, ...]:
+        return tuple(skill.manifest for skill in self._skills.values())
+
+    async def load(self, name: str) -> LoadedSkill:
+        self.load_calls.append(name)
+        if name not in self._skills:
+            raise KeyError(name)
+        return self._skills[name]
+
+
+def test_skills_shim_activates_multiple_different_skills_in_one_run() -> None:
+    skill_a = LoadedSkill(
+        manifest=SkillManifest(
+            name="refund-policy",
+            description="Handle refunds.",
+            skill_file=Path("/skills/refund-policy/SKILL.md"),
+            root=Path("/skills/refund-policy"),
+        ),
+        instructions="# Refund instructions",
+        resources=(),
+    )
+    skill_b = LoadedSkill(
+        manifest=SkillManifest(
+            name="shipping-info",
+            description="Handle shipping.",
+            skill_file=Path("/skills/shipping-info/SKILL.md"),
+            root=Path("/skills/shipping-info"),
+        ),
+        instructions="# Shipping instructions",
+        resources=(),
+    )
+    loader = _MultiSkillLoader([skill_a, skill_b])
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "refund-policy"}),
+                    )
+                ],
+            ),
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_2",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "shipping-info"}),
+                    )
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(SkillsShim(loader=loader),),
+        )
+    )
+
+    async def scenario() -> None:
+        result = await agent.run("Help me with my order")
+
+        assert result.final_output == "done"
+        assert loader.load_calls == ["refund-policy", "shipping-info"]
+
+        first_activation = model.calls[1][-1]
+        assert first_activation["name"] == "activate_skill"
+        assert "# Refund instructions" in str(first_activation["content"])
+
+        second_activation = model.calls[2][-1]
+        assert second_activation["name"] == "activate_skill"
+        assert "# Shipping instructions" in str(second_activation["content"])
+
+        if agent.run_state is None:
+            raise AssertionError("Expected persisted run state after completion.")
+        assert isinstance(agent.run_state.shim_state, ShimState)
+        assert agent.run_state.shim_state == {
+            "skills:active-skill-names": ["refund-policy", "shipping-info"],
+        }
 
     asyncio.run(scenario())

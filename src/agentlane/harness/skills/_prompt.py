@@ -78,5 +78,5 @@ def render_skills_system_prompt(
 
 def render_loaded_skill(loaded_skill: LoadedSkill) -> str:
     """Render activated skill content into the tool-result payload."""
-    tempalte = Template(LOADED_SKILL_TEMPLATE, trim_blocks=True, lstrip_blocks=True)
-    return tempalte.render(skill=loaded_skill).strip()
+    template = Template(LOADED_SKILL_TEMPLATE, trim_blocks=True, lstrip_blocks=True)
+    return template.render(skill=loaded_skill).strip()
