@@ -70,9 +70,13 @@ def render_skills_system_prompt(
     context: SkillsSystemPromptContext,
 ) -> str:
     """Render the skills system block for the discovered catalog."""
-    return Template(template).render(
-        tool_name=context.tool_name,
-        skills=context.skills,
+    return (
+        Template(template)
+        .render(
+            tool_name=context.tool_name,
+            skills=context.skills,
+        )
+        .strip()
     )
 
 

@@ -138,7 +138,7 @@ def _exceeds_file_size_limit(text: str) -> bool:
 
 
 def _validate_name(name: str, *, root: Path, skill_file: Path) -> str:
-    """Validate the required skill description field."""
+    """Validate the required skill name field."""
     if len(name) > SKILL_MAX_NAME_LENGTH:
         logger.warning(
             "Skill `%s` in %s exceeds %d characters; continuing anyway.",
