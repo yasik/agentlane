@@ -47,11 +47,12 @@ from ._hooks import RunnerHooks
 from ._run import (
     RunHistoryItem,
     RunInput,
+    RunInstructions,
     RunResult,
     RunState,
     ShimState,
     copy_history_item,
-    copy_original_input,
+    copy_instructions,
     copy_run_state,
 )
 from ._stream import RunStream
@@ -498,6 +499,7 @@ class AgentLifecycle:
                 working_state = _next_run_state(
                     self._run_state,
                     active_input.run_input,
+                    initial_instructions=self._descriptor.instructions,
                 )
 
                 if (
@@ -564,6 +566,8 @@ class AgentLifecycle:
 def _next_run_state(
     current_state: RunState | None,
     run_input: RunInput,
+    *,
+    initial_instructions: RunInstructions,
 ) -> RunState:
     """Build the next working state for one queued input.
 
@@ -571,7 +575,7 @@ def _next_run_state(
       1. ``RunState`` input + no baseline → resume from the provided state.
       2. Plain input + no baseline → start a brand-new conversation.
       3. Plain input + existing baseline → continue with new user input
-         appended to ``continuation_history``.
+         appended to ``history``.
 
     Resuming into an agent that already has a baseline is an error — the
     caller should create a fresh agent instance instead.
@@ -592,8 +596,8 @@ def _next_run_state(
     # Case 2: first input — initialize a new conversation
     if current_state is None:
         return RunState(
-            original_input=copy_original_input(run_input),
-            continuation_history=[],
+            instructions=copy_instructions(initial_instructions),
+            history=_copied_run_input_items(run_input),
             responses=[],
             shim_state=ShimState(),
         )
@@ -603,7 +607,7 @@ def _next_run_state(
     if next_state is None:
         raise AssertionError("Current run state copy unexpectedly returned None.")
 
-    _append_run_input(next_state.continuation_history, run_input)
+    _append_run_input(next_state.history, run_input)
     return next_state
 
 
@@ -622,6 +626,15 @@ def _append_run_input(
 
     for item in run_input:
         history.append(copy_history_item(item))
+
+
+def _copied_run_input_items(
+    run_input: str | list[RunHistoryItem],
+) -> list[RunHistoryItem]:
+    """Return copied run-input items for initializing persisted history."""
+    history: list[RunHistoryItem] = []
+    _append_run_input(history, run_input)
+    return history
 
 
 def _set_future_result(future: Future[RunResult], value: RunResult) -> None:

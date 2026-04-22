@@ -43,8 +43,12 @@ type RunMessageContent = (
 """Supported non-message content values at the harness run boundary."""
 
 
+type RunInstructions = str | PromptSpec[Any] | None
+"""Supported persisted system-instruction source at the harness boundary."""
+
+
 type RunHistoryItem = MessageDict | ModelResponse | PromptSpec[Any] | RunMessageContent
-"""Supported heterogeneous items stored in run input and continuation history.
+"""Supported heterogeneous items stored in run input and persisted history.
 
 The harness accepts a small set of structured item kinds:
 
@@ -63,11 +67,11 @@ class RunState:
     runner, so failed turns never corrupt the persisted baseline.
     """
 
-    original_input: str | list[RunHistoryItem]
-    """Original input that started the run."""
+    instructions: RunInstructions
+    """Single persisted system instruction for this run."""
 
-    continuation_history: list[RunHistoryItem]
-    """Accumulated continuation items for later turns.
+    history: list[RunHistoryItem]
+    """Append-only persisted conversation history for this run.
 
     Items may be prior ``ModelResponse`` assistant turns, canonical message
     dicts, prompt specs, or user-side content values. The runner resolves each
@@ -117,10 +121,8 @@ def copy_run_state(run_state: RunState | None) -> RunState | None:
         return None
 
     return RunState(
-        original_input=copy_original_input(run_state.original_input),
-        continuation_history=[
-            copy_history_item(item) for item in run_state.continuation_history
-        ],
+        instructions=copy_instructions(run_state.instructions),
+        history=[copy_history_item(item) for item in run_state.history],
         responses=list(run_state.responses),
         shim_state=copy_shim_state(run_state.shim_state),
         turn_count=run_state.turn_count,
@@ -134,18 +136,20 @@ def copy_shim_state(shim_state: ShimState) -> ShimState:
     )
 
 
-def copy_original_input(
-    original_input: str | list[RunHistoryItem],
-) -> str | list[RunHistoryItem]:
-    """Copy the original input for state ownership.
+def copy_instructions(instructions: RunInstructions) -> RunInstructions:
+    """Copy one persisted instruction source for state ownership."""
+    if instructions is None or isinstance(instructions, str):
+        return instructions
 
-    Strings are immutable and returned as-is. Lists are shallow-copied so
-    the new state owns its own container without deep-cloning every item.
-    """
-    if isinstance(original_input, str):
-        return original_input
-
-    return [copy_history_item(item) for item in original_input]
+    copied_values = (
+        cast(Any, copy_generic_value(instructions.values))
+        if instructions.values is not None
+        else None
+    )
+    return PromptSpec(
+        template=instructions.template,
+        values=copied_values,
+    )
 
 
 def copy_history_item(item: RunHistoryItem) -> RunHistoryItem:

@@ -132,7 +132,7 @@ class _AppendInstructionShim(Shim):
         return self._name
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
-        turn.instructions = _append_instruction(turn.instructions, self._line)
+        turn.append_system_instruction(self._line, separator="\n")
 
 
 class _RewriteLastUserMessageShim(Shim):
@@ -193,9 +193,8 @@ class _PersistCounterShim(Shim):
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         count = _shim_counter_value(turn.run_state.shim_state, "persist-counter")
-        turn.instructions = _append_instruction(
-            turn.instructions,
-            f"persist-counter={count}",
+        turn.set_system_instruction(
+            _append_instruction("Base", f"persist-counter={count}")
         )
 
     async def on_model_response(
@@ -214,9 +213,8 @@ class _PrivateCounterBoundShim(BoundShim):
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         self._count += 1
-        turn.instructions = _append_instruction(
-            turn.instructions,
-            f"private-count={self._count}",
+        turn.set_system_instruction(
+            _append_instruction("Base", f"private-count={self._count}")
         )
 
 

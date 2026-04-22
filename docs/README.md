@@ -82,12 +82,15 @@ mental model:
    surface, read [Harness Architecture](./harness/architecture.md).
 5. If you want to extend harness behavior without changing core harness types,
    read [Harness Shims](./harness/shims.md).
-6. If you want to understand prompt construction or tool exposure, read
+6. If you want to understand the first shim-driven extension module, read
+   [Harness Skills](./harness/skills.md) after
+   [Harness Shims](./harness/shims.md).
+7. If you want to understand prompt construction or tool exposure, read
    [Models Overview](./models/overview.md) and
    [Models: Prompt Templating](./models/prompt-templating.md).
-7. If you specifically want streaming, read [Models Overview](./models/overview.md)
+8. If you specifically want streaming, read [Models Overview](./models/overview.md)
    first, then [Harness Default Agents](./harness/default-agents.md).
-8. Run one of the examples under [examples/](../examples/README.md).
+9. Run one of the examples under [examples/](../examples/README.md).
 
 ## Contents
 
@@ -117,7 +120,8 @@ mental model:
 3. [Agents](./harness/agents.md)
 4. [Default Agents](./harness/default-agents.md)
 5. [Shims](./harness/shims.md)
-6. [Runner](./harness/runner.md)
+6. [Skills](./harness/skills.md)
+7. [Runner](./harness/runner.md)
 
 ### Tracing
 

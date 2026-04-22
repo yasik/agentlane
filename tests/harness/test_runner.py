@@ -211,7 +211,7 @@ class _RecordingHooks(RunnerHooks):
         self.events.append(
             (
                 "agent_start",
-                (_task_name(task), state.original_input, state.turn_count),
+                (_task_name(task), list(state.history), state.turn_count),
             )
         )
 
@@ -356,8 +356,8 @@ def test_runner_returns_run_result_and_updates_run_state() -> None:
             ),
         )
         state = RunState(
-            original_input="hello",
-            continuation_history=[],
+            instructions="You are helpful.",
+            history=["hello"],
             responses=[],
         )
 
@@ -378,8 +378,8 @@ def test_runner_returns_run_result_and_updates_run_state() -> None:
         assert [get_content_or_none(response) for response in state.responses] == [
             "hello back"
         ]
-        assert len(state.continuation_history) == 1
-        assert isinstance(state.continuation_history[0], ModelResponse)
+        assert len(state.history) == 2
+        assert isinstance(state.history[1], ModelResponse)
 
     asyncio.run(scenario())
 
@@ -400,8 +400,8 @@ def test_runner_retries_retryable_model_failures() -> None:
             descriptor=AgentDescriptor(name="Retryer", model=model),
         )
         state = RunState(
-            original_input="hello",
-            continuation_history=[],
+            instructions=None,
+            history=["hello"],
             responses=[],
         )
 
@@ -429,8 +429,8 @@ def test_runner_invokes_hooks_in_order() -> None:
             descriptor=AgentDescriptor(name="Observer", model=model),
         )
         state = RunState(
-            original_input="inspect",
-            continuation_history=[],
+            instructions=None,
+            history=["inspect"],
             responses=[],
         )
 
@@ -438,7 +438,7 @@ def test_runner_invokes_hooks_in_order() -> None:
 
         assert result.final_output == "observed"
         assert hooks.events == [
-            ("agent_start", ("Observer", "inspect", 0)),
+            ("agent_start", ("Observer", ["inspect"], 0)),
             ("llm_start", ("Observer", [_message("user", "inspect")])),
             ("llm_end", ("Observer", "observed")),
             ("agent_end", ("Observer", "observed")),
@@ -470,8 +470,8 @@ def test_runner_forwards_native_model_call_options() -> None:
             ),
         )
         state = RunState(
-            original_input="configure",
-            continuation_history=[],
+            instructions=None,
+            history=["configure"],
             responses=[],
         )
 
@@ -508,8 +508,8 @@ def test_runner_run_stream_emits_events_and_returns_final_result() -> None:
             ),
         )
         state = RunState(
-            original_input="hello",
-            continuation_history=[],
+            instructions="Be concise.",
+            history=["hello"],
             responses=[],
         )
 
@@ -571,8 +571,8 @@ def test_runner_run_stream_continues_across_tool_call_turns() -> None:
             ),
         )
         state = RunState(
-            original_input="search docs",
-            continuation_history=[],
+            instructions=None,
+            history=["search docs"],
             responses=[],
         )
 
@@ -630,8 +630,8 @@ def test_runner_run_stream_continues_across_first_class_handoff() -> None:
             ),
         )
         state = RunState(
-            original_input="Can I return this order?",
-            continuation_history=[],
+            instructions=None,
+            history=["Can I return this order?"],
             responses=[],
         )
 
@@ -680,12 +680,15 @@ def test_runner_builds_request_from_prompt_instructions_and_history_items() -> N
             ),
         )
         state = RunState(
-            original_input=[
+            instructions=PromptSpec(
+                template=instruction_template,
+                values={"team": "ops"},
+            ),
+            history=[
                 "first question",
                 prior_response,
                 PromptSpec(template=user_template, values={"team": "ops"}),
             ],
-            continuation_history=[],
             responses=[],
         )
 
@@ -771,8 +774,8 @@ def test_runner_shared_instance_serves_multiple_agents_safely() -> None:
         assert second_outcome.response_payload.final_output == "second done"
         assert first_agent.run_state is not None
         assert second_agent.run_state is not None
-        assert first_agent.run_state.original_input == "one"
-        assert second_agent.run_state.original_input == "two"
+        assert first_agent.run_state.history[0] == "one"
+        assert second_agent.run_state.history[0] == "two"
         assert first_agent.run_state.turn_count == 1
         assert second_agent.run_state.turn_count == 1
 
@@ -818,8 +821,8 @@ def test_runner_executes_tool_calls_and_continues_loop() -> None:
             ),
         )
         state = RunState(
-            original_input="search docs",
-            continuation_history=[],
+            instructions=None,
+            history=["search docs"],
             responses=[],
         )
 
@@ -853,15 +856,16 @@ def test_runner_executes_tool_calls_and_continues_loop() -> None:
                 },
             ],
         ]
-        assert len(state.continuation_history) == 3
-        assert isinstance(state.continuation_history[0], ModelResponse)
-        assert state.continuation_history[1] == {
+        assert len(state.history) == 4
+        assert state.history[0] == "search docs"
+        assert isinstance(state.history[1], ModelResponse)
+        assert state.history[2] == {
             "role": "tool",
             "tool_call_id": "call_1",
             "name": "echo",
             "content": "tool:docs",
         }
-        assert isinstance(state.continuation_history[2], ModelResponse)
+        assert isinstance(state.history[3], ModelResponse)
 
     asyncio.run(scenario())
 
@@ -923,8 +927,8 @@ def test_runner_executes_parallel_tool_calls_and_invokes_hooks() -> None:
             ),
         )
         state = RunState(
-            original_input="run tools",
-            continuation_history=[],
+            instructions=None,
+            history=["run tools"],
             responses=[],
         )
 
@@ -1009,8 +1013,8 @@ def test_runner_filters_exhausted_tools_on_later_turns() -> None:
             ),
         )
         state = RunState(
-            original_input="search docs",
-            continuation_history=[],
+            instructions=None,
+            history=["search docs"],
             responses=[],
         )
 
@@ -1070,8 +1074,8 @@ def test_runner_disables_tools_after_max_round_trips() -> None:
             ),
         )
         state = RunState(
-            original_input="search docs",
-            continuation_history=[],
+            instructions=None,
+            history=["search docs"],
             responses=[],
         )
 
@@ -1186,8 +1190,8 @@ def test_runner_transfers_handoff_to_specialist_and_returns_child_result() -> No
             ),
         )
         state = RunState(
-            original_input="Can I return my laptop?",
-            continuation_history=["It arrived yesterday."],
+            instructions=None,
+            history=["Can I return my laptop?", "It arrived yesterday."],
             responses=[],
         )
 
@@ -1231,19 +1235,20 @@ def test_runner_transfers_handoff_to_specialist_and_returns_child_result() -> No
         ]
         assert result.run_state is not None
         assert state.turn_count == 2
-        assert state.continuation_history[0] == "It arrived yesterday."
-        assert isinstance(state.continuation_history[1], ModelResponse)
-        assert state.continuation_history[2] == {
+        assert state.history[0] == "Can I return my laptop?"
+        assert state.history[1] == "It arrived yesterday."
+        assert isinstance(state.history[2], ModelResponse)
+        assert state.history[3] == {
             "role": "tool",
             "tool_call_id": "call_1",
             "name": "policy_specialist",
             "content": "Handoff accepted by policy_specialist. Control transfers now.",
         }
-        assert state.continuation_history[3] == "Take over the refund request."
-        assert isinstance(state.continuation_history[4], ModelResponse)
+        assert state.history[4] == "Take over the refund request."
+        assert isinstance(state.history[5], ModelResponse)
         assert [
-            state.continuation_history[0],
-            state.continuation_history[3],
+            state.history[1],
+            state.history[4],
         ] == [
             "It arrived yesterday.",
             "Take over the refund request.",
@@ -1298,8 +1303,11 @@ def test_runner_executes_agent_as_tool_and_resumes_caller_loop() -> None:
             ),
         )
         state = RunState(
-            original_input="Can you check the warranty?",
-            continuation_history=["The screen cracked after one week."],
+            instructions=None,
+            history=[
+                "Can you check the warranty?",
+                "The screen cracked after one week.",
+            ],
             responses=[],
         )
 
@@ -1344,15 +1352,15 @@ def test_runner_executes_agent_as_tool_and_resumes_caller_loop() -> None:
                 },
             ],
         ]
-        assert len(state.continuation_history) == 4
-        assert isinstance(state.continuation_history[1], ModelResponse)
-        assert state.continuation_history[2] == {
+        assert len(state.history) == 5
+        assert isinstance(state.history[2], ModelResponse)
+        assert state.history[3] == {
             "role": "tool",
             "tool_call_id": "call_1",
             "name": "policy_specialist",
             "content": "The warranty covers screen cracks.",
         }
-        assert isinstance(state.continuation_history[3], ModelResponse)
+        assert isinstance(state.history[4], ModelResponse)
 
     asyncio.run(scenario())
 
@@ -1408,8 +1416,8 @@ def test_runner_executes_parameterless_agent_tool_with_empty_structured_payload(
             ),
         )
         state = RunState(
-            original_input="Check policy",
-            continuation_history=[],
+            instructions=None,
+            history=["Check policy"],
             responses=[],
         )
 
@@ -1491,8 +1499,8 @@ def test_runner_executes_parallel_agent_tool_calls_with_blocking_waits() -> None
             ),
         )
         state = RunState(
-            original_input="Run both specialists",
-            continuation_history=[],
+            instructions=None,
+            history=["Run both specialists"],
             responses=[],
         )
 
@@ -1540,8 +1548,8 @@ def test_runner_executes_default_handoff_with_fresh_child_agent() -> None:
             ),
         )
         state = RunState(
-            original_input="I need help",
-            continuation_history=["The item arrived broken."],
+            instructions=None,
+            history=["I need help", "The item arrived broken."],
             responses=[],
         )
 
@@ -1628,8 +1636,8 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
             ),
         )
         state = RunState(
-            original_input="Need a researched answer",
-            continuation_history=[],
+            instructions=None,
+            history=["Need a researched answer"],
             responses=[],
         )
 
@@ -1697,8 +1705,8 @@ def test_runner_rejects_mixed_handoff_and_other_tool_calls() -> None:
             ),
         )
         state = RunState(
-            original_input="Need help",
-            continuation_history=[],
+            instructions=None,
+            history=["Need help"],
             responses=[],
         )
 
@@ -1738,8 +1746,8 @@ def test_runner_raises_when_model_returns_tool_calls_without_tools() -> None:
             ),
         )
         state = RunState(
-            original_input="search docs",
-            continuation_history=[],
+            instructions=None,
+            history=["search docs"],
             responses=[],
         )
 

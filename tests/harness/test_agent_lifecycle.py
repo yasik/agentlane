@@ -41,11 +41,11 @@ def make_assistant_response(content: str) -> ModelResponse:
 
 def _last_user_input(run_state: RunState) -> object:
     """Return the latest user-side input represented in one run state."""
-    for item in reversed(run_state.continuation_history):
+    for item in reversed(run_state.history):
         if isinstance(item, ModelResponse):
             continue
         return item
-    return run_state.original_input
+    return None
 
 
 def _require_run_result(payload: object | None) -> RunResult:
@@ -96,7 +96,7 @@ class _RecordingRunner(Runner):
         reply_text = f"{agent.name}:{_last_user_input(state)}"
         response = make_assistant_response(reply_text)
         state.responses.append(response)
-        state.continuation_history.append(response)
+        state.history.append(response)
         return RunResult(
             final_output=reply_text,
             responses=list(state.responses),
@@ -139,8 +139,8 @@ def test_agent_starts_new_run_with_string_input() -> None:
         assert outcome.response_payload.final_output == "Support:hello"
         assert runner.calls == [
             RunState(
-                original_input="hello",
-                continuation_history=[],
+                instructions="You are a helpful support agent.",
+                history=["hello"],
                 responses=[],
                 turn_count=0,
             )
@@ -184,16 +184,16 @@ def test_agent_continues_existing_run_after_idle() -> None:
         assert agent.pending_input_count == 0
         assert len(runner.calls) == 2
         assert runner.calls[0] == RunState(
-            original_input="first",
-            continuation_history=[],
+            instructions="You plan carefully.",
+            history=["first"],
             responses=[],
             turn_count=0,
         )
-        assert runner.calls[1].original_input == "first"
+        assert runner.calls[1].history[0] == "first"
         assert runner.calls[1].turn_count == 1
-        assert runner.calls[1].continuation_history[1] == "second"
+        assert runner.calls[1].history[2] == "second"
         assert agent.run_state is not None
-        assert agent.run_state.original_input == "first"
+        assert agent.run_state.history[0] == "first"
         assert agent.run_state.turn_count == 2
         assert len(agent.run_state.responses) == 2
 
@@ -234,7 +234,7 @@ def test_agent_queues_inputs_for_next_turn_while_running() -> None:
         assert not agent.is_running
         assert agent.pending_input_count == 0
         assert len(runner.calls) == 2
-        assert runner.calls[1].continuation_history[1] == "second"
+        assert runner.calls[1].history[2] == "second"
 
     asyncio.run(scenario())
 
@@ -246,8 +246,8 @@ def test_agent_continues_from_preloaded_run_state() -> None:
         agent_id = AgentId.from_values("assistant-agent", "session-recovered")
         prior_response = make_assistant_response("Recovered:before")
         recovered_state = RunState(
-            original_input="before",
-            continuation_history=[prior_response],
+            instructions="You should not be reseeded.",
+            history=["before", prior_response],
             responses=[prior_response],
             turn_count=1,
         )
@@ -271,9 +271,9 @@ def test_agent_continues_from_preloaded_run_state() -> None:
         result = _require_run_result(outcome.response_payload)
         assert result.final_output == "Recovered:after"
         assert len(runner.calls) == 1
-        assert runner.calls[0].original_input == "before"
+        assert runner.calls[0].history[0] == "before"
         assert runner.calls[0].turn_count == 1
-        assert runner.calls[0].continuation_history[1] == "after"
+        assert runner.calls[0].history[2] == "after"
         assert agent.run_state is not None
         assert agent.run_state.turn_count == 2
         assert len(agent.run_state.responses) == 2
@@ -287,8 +287,8 @@ def test_agent_accepts_run_state_as_runtime_input() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = _RecordingRunner()
         resumed_state = RunState(
-            original_input="before",
-            continuation_history=[make_assistant_response("Support:before")],
+            instructions="You help with support.",
+            history=["before", make_assistant_response("Support:before")],
             responses=[make_assistant_response("Support:before")],
             turn_count=1,
         )

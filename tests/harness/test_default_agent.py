@@ -140,11 +140,11 @@ async def _collect_run_stream(stream: RunStream) -> list[ModelStreamEvent]:
 
 def _last_user_input(run_state: RunState) -> object:
     """Return the latest user-side item from one run state."""
-    for item in reversed(run_state.continuation_history):
+    for item in reversed(run_state.history):
         if isinstance(item, ModelResponse):
             continue
         return item
-    return run_state.original_input
+    return None
 
 
 class _RecordingRunner(Runner):
@@ -175,7 +175,7 @@ class _RecordingRunner(Runner):
         reply_text = f"{agent.name}:{_last_user_input(state)}"
         response = make_assistant_response(reply_text)
         state.responses.append(response)
-        state.continuation_history.append(response)
+        state.history.append(response)
         return RunResult(
             final_output=reply_text,
             responses=list(state.responses),
@@ -266,8 +266,8 @@ def test_default_agent_supports_explicit_runtime_and_runner_injection() -> None:
         assert result.run_state.turn_count == 1
         assert len(runner.calls) == 1
         assert runner.calls[0] == RunState(
-            original_input="draft a plan",
-            continuation_history=[],
+            instructions=None,
+            history=["draft a plan"],
             responses=[],
             turn_count=0,
         )
@@ -299,12 +299,12 @@ def test_default_agent_supports_subclass_descriptor_and_explicit_run_state_resum
         assert second.run_state.turn_count == 2
         assert len(runner.calls) == 2
         assert runner.calls[0] == RunState(
-            original_input="first",
-            continuation_history=[],
+            instructions=None,
+            history=["first"],
             responses=[],
             turn_count=0,
         )
-        assert runner.calls[1].original_input == "first"
+        assert runner.calls[1].history[0] == "first"
         assert runner.calls[1].turn_count == 1
         assert (
             second.run_state.responses[-1].choices[0].message.content == "Support:first"
@@ -438,9 +438,9 @@ def test_default_agent_fork_branches_without_mutating_persisted_state() -> None:
         assert agent.run_state is not None
         assert agent.run_state.turn_count == 1
         assert len(runner.calls) == 2
-        assert runner.calls[1].original_input == "first"
+        assert runner.calls[1].history[0] == "first"
         assert runner.calls[1].turn_count == 1
-        assert runner.calls[1].continuation_history[1] == "branch"
+        assert runner.calls[1].history[2] == "branch"
 
     asyncio.run(scenario())
 
@@ -466,7 +466,7 @@ def test_default_agent_fork_supports_explicit_run_state_without_persisting_it() 
         assert agent.run_state is not None
         assert agent.run_state.turn_count == 1
         assert len(runner.calls) == 2
-        assert runner.calls[1].original_input == "first"
+        assert runner.calls[1].history[0] == "first"
         assert runner.calls[1].turn_count == 1
 
     asyncio.run(scenario())

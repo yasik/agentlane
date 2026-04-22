@@ -30,13 +30,13 @@ class ReplyPrefixShim(Shim):
         return "reply-prefix"
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
-        # `PreparedTurn.instructions` starts from the descriptor instructions on
-        # each model turn, so this extra line is applied once per turn request
-        # rather than accumulating across later runs.
-        if isinstance(turn.instructions, str):
-            turn.instructions = (
-                f"{turn.instructions}\n"
-                "Always start every reply with `Support:`."
+        # Bootstrap-time system-prompt augmentation is explicit. After the run
+        # starts, the persisted system instruction remains stable unless a shim
+        # deliberately changes it again.
+        if turn.run_state.turn_count == 1:
+            turn.append_system_instruction(
+                "Always start every reply with `Support:`.",
+                separator="\n",
             )
 
 

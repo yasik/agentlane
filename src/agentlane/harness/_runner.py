@@ -65,7 +65,7 @@ from ._run import (
     RunInput,
     RunResult,
     RunState,
-    copy_original_input,
+    copy_instructions,
     copy_run_state,
     copy_shim_state,
 )
@@ -193,9 +193,6 @@ class Runner:
                 _check_turn_limit(state.turn_count, self._max_turns)
                 prepared_turn = PreparedTurn(
                     run_state=state,
-                    instructions=(
-                        runner_task.instructions if runner_task is not None else None
-                    ),
                     tools=_visible_tools(
                         runner_task, tool_call_counts, tool_round_trips
                     ),
@@ -246,7 +243,7 @@ class Runner:
                     # raw assistant turn is committed before execution and fed
                     # back into the next model request together with the tool
                     # result messages.
-                    state.continuation_history.append(response)
+                    state.history.append(response)
                     tool_messages = await self._execute_tool_calls(
                         agent=agent,
                         runner_task=runner_task,
@@ -256,7 +253,7 @@ class Runner:
                         hooks=resolved_hooks,
                         cancellation_token=cancellation_token,
                     )
-                    state.continuation_history.extend(tool_messages)
+                    state.history.extend(tool_messages)
 
                     # Update incremental counters from this batch
                     tool_round_trips += 1
@@ -266,7 +263,7 @@ class Runner:
 
                     continue
 
-                state.continuation_history.append(response)
+                state.history.append(response)
                 _validate_terminal_response(response)
                 result = RunResult(
                     final_output=_extract_direct_answer(response),
@@ -360,9 +357,6 @@ class Runner:
                 _check_turn_limit(state.turn_count, self._max_turns)
                 prepared_turn = PreparedTurn(
                     run_state=state,
-                    instructions=(
-                        runner_task.instructions if runner_task is not None else None
-                    ),
                     tools=_visible_tools(
                         runner_task, tool_call_counts, tool_round_trips
                     ),
@@ -411,7 +405,7 @@ class Runner:
                             cancellation_token=cancellation_token,
                         )
 
-                    state.continuation_history.append(response)
+                    state.history.append(response)
                     tool_messages = await self._execute_tool_calls(
                         agent=agent,
                         runner_task=runner_task,
@@ -421,7 +415,7 @@ class Runner:
                         hooks=resolved_hooks,
                         cancellation_token=cancellation_token,
                     )
-                    state.continuation_history.extend(tool_messages)
+                    state.history.extend(tool_messages)
 
                     tool_round_trips += 1
                     for tc in tool_calls:
@@ -430,7 +424,7 @@ class Runner:
 
                     continue
 
-                state.continuation_history.append(response)
+                state.history.append(response)
                 _validate_terminal_response(response)
                 result = RunResult(
                     final_output=_extract_direct_answer(response),
@@ -755,28 +749,31 @@ class Runner:
 
         transferred_state = replace(
             state,
-            continuation_history=list(state.continuation_history),
+            history=list(state.history),
             responses=list(state.responses),
         )
         # Handoff is a control-transfer primitive. The downstream agent should
         # see why control moved, so we preserve the parent assistant tool-call
         # turn, add a synthetic tool acknowledgement, and then add the optional
         # user-side delegation message.
-        transferred_state.continuation_history.append(response)
-        transferred_state.continuation_history.append(
+        transferred_state.history.append(response)
+        transferred_state.history.append(
             _tool_result_message(
                 tool_call=handoff_call,
                 tool_name=tool_definition.name,
                 content=default_handoff_tool_result(tool_definition.name),
             )
         )
-        transferred_state.continuation_history.append(
+        transferred_state.history.append(
             parsed_input.task or default_handoff_task_message()
         )
 
         handoff_descriptor = _resolved_handoff_descriptor(
             runner_task=runner_task,
             tool_definition=tool_definition,
+        )
+        transferred_state.instructions = copy_instructions(
+            handoff_descriptor.instructions
         )
         handoff_result = await self._deliver_handoff(
             agent=agent,
@@ -826,24 +823,27 @@ class Runner:
 
         transferred_state = replace(
             state,
-            continuation_history=list(state.continuation_history),
+            history=list(state.history),
             responses=list(state.responses),
         )
-        transferred_state.continuation_history.append(response)
-        transferred_state.continuation_history.append(
+        transferred_state.history.append(response)
+        transferred_state.history.append(
             _tool_result_message(
                 tool_call=handoff_call,
                 tool_name=tool_definition.name,
                 content=default_handoff_tool_result(tool_definition.name),
             )
         )
-        transferred_state.continuation_history.append(
+        transferred_state.history.append(
             parsed_input.task or default_handoff_task_message()
         )
 
         handoff_descriptor = _resolved_handoff_descriptor(
             runner_task=runner_task,
             tool_definition=tool_definition,
+        )
+        transferred_state.instructions = copy_instructions(
+            handoff_descriptor.instructions
         )
         handoff_result = await self._deliver_handoff_stream(
             agent=agent,
@@ -1106,8 +1106,8 @@ def _base_tools(runner_task: RunnerTask | None) -> Tools | None:
 
 def _overwrite_run_state(target: RunState, source: RunState) -> None:
     """Replace one working run state in place with another completed state."""
-    target.original_input = copy_original_input(source.original_input)
-    target.continuation_history = list(source.continuation_history)
+    target.instructions = copy_instructions(source.instructions)
+    target.history = list(source.history)
     target.responses = list(source.responses)
     target.shim_state = copy_shim_state(source.shim_state)
     target.turn_count = source.turn_count
@@ -1212,11 +1212,8 @@ def _build_request(turn: PreparedTurn) -> list[MessageDict]:
     """Build the full model request from agent config and run state."""
     messages: list[MessageDict] = []
 
-    messages.extend(_instruction_messages(turn.instructions))
-    messages.extend(_input_to_messages(turn.run_state.original_input))
-    for item in turn.run_state.continuation_history:
-        messages.extend(_history_item_to_messages(item))
-    for item in turn.context_items:
+    messages.extend(_instruction_messages(turn.run_state.instructions))
+    for item in turn.run_state.history:
         messages.extend(_history_item_to_messages(item))
 
     return messages
@@ -1233,24 +1230,8 @@ def _instruction_messages(
     return [_normalize_message({"role": "system", "content": instructions})]
 
 
-def _input_to_messages(
-    run_input: str | list[RunHistoryItem],
-) -> list[MessageDict]:
-    """Render the original run input into canonical model messages."""
-    if isinstance(run_input, str):
-        return [_normalize_message({"role": "user", "content": run_input})]
-
-    # List inputs may contain mixed types (strings, PromptSpecs,
-    # ModelResponses) — delegate each item through the same rendering
-    # pipeline used for continuation history.
-    messages: list[MessageDict] = []
-    for item in run_input:
-        messages.extend(_history_item_to_messages(item))
-    return messages
-
-
 def _history_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
-    """Render one continuation item into canonical model messages.
+    """Render one persisted history item into canonical model messages.
 
     ``RunHistoryItem`` names the supported shapes explicitly. ``ModelResponse``
     objects are assistant turns, canonical message dicts pass through

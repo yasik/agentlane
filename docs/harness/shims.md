@@ -5,15 +5,18 @@ run actually does.
 
 Use a shim when you need to:
 
-1. append or replace effective instructions,
+1. explicitly append to or replace the persisted system instruction,
 2. add or adjust visible tools,
-3. inject temporary context for the next model call,
+3. append visible conversation items to persisted history,
 4. update persisted run-owned state, or
 5. rewrite the final model request messages before one call.
 
 This is the mechanism intended for future features such as skills, memory, and
 context compaction. Those capabilities should build on this seam instead of
 adding new special-case fields to the core harness types.
+
+The first major first-party example of that pattern is
+[Harness Skills](./skills.md).
 
 ## Import Path
 
@@ -59,29 +62,46 @@ The main mutation surface is [`PreparedTurn`](../../src/agentlane/harness/shims/
 
 It gives a shim access to:
 
-1. `instructions`
+1. `run_state`
 2. `tools`
 3. `model_args`
-4. `run_state`
-5. `context_items`
-6. `transient_state`
+4. `transient_state`
 
 The intended use is:
 
-1. change `instructions`, `tools`, `model_args`, or `context_items` in
-   `prepare_turn(...)`,
-2. update persisted state in `run_state.shim_state`,
-3. use `transform_messages(...)` only when you need one-call message surgery
+1. change `tools` or `model_args` in `prepare_turn(...)`,
+2. update the persisted system instruction explicitly with
+   `set_system_instruction(...)` or `append_system_instruction(...)`,
+3. append visible conversation items with `append_history_item(...)` or
+   `append_history_items(...)`,
+4. update persisted state in `run_state.shim_state`,
+5. use `transform_messages(...)` only when you need one-call message surgery
    after the runner has already built the canonical message list.
 
-`context_items` uses the same run-history item contract as the rest of the
-harness request builder. Supported items include:
+The system instruction is a single persisted value stored at
+[`RunState.instructions`](../../src/agentlane/harness/_run.py). It is not split
+into multiple system messages.
+
+The visible conversation is one append-only list stored at
+[`RunState.history`](../../src/agentlane/harness/_run.py).
+
+`append_history_item(...)` uses the same run-history item contract as the rest
+of the harness request builder. Supported items include:
 
 1. canonical message dicts,
 2. prior `ModelResponse` values,
 3. `PromptSpec` values,
 4. user-side content values such as strings, JSON-like values, or Pydantic
    models.
+
+This means the normal ongoing shim pattern is:
+
+1. bootstrap the system instruction before the first model turn if needed,
+2. keep later changes append-only by writing conversation items into history,
+3. keep temporary in-memory values in `transient_state`.
+
+Avoid repeated system-instruction mutation during long-running sessions unless
+you explicitly need that stronger escape hatch.
 
 ## Shim State
 
@@ -156,9 +176,10 @@ class ReplyPrefixShim(Shim):
         return "reply-prefix"
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
-        if isinstance(turn.instructions, str):
-            turn.instructions = (
-                f"{turn.instructions}\nAlways start every reply with `Support:`."
+        if turn.run_state.turn_count == 1:
+            turn.append_system_instruction(
+                "Always start every reply with `Support:`.",
+                separator="\n",
             )
 
 

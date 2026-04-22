@@ -123,7 +123,7 @@ async def run_demo() -> None:
         break
 
     tool_output = "not found"
-    for item in run_state.continuation_history:
+    for item in run_state.history:
         if not isinstance(item, dict):
             continue
         message = cast(dict[str, object], item)
