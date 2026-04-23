@@ -271,7 +271,7 @@ class LifecycleRunner(Protocol):
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
+        hooks: RunnerHooks | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult: ...
 
@@ -280,7 +280,7 @@ class LifecycleRunner(Protocol):
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
+        hooks: RunnerHooks | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunStream: ...
 
@@ -334,15 +334,14 @@ class AgentLifecycle:
 
         self._pending_inputs: deque[_QueuedRunInput] = deque()
         self._is_running = False
-        self._extensions_bound = False
         self._bound_shim_manager: BoundShimManager | None = None
-        self._resolved_hooks = RunnerHooks()
+        self._resolved_hooks: RunnerHooks | None = None
 
         # Guards `_pending_inputs` and `_is_running`. Held only for queue
         # bookkeeping — never during expensive operations like state copies
         # or runner invocations.
         self._lock = asyncio.Lock()
-        self._shim_bind_lock = asyncio.Lock()
+        self._bind_lock = asyncio.Lock()
 
     @property
     def is_running(self) -> bool:
@@ -366,17 +365,15 @@ class AgentLifecycle:
     @property
     def resolved_hooks(self) -> RunnerHooks | None:
         """Return the cached resolved runner hooks, if already bound."""
-        if not self._extensions_bound:
-            return None
         return self._resolved_hooks
 
     async def ensure_bound_extensions(self, *, agent: Task) -> None:
         """Bind shims and resolve the cached hook composition once."""
-        if self._extensions_bound:
+        if self._bound_shim_manager is not None:
             return
 
-        async with self._shim_bind_lock:
-            if self._extensions_bound:
+        async with self._bind_lock:
+            if self._bound_shim_manager is not None:
                 return
 
             self._bound_shim_manager = await BoundShimManager.bind(
@@ -389,7 +386,6 @@ class AgentLifecycle:
                 self._configured_hooks,
                 self._bound_shim_manager.runner_hooks,
             )
-            self._extensions_bound = True
 
     async def enqueue_input(
         self,

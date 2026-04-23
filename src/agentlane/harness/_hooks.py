@@ -1,6 +1,6 @@
 """Runner hook contracts for harness lifecycle callbacks."""
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from typing import cast
 
 from agentlane.models import MessageDict, ModelResponse, ToolCall
@@ -111,35 +111,40 @@ class _MergedRunnerHooks(RunnerHooks):
         task: Task,
         state: RunState,
     ) -> None:
-        await self._notify("on_agent_start", task, state)
+        for hook in self._hooks:
+            await hook.on_agent_start(task, state)
 
     async def on_agent_end(
         self,
         task: Task,
         result: RunResult | None,
     ) -> None:
-        await self._notify("on_agent_end", task, result)
+        for hook in self._hooks:
+            await hook.on_agent_end(task, result)
 
     async def on_llm_start(
         self,
         task: Task,
         messages: list[MessageDict],
     ) -> None:
-        await self._notify("on_llm_start", task, messages)
+        for hook in self._hooks:
+            await hook.on_llm_start(task, messages)
 
     async def on_llm_end(
         self,
         task: Task,
         response: ModelResponse,
     ) -> None:
-        await self._notify("on_llm_end", task, response)
+        for hook in self._hooks:
+            await hook.on_llm_end(task, response)
 
     async def on_tool_call_start(
         self,
         task: Task,
         tool_call: ToolCall,
     ) -> None:
-        await self._notify("on_tool_call_start", task, tool_call)
+        for hook in self._hooks:
+            await hook.on_tool_call_start(task, tool_call)
 
     async def on_tool_call_end(
         self,
@@ -147,20 +152,8 @@ class _MergedRunnerHooks(RunnerHooks):
         tool_call: ToolCall,
         result: object,
     ) -> None:
-        await self._notify("on_tool_call_end", task, tool_call, result)
-
-    async def _notify(
-        self,
-        method_name: str,
-        *args: object,
-    ) -> None:
-        """Forward one hook callback to all child hooks in order."""
         for hook in self._hooks:
-            callback = cast(
-                Callable[..., Awaitable[None]],
-                getattr(hook, method_name),
-            )
-            await callback(*args)
+            await hook.on_tool_call_end(task, tool_call, result)
 
 
 def coerce_runner_hooks(
