@@ -43,7 +43,7 @@ from ._handoff import (
     handoff_description,
     normalize_delegation_tool_name,
 )
-from ._hooks import RunnerHooks
+from ._hooks import RunnerHooks, coerce_runner_hooks
 from ._run import (
     RunHistoryItem,
     RunInput,
@@ -271,7 +271,7 @@ class LifecycleRunner(Protocol):
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult: ...
 
@@ -280,7 +280,7 @@ class LifecycleRunner(Protocol):
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunStream: ...
 
@@ -323,16 +323,20 @@ class AgentLifecycle:
         *,
         descriptor: AgentDescriptor,
         run_state: RunState | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
     ) -> None:
         """Initialize lifecycle state for one agent instance."""
         self._descriptor = descriptor
+        self._configured_hooks = hooks
 
         # Defensive copy so the caller's original is never mutated.
         self._run_state = copy_run_state(run_state)
 
         self._pending_inputs: deque[_QueuedRunInput] = deque()
         self._is_running = False
+        self._extensions_bound = False
         self._bound_shim_manager: BoundShimManager | None = None
+        self._resolved_hooks = RunnerHooks()
 
         # Guards `_pending_inputs` and `_is_running`. Held only for queue
         # bookkeeping — never during expensive operations like state copies
@@ -359,27 +363,39 @@ class AgentLifecycle:
         """Return the already-bound shim manager, if any."""
         return self._bound_shim_manager
 
-    async def ensure_shims_bound(self, *, agent: Task) -> BoundShimManager:
-        """Bind the descriptor's shim definitions once for this agent instance."""
-        if self._bound_shim_manager is not None:
-            return self._bound_shim_manager
+    @property
+    def resolved_hooks(self) -> RunnerHooks | None:
+        """Return the cached resolved runner hooks, if already bound."""
+        if not self._extensions_bound:
+            return None
+        return self._resolved_hooks
+
+    async def ensure_bound_extensions(self, *, agent: Task) -> None:
+        """Bind shims and resolve the cached hook composition once."""
+        if self._extensions_bound:
+            return
 
         async with self._shim_bind_lock:
-            if self._bound_shim_manager is None:
-                self._bound_shim_manager = await BoundShimManager.bind(
-                    shims=self._descriptor.shims,
-                    context=ShimBindingContext(
-                        task=agent,
-                    ),
-                )
-            return self._bound_shim_manager
+            if self._extensions_bound:
+                return
+
+            self._bound_shim_manager = await BoundShimManager.bind(
+                shims=self._descriptor.shims,
+                context=ShimBindingContext(
+                    task=agent,
+                ),
+            )
+            self._resolved_hooks = coerce_runner_hooks(
+                self._configured_hooks,
+                self._bound_shim_manager.runner_hooks,
+            )
+            self._extensions_bound = True
 
     async def enqueue_input(
         self,
         *,
         agent: Task,
         runner: LifecycleRunner,
-        hooks: RunnerHooks | None,
         run_input: RunInput,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
@@ -390,7 +406,7 @@ class AgentLifecycle:
         If the agent is already running, the input is simply appended; the
         active drainer will pick it up after the current turn finishes.
         """
-        await self.ensure_shims_bound(agent=agent)
+        await self.ensure_bound_extensions(agent=agent)
         queued_input = _QueuedRunInput(
             run_input=run_input,
             future=get_running_loop().create_future(),
@@ -407,11 +423,7 @@ class AgentLifecycle:
                 should_drain = True
 
         if should_drain:
-            await self._drain_pending_inputs(
-                agent=agent,
-                runner=runner,
-                hooks=hooks,
-            )
+            await self._drain_pending_inputs(agent=agent, runner=runner)
 
         # Every caller awaits its own future, regardless of whether it was
         # the drainer or a later arrival.
@@ -424,12 +436,11 @@ class AgentLifecycle:
         *,
         agent: Task,
         runner: LifecycleRunner,
-        hooks: RunnerHooks | None,
         run_input: RunInput,
         cancellation_token: CancellationToken | None = None,
     ) -> RunStream:
         """Queue one streamed run input and return its live stream handle."""
-        await self.ensure_shims_bound(agent=agent)
+        await self.ensure_bound_extensions(agent=agent)
         internal_token = CancellationToken()
         stream = RunStream(on_close=internal_token.cancel)
         relay_task = cancellation_relay_task(
@@ -455,11 +466,7 @@ class AgentLifecycle:
 
         if should_drain:
             drain_task = asyncio.create_task(
-                self._drain_pending_inputs(
-                    agent=agent,
-                    runner=runner,
-                    hooks=hooks,
-                )
+                self._drain_pending_inputs(agent=agent, runner=runner)
             )
             drain_task.add_done_callback(_consume_drain_task_result)
 
@@ -470,7 +477,6 @@ class AgentLifecycle:
         *,
         agent: Task,
         runner: LifecycleRunner,
-        hooks: RunnerHooks | None,
     ) -> None:
         """Drain queued turns sequentially until the queue is empty.
 
@@ -486,6 +492,7 @@ class AgentLifecycle:
         resets to idle.
         """
         active_input: _QueuedRunInput | None = None
+        hooks = self._resolved_hooks
 
         try:
             while True:

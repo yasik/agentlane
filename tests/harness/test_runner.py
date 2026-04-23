@@ -262,6 +262,28 @@ class _RecordingHooks(RunnerHooks):
         )
 
 
+class _NamedHooks(RunnerHooks):
+    def __init__(self, name: str, events: list[tuple[str, str]]) -> None:
+        self._name = name
+        self._events = events
+
+    async def on_agent_start(
+        self,
+        task: Task,
+        state: RunState,
+    ) -> None:
+        del task, state
+        self._events.append((self._name, "agent_start"))
+
+    async def on_agent_end(
+        self,
+        task: Task,
+        result: RunResult | None,
+    ) -> None:
+        del task, result
+        self._events.append((self._name, "agent_end"))
+
+
 def _task_name(task: Task) -> str:
     """Return the agent name when present for hook assertions."""
     if isinstance(task, Agent):
@@ -442,6 +464,38 @@ def test_runner_invokes_hooks_in_order() -> None:
             ("llm_start", ("Observer", [_message("user", "inspect")])),
             ("llm_end", ("Observer", "observed")),
             ("agent_end", ("Observer", "observed")),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_runner_accepts_hook_sequences_in_order() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        model = _SequenceModel([make_assistant_response(content="observed")])
+        events: list[tuple[str, str]] = []
+        first = _NamedHooks("first", events)
+        second = _NamedHooks("second", events)
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(name="Observer", model=model),
+        )
+        state = RunState(
+            instructions=None,
+            history=["inspect"],
+            responses=[],
+        )
+
+        result = await runner.run(agent, state, hooks=(first, second))
+
+        assert result.final_output == "observed"
+        assert events == [
+            ("first", "agent_start"),
+            ("second", "agent_start"),
+            ("first", "agent_end"),
+            ("second", "agent_end"),
         ]
 
     asyncio.run(scenario())

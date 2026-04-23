@@ -49,7 +49,7 @@ class Agent(Task):
         descriptor: AgentDescriptor | None = None,
         parent_tools: Tools | None = None,
         run_state: RunState | None = None,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
     ) -> None:
         """Initialize an agent bound to one runtime engine capability.
 
@@ -64,16 +64,17 @@ class Agent(Task):
             run_state: Optional recovered run state for this concrete agent
                 instance. When provided, later turns continue from that exact
                 resumable state instead of starting a new run.
-            hooks: Optional runner hooks for observability and tests.
+            hooks: Optional runner hook or ordered hook list for lifecycle
+                callbacks, tests, and application-defined side effects.
         """
         super().__init__(engine, bind_id=bind_id)
         self._runner = runner
-        self._hooks = hooks
         self._parent_tools = parent_tools
         self._descriptor = descriptor or AgentDescriptor(name=type(self).__name__)
         self._lifecycle = AgentLifecycle(
             descriptor=self._descriptor,
             run_state=run_state,
+            hooks=hooks,
         )
 
     @property
@@ -178,7 +179,6 @@ class Agent(Task):
         return await self._lifecycle.enqueue_input(
             agent=self,
             runner=self._runner,
-            hooks=self._hooks,
             run_input=run_input,
             cancellation_token=cancellation_token,
         )
@@ -193,7 +193,6 @@ class Agent(Task):
         return await self._lifecycle.enqueue_input_stream(
             agent=self,
             runner=self._runner,
-            hooks=self._hooks,
             run_input=run_input,
             cancellation_token=cancellation_token,
         )

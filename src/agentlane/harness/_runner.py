@@ -15,7 +15,7 @@ control within one run.
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
@@ -52,7 +52,7 @@ from ._handoff import (
     delegated_result_text,
     require_handoff_result,
 )
-from ._hooks import RunnerHooks
+from ._hooks import RunnerHooks, coerce_runner_hooks
 from ._lifecycle import (
     AgentDescriptor,
     AgentTool,
@@ -159,7 +159,7 @@ class Runner:
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
         """Execute the generic harness loop for the provided run state.
@@ -168,7 +168,7 @@ class Runner:
         runner mutates it freely (incrementing ``turn_count``, appending
         responses) without risking the persisted baseline.
         """
-        resolved_hooks = hooks or RunnerHooks()
+        resolved_hooks = coerce_runner_hooks(hooks)
         result: RunResult | None = None
 
         # Narrow the agent to the runner protocol once per run. All helper
@@ -283,10 +283,11 @@ class Runner:
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunStream:
         """Execute the generic harness loop with live model streaming."""
+        resolved_hooks = coerce_runner_hooks(hooks)
         stream = RunStream(
             on_close=(
                 cancellation_token.cancel if cancellation_token is not None else None
@@ -297,7 +298,7 @@ class Runner:
                 agent=agent,
                 state=state,
                 stream=stream,
-                hooks=hooks,
+                hooks=resolved_hooks,
                 cancellation_token=cancellation_token,
             )
         )
@@ -310,7 +311,7 @@ class Runner:
         agent: Task,
         state: RunState,
         stream: RunStream,
-        hooks: RunnerHooks | None,
+        hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
     ) -> None:
         """Drive one streamed run and resolve the provided stream handle."""
@@ -336,11 +337,10 @@ class Runner:
         agent: Task,
         state: RunState,
         emit: Callable[[ModelStreamEvent], None],
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
         """Execute the generic harness loop while forwarding model events."""
-        resolved_hooks = hooks or RunnerHooks()
         result: RunResult | None = None
         runner_task = _narrow_runner_task(agent)
         shim_manager = _shim_manager(agent)
@@ -348,7 +348,7 @@ class Runner:
         tool_call_counts: dict[str, int] = {}
         tool_round_trips = 0
 
-        await resolved_hooks.on_agent_start(agent, state)
+        await hooks.on_agent_start(agent, state)
         if shim_manager is not None:
             await shim_manager.on_run_start(state, transient_state)
         try:
@@ -379,7 +379,7 @@ class Runner:
                     tools=prepared_turn.tools,
                     model_args=prepared_turn.model_args,
                     emit=emit,
-                    hooks=resolved_hooks,
+                    hooks=hooks,
                     cancellation_token=cancellation_token,
                 )
 
@@ -401,7 +401,7 @@ class Runner:
                             handoff_call=handoff_call,
                             tools=prepared_turn.tools,
                             emit=emit,
-                            hooks=resolved_hooks,
+                            hooks=hooks,
                             cancellation_token=cancellation_token,
                         )
 
@@ -412,7 +412,7 @@ class Runner:
                         tools=prepared_turn.tools,
                         tool_calls=tool_calls,
                         response=response,
-                        hooks=resolved_hooks,
+                        hooks=hooks,
                         cancellation_token=cancellation_token,
                     )
                     state.history.extend(tool_messages)
@@ -436,7 +436,7 @@ class Runner:
         finally:
             if shim_manager is not None:
                 await shim_manager.on_run_end(result, transient_state)
-            await resolved_hooks.on_agent_end(agent, result)
+            await hooks.on_agent_end(agent, result)
 
     async def _run_with_retry(
         self,

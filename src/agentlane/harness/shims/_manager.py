@@ -6,6 +6,7 @@ from typing import Any, Self
 from agentlane.models import MessageDict, ModelResponse
 from agentlane.models.run import RunContext
 
+from .._hooks import RunnerHooks
 from .._run import RunResult, RunState
 from ._base import BoundShim, Shim
 from ._types import PreparedTurn, ShimBindingContext
@@ -16,6 +17,7 @@ class BoundShimManager:
 
     def __init__(self, sessions: tuple[BoundShim, ...]) -> None:
         self._sessions = sessions
+        self._runner_hooks = _collect_runner_hooks(sessions)
 
     @classmethod
     async def bind(
@@ -37,6 +39,11 @@ class BoundShimManager:
     def sessions(self) -> tuple[BoundShim, ...]:
         """Return the bound shim sessions in execution order."""
         return self._sessions
+
+    @property
+    def runner_hooks(self) -> tuple[RunnerHooks, ...]:
+        """Return shim-contributed runner hooks in descriptor order."""
+        return self._runner_hooks
 
     async def on_run_start(
         self,
@@ -82,3 +89,13 @@ class BoundShimManager:
         """Notify bound shims that one run has ended."""
         for session in self._sessions:
             await session.on_run_end(result, transient_state)
+
+
+def _collect_runner_hooks(
+    sessions: tuple[BoundShim, ...],
+) -> tuple[RunnerHooks, ...]:
+    """Collect all shim-contributed runner hooks in session order."""
+    hooks: list[RunnerHooks] = []
+    for session in sessions:
+        hooks.extend(session.runner_hooks())
+    return tuple(hooks)

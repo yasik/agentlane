@@ -6,6 +6,7 @@ branch execution on top of the runtime-facing harness ``Agent``.
 """
 
 import asyncio
+from collections.abc import Sequence
 from uuid import uuid4
 
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
@@ -50,7 +51,7 @@ class DefaultAgent(AgentBase):
         descriptor: AgentDescriptor | None = None,
         runtime: RuntimeEngine | None = None,
         runner: Runner | None = None,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         agent_id: AgentId | None = None,
         run_state: RunState | None = None,
     ) -> None:
@@ -61,7 +62,8 @@ class DefaultAgent(AgentBase):
                 omitted, the agent uses ``type(self).descriptor``.
             runtime: Optional runtime to reuse across runs.
             runner: Optional runner to reuse across runs.
-            hooks: Optional runner hooks forwarded to the low-level agent.
+            hooks: Optional runner hook or ordered hook list forwarded to the
+                low-level agent lifecycle callbacks.
             agent_id: Optional stable runtime id override.
             run_state: Optional initial resumable state.
         """

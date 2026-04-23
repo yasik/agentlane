@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 
 from agentlane.harness import (
     Agent,
@@ -157,7 +158,7 @@ class _RecordingRunner(Runner):
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
         del hooks
@@ -183,6 +184,28 @@ class _RecordingRunner(Runner):
         )
 
 
+class _NamedHooks(RunnerHooks):
+    def __init__(self, name: str, events: list[tuple[str, str]]) -> None:
+        self._name = name
+        self._events = events
+
+    async def on_agent_start(
+        self,
+        task: Task,
+        state: RunState,
+    ) -> None:
+        del task, state
+        self._events.append((self._name, "agent_start"))
+
+    async def on_agent_end(
+        self,
+        task: Task,
+        result: RunResult | None,
+    ) -> None:
+        del task, result
+        self._events.append((self._name, "agent_end"))
+
+
 def test_default_agent_auto_manages_runtime_and_runner() -> None:
     async def scenario() -> None:
         model = _SequenceModel([make_assistant_response("Thanks, I can help.")])
@@ -205,6 +228,35 @@ def test_default_agent_auto_manages_runtime_and_runner() -> None:
                 {"role": "system", "content": "You are a support agent."},
                 {"role": "user", "content": "My order arrived damaged."},
             ]
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_accepts_hook_sequences() -> None:
+    async def scenario() -> None:
+        model = _SequenceModel([make_assistant_response("Thanks, I can help.")])
+        events: list[tuple[str, str]] = []
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Support",
+                model=model,
+                instructions="You are a support agent.",
+            ),
+            hooks=(
+                _NamedHooks("first", events),
+                _NamedHooks("second", events),
+            ),
+        )
+
+        result = await agent.run("My order arrived damaged.")
+
+        assert result.final_output == "Thanks, I can help."
+        assert events == [
+            ("first", "agent_start"),
+            ("second", "agent_start"),
+            ("first", "agent_end"),
+            ("second", "agent_end"),
         ]
 
     asyncio.run(scenario())

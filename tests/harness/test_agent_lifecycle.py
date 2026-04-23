@@ -61,6 +61,40 @@ class _NoopShim(Shim):
         return "noop"
 
 
+class _SharedRecordingHooks(RunnerHooks):
+    def __init__(self, name: str, events: list[tuple[str, str]]) -> None:
+        self._name = name
+        self._events = events
+
+    async def on_agent_start(
+        self,
+        task: Task,
+        state: RunState,
+    ) -> None:
+        del task, state
+        self._events.append((self._name, "agent_start"))
+
+    async def on_agent_end(
+        self,
+        task: Task,
+        result: RunResult | None,
+    ) -> None:
+        del task, result
+        self._events.append((self._name, "agent_end"))
+
+
+class _HookShim(Shim):
+    def __init__(self, hook: RunnerHooks) -> None:
+        self._hook = hook
+
+    @property
+    def name(self) -> str:
+        return "hook-shim"
+
+    def runner_hooks(self) -> tuple[RunnerHooks, ...]:
+        return (self._hook,)
+
+
 class _RecordingRunner(Runner):
     def __init__(self, *, block_first_turn: bool = False) -> None:
         super().__init__()
@@ -74,7 +108,7 @@ class _RecordingRunner(Runner):
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
         _ = hooks
@@ -102,6 +136,38 @@ class _RecordingRunner(Runner):
             responses=list(state.responses),
             turn_count=state.turn_count,
         )
+
+
+class _HookAwareRecordingRunner(_RecordingRunner):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_hooks: list[RunnerHooks | None] = []
+
+    async def run(
+        self,
+        agent: Task,
+        state: RunState,
+        *,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunResult:
+        if isinstance(hooks, Sequence):
+            raise AssertionError("Lifecycle should pass one resolved hook object.")
+        self.seen_hooks.append(hooks)
+        if hooks is not None:
+            await hooks.on_agent_start(agent, state)
+        result: RunResult | None = None
+        try:
+            result = await super().run(
+                agent,
+                state,
+                hooks=hooks,
+                cancellation_token=cancellation_token,
+            )
+            return result
+        finally:
+            if hooks is not None:
+                await hooks.on_agent_end(agent, result)
 
 
 class _TestableAgent(Agent):
@@ -196,6 +262,56 @@ def test_agent_continues_existing_run_after_idle() -> None:
         assert agent.run_state.history[0] == "first"
         assert agent.run_state.turn_count == 2
         assert len(agent.run_state.responses) == 2
+
+    asyncio.run(scenario())
+
+
+def test_agent_caches_composed_hooks_from_explicit_and_shim_sources() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = _HookAwareRecordingRunner()
+        events: list[tuple[str, str]] = []
+        agent_id = AgentId.from_values("assistant-agent", "session-hooks")
+        Agent.bind(
+            runtime,
+            agent_id,
+            runner=runner,
+            descriptor=AgentDescriptor(
+                name="Planner",
+                instructions="You plan carefully.",
+                shims=(_HookShim(_SharedRecordingHooks("shim", events)),),
+            ),
+            hooks=(
+                _SharedRecordingHooks("explicit-first", events),
+                _SharedRecordingHooks("explicit-second", events),
+            ),
+        )
+
+        first = await runtime.send_message("first", recipient=agent_id)
+        second = await runtime.send_message("second", recipient=agent_id)
+
+        await runtime.stop_when_idle()
+
+        first_result = _require_run_result(first.response_payload)
+        second_result = _require_run_result(second.response_payload)
+        assert first_result.final_output == "Planner:first"
+        assert second_result.final_output == "Planner:second"
+        assert len(runner.seen_hooks) == 2
+        assert runner.seen_hooks[0] is runner.seen_hooks[1]
+        assert events == [
+            ("explicit-first", "agent_start"),
+            ("explicit-second", "agent_start"),
+            ("shim", "agent_start"),
+            ("explicit-first", "agent_end"),
+            ("explicit-second", "agent_end"),
+            ("shim", "agent_end"),
+            ("explicit-first", "agent_start"),
+            ("explicit-second", "agent_start"),
+            ("shim", "agent_start"),
+            ("explicit-first", "agent_end"),
+            ("explicit-second", "agent_end"),
+            ("shim", "agent_end"),
+        ]
 
     asyncio.run(scenario())
 

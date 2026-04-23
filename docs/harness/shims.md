@@ -219,14 +219,29 @@ In that case, override `Shim.bind(...)` and return a custom `BoundShim`
 session. One `Shim` definition may then be reused across many agents without
 leaking mutable state between them.
 
+Bound shims may also contribute additional runner hooks through
+`runner_hooks()`. That is useful when a shim should register tracing, logging,
+database writes, script execution, or other lifecycle-triggered actions
+automatically with the bound agent runtime.
+
 For a runnable example, see
 [examples/harness/default_agent_shims_quickstart](../../examples/harness/default_agent_shims_quickstart/README.md).
 
 ## Boundaries
 
-Shims are meant to change run behavior.
-[`RunnerHooks`](../../src/agentlane/harness/_hooks.py) are not. Hooks remain
-observation-only for tracing, logging, and tests.
+Shims and hooks serve different roles.
+
+[`RunnerHooks`](../../src/agentlane/harness/_hooks.py) are general lifecycle
+callback points. Hook authors may perform whatever application-defined work is
+appropriate at those boundaries, including external actions.
+
+Shims are the dedicated seam for direct harness integration such as prepared
+turn mutation, message transformation, tool augmentation, and persisted
+shim-owned state updates.
+
+That distinction still holds when a shim contributes hooks automatically. A
+shim may register additional hook callbacks, but direct in-harness turn and
+request shaping still belongs on the shim contract itself.
 
 Shims also do not change runtime delivery behavior. They operate inside the
 harness lifecycle and runner after work has already been accepted by a bound

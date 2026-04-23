@@ -6,6 +6,7 @@ from typing import Any
 from agentlane.models import MessageDict, ModelResponse
 from agentlane.models.run import RunContext
 
+from .._hooks import RunnerHooks
 from .._run import RunResult, RunState
 from ._types import PreparedTurn, ShimBindingContext
 
@@ -22,7 +23,7 @@ class BoundShim:
         state: RunState,
         transient_state: RunContext[Any],
     ) -> None:
-        """Observe one run start and optionally mutate the working state."""
+        """Handle one run start and optionally mutate the working state."""
         _ = state
         _ = transient_state
 
@@ -45,7 +46,7 @@ class BoundShim:
         turn: PreparedTurn,
         response: ModelResponse,
     ) -> None:
-        """Observe one completed model response and update shim state."""
+        """Handle one completed model response and update shim state."""
         _ = turn
         _ = response
 
@@ -54,9 +55,13 @@ class BoundShim:
         result: RunResult | None,
         transient_state: RunContext[Any],
     ) -> None:
-        """Observe the end of one run."""
+        """Handle the end of one run."""
         _ = result
         _ = transient_state
+
+    def runner_hooks(self) -> tuple[RunnerHooks, ...]:
+        """Return additional hooks for this bound shim session."""
+        return ()
 
 
 class _ForwardingBoundShim(BoundShim):
@@ -96,6 +101,9 @@ class _ForwardingBoundShim(BoundShim):
     ) -> None:
         await self._shim.on_run_end(result, transient_state)
 
+    def runner_hooks(self) -> tuple[RunnerHooks, ...]:
+        return self._shim.runner_hooks()
+
 
 class Shim(abc.ABC):
     """Definition-time contract for one harness shim.
@@ -124,7 +132,7 @@ class Shim(abc.ABC):
         state: RunState,
         transient_state: RunContext[Any],
     ) -> None:
-        """Observe one run start and optionally mutate the working state."""
+        """Handle one run start and optionally mutate the working state."""
         _ = state
         _ = transient_state
 
@@ -147,7 +155,7 @@ class Shim(abc.ABC):
         turn: PreparedTurn,
         response: ModelResponse,
     ) -> None:
-        """Observe one completed model response and update shim state."""
+        """Handle one completed model response and update shim state."""
         _ = turn
         _ = response
 
@@ -156,6 +164,10 @@ class Shim(abc.ABC):
         result: RunResult | None,
         transient_state: RunContext[Any],
     ) -> None:
-        """Observe the end of one run."""
+        """Handle the end of one run."""
         _ = result
         _ = transient_state
+
+    def runner_hooks(self) -> tuple[RunnerHooks, ...]:
+        """Return additional runner hooks for this shim definition."""
+        return ()

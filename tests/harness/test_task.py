@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Sequence
 
 import agentlane.harness.context as harness_context
 import agentlane.harness.memory as harness_memory
@@ -87,7 +88,7 @@ class _FakeRunner(Runner):
         agent: Task,
         state: RunState,
         *,
-        hooks: RunnerHooks | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
         _ = agent

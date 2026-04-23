@@ -201,8 +201,26 @@ act as a subroutine.
 
 ## Hooks And Retries
 
-[`RunnerHooks`](../../src/agentlane/harness/_hooks.py) let you observe the run
-at meaningful points such as agent start and end, model calls, and tool calls.
+[`RunnerHooks`](../../src/agentlane/harness/_hooks.py) give you lifecycle
+callback points during the run, such as agent start and end, model calls, and
+tool calls.
+
+What a hook does at those points is up to the author. Common uses include
+tracing, logging, metrics, policy checks, database writes, script execution,
+and other application-specific side effects.
+
+Public hook inputs accept either one hook instance or an ordered sequence of
+hooks. When more than one hook is present, the harness composes them
+internally and forwards callbacks in order.
+
+For bound agents, that composition is resolved once per concrete agent
+instance:
+
+1. explicit developer-supplied hooks run first, in the order provided
+2. shim-contributed hooks run second, in shim descriptor order
+
+That keeps the runner model simple. It still receives one resolved hook object
+for the run, even when several hook implementations are active behind it.
 
 The runner can also add an outer retry layer. That retry is intentionally
 narrow. Provider-specific retries still belong in the model client layer.
