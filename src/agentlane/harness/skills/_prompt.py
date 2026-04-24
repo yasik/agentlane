@@ -11,13 +11,6 @@ DEFAULT_SKILLS_SYSTEM_PROMPT = """
 You have access to the following skills that provide specialized instructions for specific tasks.
 When a task matches a skill's description, call the {{ tool_name }} tool with the skill's name to load its full instructions.
 
-Typical workflow:
-User: "A customer wants to know whether a damaged package still qualifies for a refund."
-1. Compare the user's request to the available skill descriptions.
-2. Notice that the refund-policy skill matches and call {{ tool_name }} with "refund-policy".
-3. Read the returned <skill_content> instructions and follow that workflow.
-4. Use any listed <skill_resources> paths relative to the skill directory when you need supporting files.
-
 <available_skills>
 {% for skill in skills %}
   <skill>

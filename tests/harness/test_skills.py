@@ -562,27 +562,6 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
             in system_prompt
         )
         assert "<location>/skills/refund-policy/SKILL.md</location>" in system_prompt
-        assert "Typical workflow:" in system_prompt
-        assert (
-            'User: "A customer wants to know whether a damaged package still qualifies for a refund."'
-            in system_prompt
-        )
-        assert (
-            "1. Compare the user's request to the available skill descriptions."
-            in system_prompt
-        )
-        assert (
-            '2. Notice that the refund-policy skill matches and call activate_skill with "refund-policy".'
-            in system_prompt
-        )
-        assert (
-            "3. Read the returned <skill_content> instructions and follow that workflow."
-            in system_prompt
-        )
-        assert (
-            "4. Use any listed <skill_resources> paths relative to the skill directory when you need supporting files."
-            in system_prompt
-        )
         assert "</skills_system>" in system_prompt
         assert model.calls[0][1] == {
             "role": "user",
@@ -826,11 +805,6 @@ def test_skill_catalog_load_delegates_to_loader() -> None:
 
     assert result is loaded_skill
     assert loader.load_calls == ["refund-policy"]
-
-
-# ---------------------------------------------------------------------------
-# Prompt rendering unit tests
-# ---------------------------------------------------------------------------
 
 
 def test_render_skills_system_prompt_includes_skill_metadata() -> None:
