@@ -1,6 +1,7 @@
 # Default Agent Skills Quickstart
 
-This example shows the first harness-native skills flow.
+This example shows a broader harness-native skills flow paired with
+`RunnerHooks`.
 
 It keeps the core agent surface unchanged and adds a local skills library
 through `SkillsShim`, which is attached via `AgentDescriptor.shims`.
@@ -9,7 +10,15 @@ The script uses:
 
 1. a local `skills/` directory beside the example,
 2. an explicit `FilesystemSkillLoader`,
-3. one `SkillsShim` that exposes `activate_skill(name: str)` to the model.
+3. one `SkillsShim` that exposes `activate_skill(name: str)` to the model,
+4. one `RunnerHooks` implementation that logs lifecycle and skill-activation
+   events.
+
+The bundled example catalog contains:
+
+1. `refund-policy`
+2. `damaged-shipment`
+3. `warranty-coverage`
 
 ## Run
 
@@ -19,11 +28,14 @@ OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_skills_quicks
 
 ## What It Shows
 
-1. local skill discovery through the default filesystem loader
+1. local discovery of several support skills through the filesystem loader
 2. `SkillsShim` as a normal first-party shim
 3. one skills instruction block merged into the effective system instructions
 4. a catalog with skill name, description, and `SKILL.md` location
 5. model-driven activation through the normal tool loop
-6. `<skill_content>` payloads returned through the tool loop
-7. activated skill state persisted in `RunState.shim_state`
-8. later turns continuing with the same skill-aware run state
+6. `RunnerHooks` logging agent start and finish, model boundaries, and
+   `activate_skill` activity
+7. `<skill_content>` payloads returned through the tool loop
+8. activated skill state persisted in `RunState.shim_state`
+9. the final effective system instruction printed at the end of the demo
+10. later turns continuing with the same multi-skill-aware run state

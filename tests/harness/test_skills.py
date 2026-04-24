@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 from pytest import LogCaptureFixture, MonkeyPatch
 
-from agentlane.harness import AgentDescriptor, ShimState
+from agentlane.harness import (
+    AgentDescriptor,
+    RunnerHooks,
+    RunResult,
+    RunState,
+    ShimState,
+    Task,
+)
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.skills import (
     FilesystemSkillLoader,
@@ -130,6 +137,54 @@ class _EmptySkillLoader(SkillLoader):
 
     async def load(self, name: str) -> LoadedSkill:
         raise KeyError(name)
+
+
+class _SkillActivationRecordingHooks(RunnerHooks):
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []
+
+    async def on_agent_start(
+        self,
+        task: Task,
+        state: RunState,
+    ) -> None:
+        del state
+        self.events.append(("agent_start", getattr(task, "name", type(task).__name__)))
+
+    async def on_tool_call_start(
+        self,
+        task: Task,
+        tool_call: ToolCall,
+    ) -> None:
+        del task
+        if tool_call.function.name != "activate_skill":
+            return
+        self.events.append(("tool_start", tool_call.function.arguments))
+
+    async def on_tool_call_end(
+        self,
+        task: Task,
+        tool_call: ToolCall,
+        result: object,
+    ) -> None:
+        del task
+        if tool_call.function.name != "activate_skill":
+            return
+        status = (
+            "loaded"
+            if isinstance(result, str) and "<skill_content" in result
+            else "other"
+        )
+        self.events.append(("tool_end", status))
+
+    async def on_agent_end(
+        self,
+        task: Task,
+        result: RunResult | None,
+    ) -> None:
+        del task
+        final_output = "" if result is None else str(result.final_output)
+        self.events.append(("agent_end", final_output))
 
 
 def _write_skill(
@@ -565,6 +620,58 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
         assert agent.run_state.shim_state == {
             "skills:active-skill-names": ["refund-policy"],
         }
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_activation_is_visible_to_runner_hooks() -> None:
+    loaded_skill = LoadedSkill(
+        manifest=SkillManifest(
+            name="refund-policy",
+            description="Explain refund and return policy.",
+            skill_file=Path("/skills/refund-policy/SKILL.md"),
+            root=Path("/skills/refund-policy"),
+        ),
+        instructions="# Refund Policy\n\nUse this skill for refund questions.",
+        resources=(),
+    )
+    loader = _MemorySkillLoader(loaded_skill)
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "refund-policy"}),
+                    )
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    hooks = _SkillActivationRecordingHooks()
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(SkillsShim(loader=loader),),
+        ),
+        hooks=hooks,
+    )
+
+    async def scenario() -> None:
+        result = await agent.run("Can I still return my order?")
+
+        assert result.final_output == "done"
+        assert hooks.events == [
+            ("agent_start", "Support"),
+            ("tool_start", '{"name": "refund-policy"}'),
+            ("tool_end", "loaded"),
+            ("agent_end", "done"),
+        ]
 
     asyncio.run(scenario())
 

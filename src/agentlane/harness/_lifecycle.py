@@ -367,26 +367,6 @@ class AgentLifecycle:
         """Return the cached resolved runner hooks, if already bound."""
         return self._resolved_hooks
 
-    async def ensure_bound_extensions(self, *, agent: Task) -> None:
-        """Bind shims and resolve the cached hook composition once."""
-        if self._bound_shim_manager is not None:
-            return
-
-        async with self._bind_lock:
-            if self._bound_shim_manager is not None:
-                return
-
-            self._bound_shim_manager = await BoundShimManager.bind(
-                shims=self._descriptor.shims,
-                context=ShimBindingContext(
-                    task=agent,
-                ),
-            )
-            self._resolved_hooks = coerce_runner_hooks(
-                self._configured_hooks,
-                self._bound_shim_manager.runner_hooks,
-            )
-
     async def enqueue_input(
         self,
         *,
@@ -402,7 +382,7 @@ class AgentLifecycle:
         If the agent is already running, the input is simply appended; the
         active drainer will pick it up after the current turn finishes.
         """
-        await self.ensure_bound_extensions(agent=agent)
+        await self._ensure_bound_extensions(agent=agent)
         queued_input = _QueuedRunInput(
             run_input=run_input,
             future=get_running_loop().create_future(),
@@ -436,7 +416,7 @@ class AgentLifecycle:
         cancellation_token: CancellationToken | None = None,
     ) -> RunStream:
         """Queue one streamed run input and return its live stream handle."""
-        await self.ensure_bound_extensions(agent=agent)
+        await self._ensure_bound_extensions(agent=agent)
         internal_token = CancellationToken()
         stream = RunStream(on_close=internal_token.cancel)
         relay_task = cancellation_relay_task(
@@ -467,6 +447,26 @@ class AgentLifecycle:
             drain_task.add_done_callback(_consume_drain_task_result)
 
         return stream
+
+    async def _ensure_bound_extensions(self, *, agent: Task) -> None:
+        """Bind shims and resolve the cached hook composition once."""
+        if self._bound_shim_manager is not None:
+            return
+
+        async with self._bind_lock:
+            if self._bound_shim_manager is not None:
+                return
+
+            self._bound_shim_manager = await BoundShimManager.bind(
+                shims=self._descriptor.shims,
+                context=ShimBindingContext(
+                    task=agent,
+                ),
+            )
+            self._resolved_hooks = coerce_runner_hooks(
+                self._configured_hooks,
+                self._bound_shim_manager.runner_hooks,
+            )
 
     async def _drain_pending_inputs(
         self,

@@ -72,6 +72,51 @@ content already visible to the model.
 Repeated activation of the same skill returns a plain tool-result message
 instead of injecting the same skill content again.
 
+## Hooks Around Skill Activation
+
+`activate_skill` is a normal tool contributed by `SkillsShim`.
+
+That means standard [`RunnerHooks`](../../src/agentlane/harness/_hooks.py)
+can react to skill loading the same way they react to any other tool call.
+Applications can use that for logging, tracing, metering, audits, policy
+checks, or other workflow-specific side effects.
+
+Example:
+
+```python
+class SkillLoggingHooks(RunnerHooks):
+    async def on_agent_start(
+        self,
+        task: Task,
+        state: RunState,
+    ) -> None:
+        logger.info("agent_started", agent=task.name, next_turn=state.turn_count + 1)
+
+    async def on_tool_call_start(
+        self,
+        task: Task,
+        tool_call: ToolCall,
+    ) -> None:
+        if tool_call.function.name == "activate_skill":
+            logger.info("skill_activation_started", tool_call_id=tool_call.id)
+
+    async def on_agent_end(
+        self,
+        task: Task,
+        result: RunResult | None,
+    ) -> None:
+        logger.info("agent_finished", agent=task.name)
+```
+
+Pass that hook into the agent exactly like any other runner hook:
+
+```python
+agent = DefaultAgent(
+    descriptor=descriptor,
+    hooks=SkillLoggingHooks(),
+)
+```
+
 ## Loader Interface
 
 The harness does not hard-code the filesystem as the only source of skills.
@@ -170,3 +215,5 @@ shim = SkillsShim(
 
 For a runnable example, see
 [examples/harness/default_agent_skills_quickstart](../../examples/harness/default_agent_skills_quickstart/README.md).
+That quickstart includes several support skills and a logging hook that records
+agent lifecycle events and `activate_skill` calls during a real run.
