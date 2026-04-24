@@ -1,7 +1,7 @@
 # Default Agent Skills Quickstart
 
 This example shows a broader harness-native skills flow paired with
-`RunnerHooks`.
+`RunnerHooks`, using a clinical case-review scenario.
 
 It keeps the core agent surface unchanged and adds a local skills library
 through `SkillsShim`, which is attached via `AgentDescriptor.shims`.
@@ -16,9 +16,9 @@ The script uses:
 
 The bundled example catalog contains:
 
-1. `refund-policy`
-2. `damaged-shipment`
-3. `warranty-coverage`
+1. `acute-chest-pain`
+2. `drug-reaction-triage`
+3. `thyrotoxicosis-patterns`
 
 ## Run
 
@@ -28,7 +28,7 @@ OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_skills_quicks
 
 ## What It Shows
 
-1. local discovery of several support skills through the filesystem loader
+1. local discovery of several clinical-case skills through the filesystem loader
 2. `SkillsShim` as a normal first-party shim
 3. one skills instruction block merged into the effective system instructions
 4. a catalog with skill name, description, and `SKILL.md` location

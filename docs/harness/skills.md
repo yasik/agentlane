@@ -215,5 +215,5 @@ shim = SkillsShim(
 
 For a runnable example, see
 [examples/harness/default_agent_skills_quickstart](../../examples/harness/default_agent_skills_quickstart/README.md).
-That quickstart includes several support skills and a logging hook that records
-agent lifecycle events and `activate_skill` calls during a real run.
+That quickstart includes several clinical-case skills and a logging hook that
+records agent lifecycle events and `activate_skill` calls during a real run.

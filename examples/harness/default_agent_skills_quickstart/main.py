@@ -1,4 +1,4 @@
-"""Real OpenAI-backed quickstart for harness skills and hooks."""
+"""Real OpenAI-backed quickstart for clinical-case skills and hooks."""
 
 import asyncio
 import json
@@ -32,9 +32,9 @@ from agentlane.models import (
 MODEL_NAME = "gpt-5.4-mini"
 SKILLS_ROOT = Path(__file__).resolve().parent / "skills"
 SKILL_NAMES = (
-    "damaged-shipment",
-    "refund-policy",
-    "warranty-coverage",
+    "acute-chest-pain",
+    "drug-reaction-triage",
+    "thyrotoxicosis-patterns",
 )
 LOGGER = structlog.get_logger("agentlane.examples.skills")
 
@@ -206,14 +206,16 @@ class SkillLifecycleLoggingHooks(RunnerHooks):
         )
 
 
-class SupportAgent(DefaultAgent):
+class ClinicalReasoningAgent(DefaultAgent):
     descriptor = AgentDescriptor(
-        name="Acme Support",
+        name="Clinical Case Review",
         model=MODEL,
         model_args={"reasoning_effort": "low"},
         instructions=(
-            "You are Acme support. Keep replies short, practical, and grounded "
-            "in the available policy guidance."
+            "You are a physician-facing clinical reasoning assistant. Keep "
+            "replies concise, surface the highest-risk causes that must be "
+            "excluded first, and suggest focused next questions or tests. "
+            "Do not imply certainty when the case data is incomplete."
         ),
         shims=(
             SkillsShim(
@@ -238,19 +240,19 @@ async def run_demo() -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO)
     )
 
-    agent = SupportAgent(hooks=SkillLifecycleLoggingHooks())
+    agent = ClinicalReasoningAgent(hooks=SkillLifecycleLoggingHooks())
 
     prompts = (
-        "A customer wants to return unopened headphones 21 days after delivery. What should I tell them?",
-        "Another customer says the coffee maker arrived cracked. What is the fastest supported resolution path?",
-        "A speaker stopped charging after 18 months. Is that still covered, and what is the next step?",
+        "A 64-year-old has crushing substernal chest pain radiating to the left arm with diaphoresis and nausea. What are the most urgent causes and immediate next steps?",
+        "A 27-year-old developed diffuse hives, wheezing, and lip swelling 30 minutes after starting amoxicillin. What is the most likely cause and what should be done first?",
+        "A 33-year-old has weight loss, tremor, heat intolerance, and palpitations over two months. What unifying diagnosis fits best and what focused tests would you order next?",
     )
-    print("Example: default agent skills quickstart")
+    print("Example: clinical case skills quickstart")
     print(f"Model: {MODEL_NAME}")
     print(f"Skills: {', '.join(SKILL_NAMES)}")
     print()
     for prompt in prompts:
-        print(f"User: {prompt}")
+        print(f"Case: {prompt}")
         result = await agent.run(prompt)
         print(f"Assistant: {result.final_output}")
         print()
