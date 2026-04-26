@@ -1,0 +1,1 @@
+"""Find tool implementation placeholder."""

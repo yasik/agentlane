@@ -1,0 +1,1 @@
+"""Grep tool implementation placeholder."""

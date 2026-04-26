@@ -1,0 +1,1 @@
+"""Ls tool implementation placeholder."""

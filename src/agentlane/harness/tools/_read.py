@@ -1,0 +1,1 @@
+"""Read tool implementation placeholder."""

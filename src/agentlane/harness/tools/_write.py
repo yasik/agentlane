@@ -1,0 +1,1 @@
+"""Write tool implementation placeholder."""

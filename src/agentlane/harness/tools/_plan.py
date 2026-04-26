@@ -1,0 +1,1 @@
+"""Plan tool implementation placeholder."""
