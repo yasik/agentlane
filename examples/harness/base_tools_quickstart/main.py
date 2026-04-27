@@ -12,13 +12,14 @@ from agentlane_openai import ResponsesClient
 
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.tools import HarnessToolsShim, read_tool
+from agentlane.harness.tools import HarnessToolsShim, read_tool, write_tool
 from agentlane.models import Config, ToolCall, Tools
 
 MODEL_NAME = "gpt-5.4-mini"
-WORKSPACE_FILE = "inventory_note.txt"
+WORKSPACE_FILE = "restock_note.md"
 WORKSPACE_TEXT = """\
-Restock note:
+# Restock Note
+
 - Product: Acme Field Charger
 - On-hand units: 8
 - Average daily orders: 6
@@ -36,28 +37,36 @@ async def run_demo() -> None:
     api_key = os.environ["OPENAI_API_KEY"]
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
     user_prompt = (
-        f"Read {WORKSPACE_FILE} and summarize the restock risk in one sentence."
+        f"Create {WORKSPACE_FILE} with exactly this content, then read it back "
+        f"before summarizing the restock risk in one sentence:\n\n{WORKSPACE_TEXT}"
     )
 
     with TemporaryDirectory() as workspace_dir:
         workspace = Path(workspace_dir)
-        (workspace / WORKSPACE_FILE).write_text(WORKSPACE_TEXT, encoding="utf-8")
 
         agent = DefaultAgent(
             descriptor=AgentDescriptor(
-                name="Workspace Reader",
+                name="Workspace Agent",
                 model=model,
                 model_args={"reasoning_effort": "low"},
                 instructions=(
-                    "You inspect files in a local workspace. "
-                    "Call `read` before answering and answer only from the file."
+                    "You create and inspect files in a local workspace. "
+                    "Call `write` to create requested files, then call `read` "
+                    "before answering from the file."
                 ),
                 tools=Tools(
                     tools=[],
                     tool_choice="required",
-                    tool_call_limits={"read": 1},
+                    tool_call_limits={"write": 1, "read": 1},
                 ),
-                shims=(HarnessToolsShim((read_tool(cwd=workspace),)),),
+                shims=(
+                    HarnessToolsShim(
+                        (
+                            read_tool(cwd=workspace),
+                            write_tool(cwd=workspace),
+                        )
+                    ),
+                ),
             )
         )
 
@@ -66,17 +75,16 @@ async def run_demo() -> None:
         if run_state is None:
             raise RuntimeError("Expected the default agent to persist run state.")
 
-    tool_name = "not found"
-    tool_arguments = "not found"
+    tool_calls_seen: list[str] = []
     for response in run_state.responses:
         tool_calls = cast(list[ToolCall], response.choices[0].message.tool_calls or [])
-        if not tool_calls:
-            continue
-        tool_name = tool_calls[0].function.name or "not found"
-        tool_arguments = tool_calls[0].function.arguments or "not found"
-        break
+        for tool_call in tool_calls:
+            tool_calls_seen.append(
+                f"{tool_call.function.name or 'not found'}: "
+                f"{tool_call.function.arguments or 'not found'}"
+            )
 
-    tool_output = "not found"
+    tool_outputs: list[str] = []
     for item in run_state.history:
         if not isinstance(item, dict):
             continue
@@ -84,8 +92,7 @@ async def run_demo() -> None:
         if message.get("role") != "tool":
             continue
         content = message.get("content")
-        tool_output = content if isinstance(content, str) else str(content)
-        break
+        tool_outputs.append(content if isinstance(content, str) else str(content))
 
     print("Example: base tools quickstart")
     print(f"Model: {MODEL_NAME}")
@@ -94,9 +101,13 @@ async def run_demo() -> None:
     print()
     print(f"Assistant: {result.final_output}")
     print()
-    print(f"Tool called: {tool_name}")
-    print(f"Tool arguments: {tool_arguments}")
-    print(f"Tool result: {tool_output}")
+    print("Tool calls:")
+    for tool_call in tool_calls_seen:
+        print(f"- {tool_call}")
+    print()
+    print("Tool results:")
+    for tool_output in tool_outputs:
+        print(tool_output)
     print(f"Turns completed: {run_state.turn_count}")
 
 

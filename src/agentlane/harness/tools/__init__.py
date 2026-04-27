@@ -17,6 +17,7 @@ from ._paths import ToolPathResolver
 from ._read import read_tool
 from ._shim import HarnessToolsShim, base_harness_tools
 from ._types import HarnessToolDefinition
+from ._write import write_tool
 
 __all__ = [
     "BASH_MAX_BYTES",
@@ -35,4 +36,5 @@ __all__ = [
     "base_harness_tools",
     "read_tool",
     "truncate_output",
+    "write_tool",
 ]
