@@ -8,7 +8,7 @@ optional prompt metadata for `HarnessToolsShim`.
 ## Import Path
 
 ```python
-from agentlane.harness.tools import HarnessToolsShim, read_tool
+from agentlane.harness.tools import HarnessToolsShim, plan_tool, read_tool
 ```
 
 ## Tool Definitions
@@ -44,7 +44,7 @@ descriptor = AgentDescriptor(
 ```
 
 `base_harness_tools()` returns the current standard tool set. It contains
-`read`.
+`read` and `write_plan`.
 
 ## Path Policy
 
@@ -101,3 +101,41 @@ The tool returns clear text errors for directories, missing files, likely binary
 files, invalid offsets, invalid limits, and unreadable paths. Invalid UTF-8 byte
 sequences are decoded with replacement characters so the model can still use
 the surrounding text.
+
+## plan
+
+`plan_tool()` exposes a `write_plan` tool for creating or replacing the current
+task plan.
+
+Parameters:
+
+1. `task: str`
+2. `items: list[PlanItem]`
+3. `explanation: str | None = None`
+
+Each plan item has:
+
+1. `step: str`
+2. `status: "pending" | "in_progress" | "completed"`
+
+Each call replaces the previous plan. Partial item updates are intentionally
+not part of the Phase 11 contract. At most one item may be `in_progress`.
+
+Example tool result:
+
+```text
+Plan: Ship plan tool
+
+- [x] Inspect implementation
+- [~] Add focused tests
+- [ ] Update docs
+
+Status: 1 pending, 1 in progress, 1 completed.
+```
+
+Invalid task text, empty item lists, empty steps, and multiple `in_progress`
+items return concise text errors instead of raising from the tool handler.
+
+When used through `HarnessToolsShim`, the latest validated plan is persisted in
+`RunState.shim_state` under `harness-tools:plan` for the default shim name.
+Custom shim names use the same pattern: `{shim_name}:plan`.

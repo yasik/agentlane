@@ -18,6 +18,7 @@ harness directly.
 11. [handoff_to_returns_specialist](./handoff_to_returns_specialist/): predefined first-class handoff demo where support triage transfers the conversation to a returns specialist.
 12. [default_handoff_takeover](./default_handoff_takeover/): generic `handoff` demo where triage transfers the conversation to a fresh specialist created from `DefaultHandoff(...)`.
 13. [base_tools_quickstart](./base_tools_quickstart/): first-party base tools quickstart exposing only `read` through `HarnessToolsShim`.
+14. [base_tools_plan_quickstart](./base_tools_plan_quickstart/): focused `plan` tool quickstart showing replacement semantics and persisted shim state.
 
 ## Run
 
@@ -38,4 +39,5 @@ uv run python examples/harness/default_agent_tool_note_writer/main.py
 uv run python examples/harness/handoff_to_returns_specialist/main.py
 uv run python examples/harness/default_handoff_takeover/main.py
 uv run python examples/harness/base_tools_quickstart/main.py
+uv run python examples/harness/base_tools_plan_quickstart/main.py
 ```
