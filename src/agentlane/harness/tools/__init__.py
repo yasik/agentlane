@@ -14,6 +14,7 @@ from ._output import (
     truncate_output,
 )
 from ._paths import ToolPathResolver
+from ._read import read_tool
 from ._shim import HarnessToolsShim, base_harness_tools
 from ._types import HarnessToolDefinition
 
@@ -32,5 +33,6 @@ __all__ = [
     "ToolPathResolver",
     "TruncatedOutput",
     "base_harness_tools",
+    "read_tool",
     "truncate_output",
 ]

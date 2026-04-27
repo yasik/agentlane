@@ -18,3 +18,5 @@ Read the page that matches the work you are doing instead of treating
    `__init__.py` usage, and export rules.
 6. [Testing and pull requests](./testing-and-prs.md): test conventions, fixture
    placement, PR expectations, and commit message guidance.
+7. [Tool design](./tool-design.md): first-party tool contracts, model-facing
+   results, error boundaries, docs, examples, and tests.
