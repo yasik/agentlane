@@ -1,10 +1,11 @@
 # Base Tools Quickstart
 
-This example wires the first-party `read` and `write` tools through
+This example wires the first-party `find`, `read`, and `write` tools through
 `HarnessToolsShim`.
 
-It creates a temporary workspace, asks the model to write a file and read it
-back, and prints the assistant answer plus the observed tool calls.
+It creates a temporary workspace, asks the model to write a file, find it,
+read it back, and summarize, then prints the assistant answer plus the
+observed tool calls.
 
 ## Run
 

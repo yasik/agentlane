@@ -1,5 +1,6 @@
 """First-party harness tool definitions and integration helpers."""
 
+from ._find import find_tool
 from ._gitignore import GitignoreMatcher
 from ._output import (
     BASH_MAX_BYTES,
@@ -35,6 +36,7 @@ __all__ = [
     "ToolPathResolver",
     "TruncatedOutput",
     "base_harness_tools",
+    "find_tool",
     "plan_tool",
     "read_tool",
     "truncate_output",
