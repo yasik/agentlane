@@ -9,6 +9,7 @@ from .._run import RunState, ShimState
 from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._find import find_tool
+from ._grep import grep_tool
 from ._plan import plan_state_key, plan_tool
 from ._read import read_tool
 from ._types import HarnessToolDefinition
@@ -115,7 +116,7 @@ class HarnessToolsShim(Shim):
 
 def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
     """Return currently implemented first-party base harness tools."""
-    return (read_tool(), find_tool(), write_tool(), plan_tool())
+    return (read_tool(), find_tool(), grep_tool(), write_tool(), plan_tool())
 
 
 def render_harness_tools_prompt(

@@ -2,6 +2,7 @@
 
 from ._find import find_tool
 from ._gitignore import GitignoreMatcher
+from ._grep import grep_tool
 from ._output import (
     BASH_MAX_BYTES,
     BASH_MAX_LINES,
@@ -37,6 +38,7 @@ __all__ = [
     "TruncatedOutput",
     "base_harness_tools",
     "find_tool",
+    "grep_tool",
     "plan_tool",
     "read_tool",
     "truncate_output",
