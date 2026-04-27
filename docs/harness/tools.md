@@ -328,9 +328,10 @@ Grep respects `.gitignore`, searches hidden files except `.git/`, and relies on
 ripgrep's binary-file filtering when searching directories. Directory searches
 are best effort: binary-file warnings are ignored so matches from other text
 files can still be returned. If the requested path is a binary file, grep
-returns a clear text error. Invalid regular expressions, invalid globs, missing
-paths, empty inputs, invalid contexts, invalid limits, missing ripgrep, and
-unreadable explicit file paths also return clear text errors.
+returns a clear text error. Invalid regular expressions, invalid globs, invalid
+file types, missing paths, empty inputs, invalid contexts, invalid limits,
+missing ripgrep, and unreadable explicit file paths also return clear text
+errors.
 
 ## write
 

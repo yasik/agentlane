@@ -43,6 +43,7 @@ _GENERIC_GREP_ERROR = "failed to search files"
 _RIPGREP_NOT_FOUND_ERROR = "ripgrep executable not found"
 _INVALID_GLOB_ERROR = "invalid glob pattern"
 _INVALID_REGEX_ERROR = "invalid regex pattern"
+_INVALID_FILE_TYPE_ERROR = "invalid file type"
 _NO_MATCHES = "No matches."
 
 JsonObject = dict[str, object]
@@ -474,6 +475,8 @@ def _detect_text_error(output: str) -> str | None:
         return _INVALID_REGEX_ERROR
     if output.startswith("rg: error parsing glob "):
         return _INVALID_GLOB_ERROR
+    if output.startswith("rg: unrecognized file type:"):
+        return _INVALID_FILE_TYPE_ERROR
     return None
 
 

@@ -1506,6 +1506,27 @@ def test_grep_tool_reports_invalid_glob(tmp_path: Path) -> None:
     assert result == "invalid glob pattern"
 
 
+@pytest.mark.parametrize(
+    "output_mode",
+    ["content", "files_with_matches", "count"],
+)
+def test_grep_tool_reports_invalid_file_type(
+    tmp_path: Path,
+    output_mode: str,
+) -> None:
+    (tmp_path / "notes.txt").write_text("needle\n", encoding="utf-8")
+
+    result = _run_grep(
+        grep_tool(cwd=tmp_path),
+        pattern="needle",
+        path=".",
+        outputMode=output_mode,
+        type="notatype",
+    )
+
+    assert result == "invalid file type"
+
+
 def test_grep_tool_reports_missing_ripgrep_executable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
