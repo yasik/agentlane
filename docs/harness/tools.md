@@ -8,7 +8,7 @@ optional prompt metadata for `HarnessToolsShim`.
 ## Import Path
 
 ```python
-from agentlane.harness.tools import HarnessToolsShim, plan_tool, read_tool
+from agentlane.harness.tools import HarnessToolsShim, plan_tool, read_tool, write_tool
 ```
 
 ## Tool Definitions
@@ -16,7 +16,7 @@ from agentlane.harness.tools import HarnessToolsShim, plan_tool, read_tool
 Tool helpers return definitions, not raw model tools:
 
 ```python
-definition = read_tool(cwd=WORKSPACE)
+definition = write_tool(cwd=WORKSPACE)
 tool = definition.tool
 ```
 
@@ -31,20 +31,30 @@ the definitions' prompt metadata to the first turn's system instructions:
 
 ```python
 from agentlane.harness import AgentDescriptor
-from agentlane.harness.tools import HarnessToolsShim, read_tool
+from agentlane.harness.tools import HarnessToolsShim, read_tool, write_tool
 from agentlane.models import Tools
 
 descriptor = AgentDescriptor(
-    name="Workspace Reader",
+    name="Workspace Agent",
     model=model,
-    instructions="Read files before answering workspace questions.",
-    tools=Tools(tools=[], tool_choice="required", tool_call_limits={"read": 1}),
-    shims=(HarnessToolsShim((read_tool(cwd=WORKSPACE),)),),
+    instructions="Use workspace tools before answering workspace questions.",
+    tools=Tools(
+        tools=[],
+        tool_call_limits={"read": 1, "write": 1},
+    ),
+    shims=(
+        HarnessToolsShim(
+            (
+                read_tool(cwd=WORKSPACE),
+                write_tool(cwd=WORKSPACE),
+            )
+        ),
+    ),
 )
 ```
 
 `base_harness_tools()` returns the current standard tool set. It contains
-`read` and `update_plan`.
+`read`, `write`, and `update_plan`.
 
 ## Path Policy
 
@@ -101,6 +111,33 @@ The tool returns clear text errors for directories, missing files, likely binary
 files, invalid offsets, invalid limits, and unreadable paths. Invalid UTF-8 byte
 sequences are decoded with replacement characters so the model can still use
 the surrounding text.
+
+## write
+
+`write_tool()` exposes a `write` tool for creating or overwriting UTF-8 text
+files.
+
+Parameters:
+
+1. `path: str`
+2. `content: str`
+
+Example tool result:
+
+```text
+Wrote 128 bytes to /workspace/notes.txt.
+```
+
+The tool creates parent directories automatically. Existing files are replaced
+through a sibling temporary file where practical.
+
+Use `write` for new files or complete rewrites. It does not provide append mode
+or precise patch operations.
+
+The tool returns clear text errors for empty paths, paths containing null bytes,
+directory targets, parent paths that are files, invalid UTF-8 content,
+permission failures, and other failed writes. Unexpected implementation errors
+return a stable generic failure message so the agent loop can continue.
 
 ## plan
 

@@ -18,6 +18,7 @@ from ._plan import plan_tool
 from ._read import read_tool
 from ._shim import HarnessToolsShim, base_harness_tools
 from ._types import HarnessToolDefinition
+from ._write import write_tool
 
 __all__ = [
     "BASH_MAX_BYTES",
@@ -37,4 +38,5 @@ __all__ = [
     "plan_tool",
     "read_tool",
     "truncate_output",
+    "write_tool",
 ]

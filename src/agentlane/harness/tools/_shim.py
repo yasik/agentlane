@@ -11,6 +11,7 @@ from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._plan import plan_state_key, plan_tool
 from ._read import read_tool
 from ._types import HarnessToolDefinition
+from ._write import write_tool
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
 _PLAN_TOOL_NAME = "update_plan"
@@ -113,7 +114,7 @@ class HarnessToolsShim(Shim):
 
 def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
     """Return currently implemented first-party base harness tools."""
-    return (read_tool(), plan_tool())
+    return (read_tool(), write_tool(), plan_tool())
 
 
 def render_harness_tools_prompt(
