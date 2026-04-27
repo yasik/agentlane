@@ -113,3 +113,5 @@ The sections above define the working model. Use the docs under
   package layout, `__init__.py`, and export rules.
 - [`docs/code-style/testing-and-prs.md`](docs/code-style/testing-and-prs.md):
   test naming, fixtures, PR expectations, and commit message guidance.
+- [`docs/code-style/tool-design.md`](docs/code-style/tool-design.md): tool
+  contracts, model-facing results, error boundaries, docs, examples, and tests.

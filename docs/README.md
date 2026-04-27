@@ -85,12 +85,14 @@ mental model:
 6. If you want to understand the first shim-driven extension module, read
    [Harness Skills](./harness/skills.md) after
    [Harness Shims](./harness/shims.md).
-7. If you want to understand prompt construction or tool exposure, read
+7. If you want first-party local workspace tools, read
+   [Harness Tools](./harness/tools.md).
+8. If you want to understand prompt construction or tool exposure, read
    [Models Overview](./models/overview.md) and
    [Models: Prompt Templating](./models/prompt-templating.md).
-8. If you specifically want streaming, read [Models Overview](./models/overview.md)
+9. If you specifically want streaming, read [Models Overview](./models/overview.md)
    first, then [Harness Default Agents](./harness/default-agents.md).
-9. Run one of the examples under [examples/](../examples/README.md).
+10. Run one of the examples under [examples/](../examples/README.md).
 
 ## Contents
 
@@ -121,7 +123,8 @@ mental model:
 4. [Default Agents](./harness/default-agents.md)
 5. [Shims](./harness/shims.md)
 6. [Skills](./harness/skills.md)
-7. [Runner](./harness/runner.md)
+7. [Tools](./harness/tools.md)
+8. [Runner](./harness/runner.md)
 
 ### Tracing
 

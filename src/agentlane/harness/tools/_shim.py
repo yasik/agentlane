@@ -8,6 +8,7 @@ from agentlane.models.run import RunContext
 from .._run import RunState
 from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
+from ._read import read_tool
 from ._types import HarnessToolDefinition
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
@@ -81,12 +82,8 @@ class HarnessToolsShim(Shim):
 
 
 def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
-    """Return currently implemented first-party base harness tools.
-
-    Individual tool slices will add their definitions here as they are
-    implemented.
-    """
-    return ()
+    """Return currently implemented first-party base harness tools."""
+    return (read_tool(),)
 
 
 def render_harness_tools_prompt(
