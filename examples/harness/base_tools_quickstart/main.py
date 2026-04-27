@@ -12,7 +12,13 @@ from agentlane_openai import ResponsesClient
 
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.tools import HarnessToolsShim, find_tool, read_tool, write_tool
+from agentlane.harness.tools import (
+    HarnessToolsShim,
+    find_tool,
+    grep_tool,
+    read_tool,
+    write_tool,
+)
 from agentlane.models import Config, ToolCall, Tools
 
 MODEL_NAME = "gpt-5.4-mini"
@@ -24,6 +30,7 @@ WORKSPACE_TEXT = """\
 - On-hand units: 8
 - Average daily orders: 6
 - Supplier lead time: 5 days
+TODO: confirm expedited supplier availability before Friday.
 """
 
 
@@ -38,8 +45,9 @@ async def run_demo() -> None:
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
     user_prompt = (
         f"Create {WORKSPACE_FILE} with exactly this content, then locate it "
-        "with the find tool, read it back, and summarize the restock risk in "
-        f"one sentence:\n\n{WORKSPACE_TEXT}"
+        "with the find tool, use grep to find any TODO items inside it, read "
+        "it back, and summarize the restock risk in one sentence:\n\n"
+        f"{WORKSPACE_TEXT}"
     )
 
     with TemporaryDirectory() as workspace_dir:
@@ -52,19 +60,26 @@ async def run_demo() -> None:
                 model_args={"reasoning_effort": "low"},
                 instructions=(
                     "You create and inspect files in a local workspace. "
-                    "Call `write` to create requested files, `find` to "
-                    "locate them, and `read` before answering from the file."
+                    "Call `write` to create requested files, `find` to locate "
+                    "them, `grep` to search inside text, and `read` before "
+                    "answering from the file."
                 ),
                 tools=Tools(
                     tools=[],
                     tool_choice="required",
-                    tool_call_limits={"write": 1, "find": 1, "read": 1},
+                    tool_call_limits={
+                        "write": 1,
+                        "find": 1,
+                        "grep": 1,
+                        "read": 1,
+                    },
                 ),
                 shims=(
                     HarnessToolsShim(
                         (
                             write_tool(cwd=workspace),
                             find_tool(cwd=workspace),
+                            grep_tool(cwd=workspace),
                             read_tool(cwd=workspace),
                         )
                     ),
@@ -93,8 +108,10 @@ async def run_demo() -> None:
         message = cast(dict[str, object], item)
         if message.get("role") != "tool":
             continue
+        tool_name = message.get("name")
         content = message.get("content")
-        tool_outputs.append(content if isinstance(content, str) else str(content))
+        tool_output = content if isinstance(content, str) else str(content)
+        tool_outputs.append(f"{tool_name}: {tool_output}")
 
     print("Example: base tools quickstart")
     print(f"Model: {MODEL_NAME}")
@@ -108,8 +125,7 @@ async def run_demo() -> None:
         print(f"- {tool_call}")
     print()
     print("Tool results:")
-    for tool_output in tool_outputs:
-        print(tool_output)
+    print("\n\n".join(tool_outputs) if tool_outputs else "not found")
     print(f"Turns completed: {run_state.turn_count}")
 
 

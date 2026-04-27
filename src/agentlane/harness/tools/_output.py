@@ -1,6 +1,7 @@
 """Shared output limits and truncation helpers for harness tools."""
 
 from dataclasses import dataclass
+from pathlib import Path
 
 TEXT_MAX_LINES = 2000
 """Maximum number of text-file lines returned by default."""
@@ -81,3 +82,14 @@ def _trim_to_utf8_limit(text: str, *, max_bytes: int, tail: bool) -> str:
 
     trimmed = encoded[-max_bytes:] if tail else encoded[:max_bytes]
     return trimmed.decode("utf-8", errors="ignore")
+
+
+def is_likely_binary_file(path: Path, *, sample_size: int = 8192) -> bool:
+    """Return whether a file sample contains binary-only markers."""
+    with path.open("rb") as file:
+        sample = file.read(sample_size)
+
+    if b"\0" in sample:
+        return True
+
+    return False
