@@ -1550,7 +1550,6 @@ def test_grep_tool_rejects_negative_context() -> None:
         args_model(pattern="needle", context=-1)
 
 
-
 def test_find_tool_sanitizes_unexpected_error_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
