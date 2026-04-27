@@ -1,6 +1,6 @@
 # Harness Skills
 
-Skills are the first major first-party capability built on top of
+Skills are a first-party capability built on top of
 [Harness Shims](./shims.md).
 
 They let an agent expose a skills library to the model, activate a matching

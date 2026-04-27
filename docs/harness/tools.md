@@ -8,7 +8,7 @@ optional prompt metadata for `HarnessToolsShim`.
 ## Import Path
 
 ```python
-from agentlane.harness.tools import HarnessToolsShim, read_tool, write_tool
+from agentlane.harness.tools import HarnessToolsShim, plan_tool, read_tool, write_tool
 ```
 
 ## Tool Definitions
@@ -54,7 +54,7 @@ descriptor = AgentDescriptor(
 ```
 
 `base_harness_tools()` returns the current standard tool set. It contains
-`read` and `write`.
+`read`, `write`, and `update_plan`.
 
 ## Path Policy
 
@@ -138,3 +138,36 @@ The tool returns clear text errors for empty paths, paths containing null bytes,
 directory targets, parent paths that are files, invalid UTF-8 content,
 permission failures, and other failed writes. Unexpected implementation errors
 return a stable generic failure message so the agent loop can continue.
+
+## plan
+
+`plan_tool()` exposes an `update_plan` tool for creating or replacing the current
+task plan.
+
+Parameters:
+
+1. `explanation: str | None = None`
+2. `plan: list[PlanItem]`
+
+Each plan item has:
+
+1. `step: str`
+2. `status: "pending" | "in_progress" | "completed"`
+
+Each call replaces the previous plan. Partial item updates are intentionally
+not part of the Phase 11 contract. The model should keep at most one item
+`in_progress`.
+
+Successful model-facing tool result:
+
+```text
+Plan updated
+```
+
+The plan payload itself is intended for clients and shims to render. The tool
+does not echo the full checklist back to the model after a successful update.
+Malformed arguments are rejected by the normal tool argument validation path.
+
+When used through `HarnessToolsShim`, the latest plan update is persisted in
+`RunState.shim_state` under `harness-tools:plan` for the default shim name.
+Custom shim names use the same pattern: `{shim_name}:plan`.

@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import agentlane.harness.tools._read as read_module
 import agentlane.harness.tools._write as write_module
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
+from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     TEXT_MAX_BYTES,
@@ -17,11 +18,13 @@ from agentlane.harness.tools import (
     HarnessToolsShim,
     ToolPathResolver,
     base_harness_tools,
+    plan_tool,
     read_tool,
     truncate_output,
     write_tool,
 )
 from agentlane.models import MessageDict, Model, ModelResponse, Tool, ToolCall, Tools
+from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
 
@@ -53,6 +56,16 @@ def _run_state(*, turn_count: int = 1) -> RunState:
 
 
 def _run_read(definition: HarnessToolDefinition, **arguments: object) -> str:
+    args_model = definition.tool.args_type()
+    return asyncio.run(
+        definition.tool.run(
+            args_model(**arguments),
+            CancellationToken(),
+        )
+    )
+
+
+def _run_plan(definition: HarnessToolDefinition, **arguments: object) -> str:
     args_model = definition.tool.args_type()
     return asyncio.run(
         definition.tool.run(
@@ -136,10 +149,14 @@ class _SequenceModel(Model[ModelResponse]):
         return self._responses.pop(0)
 
 
-def test_base_harness_tools_includes_read_tool() -> None:
+def test_base_harness_tools_includes_current_tool_set() -> None:
     definitions = base_harness_tools()
 
-    assert [definition.tool.name for definition in definitions] == ["read", "write"]
+    assert [definition.tool.name for definition in definitions] == [
+        "read",
+        "write",
+        "update_plan",
+    ]
 
 
 def test_harness_tools_shim_merges_tools_and_appends_prompt_once() -> None:
@@ -204,6 +221,160 @@ def test_harness_tools_shim_rejects_duplicate_tool_names() -> None:
                 HarnessToolDefinition(tool=_tool("read")),
             )
         )
+
+
+def test_plan_tool_updates_plan_with_codex_success_message() -> None:
+    output = _run_plan(
+        plan_tool(),
+        explanation="Track the implementation.",
+        plan=[
+            {"step": "Inspect implementation", "status": "completed"},
+            {"step": "Add tests", "status": "in_progress"},
+            {"step": "Update docs", "status": "pending"},
+        ],
+    )
+
+    assert output == "Plan updated"
+
+
+def test_plan_tool_accepts_pending_completed_and_empty_plans() -> None:
+    assert (
+        _run_plan(
+            plan_tool(),
+            plan=[{"step": "Start", "status": "pending"}],
+        )
+        == "Plan updated"
+    )
+    assert (
+        _run_plan(
+            plan_tool(),
+            plan=[{"step": "Finish", "status": "completed"}],
+        )
+        == "Plan updated"
+    )
+    assert _run_plan(plan_tool(), plan=[]) == "Plan updated"
+
+
+def test_plan_tool_sanitizes_unexpected_error_text() -> None:
+    def raise_unexpected_error(snapshot: dict[str, object]) -> None:
+        del snapshot
+        raise RuntimeError("Traceback (most recent call last): private details")
+
+    output = _run_plan(
+        plan_tool(persist_to=raise_unexpected_error),
+        plan=[{"step": "Start", "status": "pending"}],
+    )
+
+    assert output == "failed to update plan"
+
+
+def test_plan_tool_persists_latest_plan_through_harness_tools_shim() -> None:
+    async def scenario() -> None:
+        shim = HarnessToolsShim((plan_tool(),))
+        bound = await shim.bind(cast(ShimBindingContext, object()))
+        state = _run_state()
+        await bound.on_run_start(state, DefaultRunContext())
+
+        turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+        await bound.prepare_turn(turn)
+        assert turn.tools is not None
+        bound_plan = turn.tools.executable_tools[0]
+        args_model = bound_plan.args_type()
+
+        first = args_model(
+            plan=[{"step": "Start", "status": "in_progress"}],
+        )
+        second = args_model(
+            plan=[{"step": "Finish", "status": "completed"}],
+        )
+
+        await bound_plan.run(first, CancellationToken())
+        assert state.shim_state["harness-tools:plan"] == {
+            "explanation": None,
+            "plan": [{"step": "Start", "status": "in_progress"}],
+        }
+
+        await bound_plan.run(second, CancellationToken())
+        assert state.shim_state["harness-tools:plan"] == {
+            "explanation": None,
+            "plan": [{"step": "Finish", "status": "completed"}],
+        }
+
+    asyncio.run(scenario())
+
+
+def test_plan_tool_runs_through_normal_runner_execution() -> None:
+    async def scenario() -> None:
+        model = _SequenceModel(
+            [
+                _make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_1",
+                            name="update_plan",
+                            arguments=(
+                                '{"plan":['
+                                '{"step":"Create plan","status":"completed"}]}'
+                            ),
+                        )
+                    ],
+                ),
+                _make_assistant_response(content="done"),
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Planner",
+                model=model,
+                instructions="You create plans.",
+                shims=(HarnessToolsShim((plan_tool(),)),),
+            )
+        )
+
+        result = await agent.run("Plan this task.")
+
+        assert result.final_output == "done"
+        run_state = result.run_state
+        if run_state is None:
+            raise AssertionError("Expected DefaultAgent to return run state.")
+        assert run_state.shim_state["harness-tools:plan"] == {
+            "explanation": None,
+            "plan": [{"step": "Create plan", "status": "completed"}],
+        }
+        assert any(
+            isinstance(message, dict)
+            and message["role"] == "tool"
+            and message["name"] == "update_plan"
+            and message["content"] == "Plan updated"
+            for message in run_state.history
+        )
+
+    asyncio.run(scenario())
+
+
+def test_plan_tool_prompt_metadata_renders_through_shim() -> None:
+    async def scenario() -> None:
+        shim = HarnessToolsShim((plan_tool(),))
+        bound = await shim.bind(cast(ShimBindingContext, object()))
+        state = _run_state()
+        turn = PreparedTurn(
+            run_state=state,
+            tools=None,
+            model_args=None,
+        )
+
+        await bound.prepare_turn(turn)
+
+        assert isinstance(state.instructions, str)
+        assert "- update_plan: Update the task plan" in state.instructions
+        assert (
+            "Use `update_plan` to maintain a visible, step-by-step plan"
+            in state.instructions
+        )
+        assert state.instructions.endswith("</default_tools>")
+
+    asyncio.run(scenario())
 
 
 def test_tool_path_resolver_captures_and_normalizes_cwd(tmp_path: Path) -> None:

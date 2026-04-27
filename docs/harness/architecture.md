@@ -150,6 +150,7 @@ later concern.
 Start with [Harness Tasks](./tasks.md) if you need orchestration without an LLM
 loop. Read [Harness Default Agents](./default-agents.md) for the smallest local
 developer surface. Read [Harness Shims](./shims.md) if you need to extend run
-behavior without changing the core harness types. Read [Harness Agents](./agents.md)
-to understand the lower-level addressed agent type. Read [Harness Runner](./runner.md)
-when you want the actual loop behavior.
+behavior without changing the core harness types. Read [Harness Tools](./tools.md)
+for first-party tool definitions and shim integration. Read [Harness Agents](./agents.md)
+to understand the lower-level addressed agent type. Read
+[Harness Runner](./runner.md) when you want the actual loop behavior.

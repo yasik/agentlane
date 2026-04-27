@@ -11,11 +11,12 @@ Use a shim when you need to:
 4. update shim-owned persisted state, or
 5. perform one-call message rewriting as an advanced escape hatch.
 
-This is the mechanism intended for features such as skills, memory, and context
-compaction. Those features should build on this seam instead of adding new
-special-case fields to the core harness types.
+This is the mechanism intended for features such as first-party tools, skills,
+memory, and context compaction. Those features should build on this seam instead
+of adding new special-case fields to the core harness types.
 
-The first major first-party example is [Harness Skills](./skills.md).
+First-party examples include [Harness Tools](./tools.md) and
+[Harness Skills](./skills.md).
 
 ## Import Path
 

@@ -5,14 +5,16 @@ from typing import Any
 
 from agentlane.models.run import RunContext
 
-from .._run import RunState
+from .._run import RunState, ShimState
 from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
+from ._plan import plan_state_key, plan_tool
 from ._read import read_tool
 from ._types import HarnessToolDefinition
 from ._write import write_tool
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
+_PLAN_TOOL_NAME = "update_plan"
 
 
 class _BoundHarnessToolsShim(BoundShim):
@@ -26,7 +28,10 @@ class _BoundHarnessToolsShim(BoundShim):
         prompt_block: str | None,
     ) -> None:
         self._shim_name = shim_name
-        self._definitions = definitions
+        self._current_run_state: RunState | None = None
+        self._definitions = tuple(
+            self._bind_definition(definition) for definition in definitions
+        )
         self._prompt_block = prompt_block
 
     async def on_run_start(
@@ -34,10 +39,11 @@ class _BoundHarnessToolsShim(BoundShim):
         state: RunState,
         transient_state: RunContext[Any],
     ) -> None:
-        del state
         del transient_state
+        self._current_run_state = state
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
+        self._current_run_state = turn.run_state
         executable_tools = tuple(definition.tool for definition in self._definitions)
         turn.tools = merge_tools(turn.tools, executable_tools)
 
@@ -52,6 +58,30 @@ class _BoundHarnessToolsShim(BoundShim):
 
         turn.append_system_instruction(self._prompt_block)
         turn.run_state.shim_state[marker_key] = True
+
+    def _require_shim_state(self) -> ShimState:
+        """Return the persisted shim state for the current run."""
+        if self._current_run_state is None:
+            raise RuntimeError("HarnessToolsShim tool execution requires run state.")
+        return self._current_run_state.shim_state
+
+    def _bind_definition(
+        self,
+        definition: HarnessToolDefinition,
+    ) -> HarnessToolDefinition:
+        """Attach shim-owned state to stateful first-party tools."""
+        if definition.tool.name != _PLAN_TOOL_NAME:
+            return definition
+
+        return plan_tool(
+            persist_to=self._persist_plan,
+            prompt_snippet=definition.prompt_snippet,
+            prompt_guidelines=tuple(definition.prompt_guidelines),
+        )
+
+    def _persist_plan(self, snapshot: dict[str, object]) -> None:
+        """Persist the latest plan snapshot in shim-owned state."""
+        self._require_shim_state()[plan_state_key(self._shim_name)] = snapshot
 
 
 class HarnessToolsShim(Shim):
@@ -84,7 +114,7 @@ class HarnessToolsShim(Shim):
 
 def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
     """Return currently implemented first-party base harness tools."""
-    return (read_tool(), write_tool())
+    return (read_tool(), write_tool(), plan_tool())
 
 
 def render_harness_tools_prompt(
