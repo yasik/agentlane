@@ -8,7 +8,13 @@ optional prompt metadata for `HarnessToolsShim`.
 ## Import Path
 
 ```python
-from agentlane.harness.tools import HarnessToolsShim, plan_tool, read_tool, write_tool
+from agentlane.harness.tools import (
+    HarnessToolsShim,
+    find_tool,
+    plan_tool,
+    read_tool,
+    write_tool,
+)
 ```
 
 ## Tool Definitions
@@ -31,7 +37,12 @@ the definitions' prompt metadata to the first turn's system instructions:
 
 ```python
 from agentlane.harness import AgentDescriptor
-from agentlane.harness.tools import HarnessToolsShim, read_tool, write_tool
+from agentlane.harness.tools import (
+    HarnessToolsShim,
+    find_tool,
+    read_tool,
+    write_tool,
+)
 from agentlane.models import Tools
 
 descriptor = AgentDescriptor(
@@ -40,12 +51,13 @@ descriptor = AgentDescriptor(
     instructions="Use workspace tools before answering workspace questions.",
     tools=Tools(
         tools=[],
-        tool_call_limits={"read": 1, "write": 1},
+        tool_call_limits={"find": 1, "read": 1, "write": 1},
     ),
     shims=(
         HarnessToolsShim(
             (
                 read_tool(cwd=WORKSPACE),
+                find_tool(cwd=WORKSPACE),
                 write_tool(cwd=WORKSPACE),
             )
         ),
@@ -54,7 +66,7 @@ descriptor = AgentDescriptor(
 ```
 
 `base_harness_tools()` returns the current standard tool set. It contains
-`read`, `write`, and `update_plan`.
+`read`, `find`, `write`, and `update_plan`.
 
 ## Path Policy
 
@@ -68,12 +80,14 @@ allowlist, or approval workflow.
 
 ## Output Limits
 
-Text output is capped at 2000 lines or 51200 bytes, whichever limit is reached first.
-Tool results include the resolved absolute path followed by 1-indexed,
-line-numbered rows.
+Text output is capped at shared deterministic limits. `read` output is capped
+at 2000 lines or 51200 bytes, whichever limit is reached first. `find` output
+is capped at 1000 matching paths or 51200 bytes, whichever limit is reached
+first.
 
 Caller-provided limits are applied before the global caps. For large files, call
-`read` repeatedly with `offset` and `limit`.
+`read` repeatedly with `offset` and `limit`. For large search results, narrow
+the `find` pattern or search path.
 
 ## read
 
@@ -111,6 +125,98 @@ The tool returns clear text errors for directories, missing files, likely binary
 files, invalid offsets, invalid limits, and unreadable paths. Invalid UTF-8 byte
 sequences are decoded with replacement characters so the model can still use
 the surrounding text.
+
+## find
+
+`find_tool()` exposes a `find` tool for local file search by glob pattern.
+
+Parameters:
+
+1. `pattern: str`
+2. `path: str | None = None`
+3. `limit: int = 1000`
+
+Example tool result:
+
+```text
+Search directory: /workspace
+README.md
+docs/notes.md
+```
+
+### Pattern semantics
+
+Patterns use path-aware glob matching backed by
+[`wcmatch.glob`](https://facelessuser.github.io/wcmatch/glob/). The matcher is
+compiled with `GLOBSTAR | DOTMATCH | BRACE | IGNORECASE | FORCEUNIX`, which
+means:
+
+- `**` matches zero or more directory segments. Use `**/` for recursive
+  matches (`*.py` is *not* recursive — it matches only top-level files).
+- `{a,b}` brace expansion is supported (`**/*.{ts,tsx}`).
+- Matching is **case-insensitive** on every platform. This keeps results
+  consistent across Linux (case-sensitive) and macOS / Windows
+  (case-insensitive) filesystems.
+- Dotfiles (`.env`, `.gitignore`, etc.) are included unless ignored.
+- Only files are returned, never directories.
+- Leading `./` and `/` are stripped from the pattern, so `/src/*.py` and
+  `./src/*.py` both behave like `src/*.py`.
+
+Examples:
+
+```text
+**/*.py
+**/*.{ts,tsx}
+src/**/*.spec.ts
+```
+
+### Search root, ordering, and traversal
+
+By default `path` is the configured `cwd`. If `path` is provided, output paths
+are relative to that search directory.
+
+Results are sorted by **modification time, newest first**, with ties broken
+alphabetically. This mirrors the ordering used by editor file pickers and is
+the most useful default for "what changed recently?" queries.
+
+Symlinked directories are **not** followed during traversal. This avoids
+cycles and prevents pattern matching from escaping the search directory
+through symlinks.
+
+`find` respects `.gitignore` files from the search root up to the nearest
+repository boundary and always skips `.git/`.
+
+### No-match and truncation
+
+When no files match, the result includes the resolved search directory:
+
+```text
+Search directory: /workspace
+No files matched.
+```
+
+When more files match than the caller-provided `limit` (and `limit` is below
+the 1000 maximum), the result reports the total count and how to recover:
+
+```text
+N files matched; returned first <limit>. Refine the pattern or raise `limit` (max 1000).
+```
+
+When the caller-provided `limit` is at or above the 1000 maximum and there are
+still more matches, the result tells the model the cap was hit:
+
+```text
+N files matched; returned first 1000 (maximum). Refine the pattern or narrow `path`.
+```
+
+When the byte cap is reached, the result reports:
+
+```text
+Output truncated at 51200 bytes; refine the pattern or narrow `path`.
+```
+
+The tool returns clear text errors for empty patterns, empty paths, invalid
+limits, and paths that do not resolve to a directory.
 
 ## write
 
