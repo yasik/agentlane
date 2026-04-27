@@ -44,7 +44,7 @@ descriptor = AgentDescriptor(
 ```
 
 `base_harness_tools()` returns the current standard tool set. It contains
-`read` and `write_plan`.
+`read` and `update_plan`.
 
 ## Path Policy
 
@@ -104,14 +104,13 @@ the surrounding text.
 
 ## plan
 
-`plan_tool()` exposes a `write_plan` tool for creating or replacing the current
+`plan_tool()` exposes an `update_plan` tool for creating or replacing the current
 task plan.
 
 Parameters:
 
-1. `task: str`
-2. `items: list[PlanItem]`
-3. `explanation: str | None = None`
+1. `explanation: str | None = None`
+2. `plan: list[PlanItem]`
 
 Each plan item has:
 
@@ -119,23 +118,19 @@ Each plan item has:
 2. `status: "pending" | "in_progress" | "completed"`
 
 Each call replaces the previous plan. Partial item updates are intentionally
-not part of the Phase 11 contract. At most one item may be `in_progress`.
+not part of the Phase 11 contract. The model should keep at most one item
+`in_progress`.
 
-Example tool result:
+Successful model-facing tool result:
 
 ```text
-Plan: Ship plan tool
-
-- [x] Inspect implementation
-- [~] Add focused tests
-- [ ] Update docs
-
-Status: 1 pending, 1 in progress, 1 completed.
+Plan updated
 ```
 
-Invalid task text, empty item lists, empty steps, and multiple `in_progress`
-items return concise text errors instead of raising from the tool handler.
+The plan payload itself is intended for clients and shims to render. The tool
+does not echo the full checklist back to the model after a successful update.
+Malformed arguments are rejected by the normal tool argument validation path.
 
-When used through `HarnessToolsShim`, the latest validated plan is persisted in
+When used through `HarnessToolsShim`, the latest plan update is persisted in
 `RunState.shim_state` under `harness-tools:plan` for the default shim name.
 Custom shim names use the same pattern: `{shim_name}:plan`.

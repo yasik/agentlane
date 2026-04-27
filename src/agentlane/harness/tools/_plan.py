@@ -1,7 +1,6 @@
 """Plan tool implementation for first-party harness base tools."""
 
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -11,14 +10,14 @@ from agentlane.runtime import CancellationToken
 
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "write_plan"
-_TOOL_DESCRIPTION = (
-    "Creates or replaces a concise task plan with pending, in_progress, and "
-    "completed steps. At most one step may be in_progress."
-)
-_TOOL_PROMPT_SNIPPET = "Create or update a plan based on the user request"
+_TOOL_NAME = "update_plan"
+_TOOL_DESCRIPTION = """Updates the task plan.
+Provide an optional explanation and a list of plan items, each with a step and status.
+At most one step can be in_progress at a time.
+"""
+_TOOL_PROMPT_SNIPPET = "Update the task plan"
 _TOOL_PROMPT_GUIDELINE = """
-Use `write_plan` to maintain a visible, step-by-step plan for non-trivial tasks.
+Use `update_plan` to maintain a visible, step-by-step plan for non-trivial tasks.
 The plan demonstrates your understanding and approach, and gives the user checkpoints for feedback.
 
 **Use a plan when:**
@@ -35,7 +34,8 @@ The plan demonstrates your understanding and approach, and gives the user checkp
 
 ### Plan quality
 
-Steps should be meaningful, logically ordered, and easy to verify. Each step is one sentence, max 5–7 words. Aim for substance over ceremony.
+Steps should be meaningful, logically ordered, and easy to verify. Each step is one sentence,
+max 5–7 words. Aim for substance over ceremony.
 
 Good:
 1. Add CLI entry with file args
@@ -54,13 +54,14 @@ Bad (vague, low-information):
 Each step has a `status`: `pending`, `in_progress`, or `completed`. Exactly one step is `in_progress` until the task is done.
 
 - Mark steps `completed` as you finish them; set the next one `in_progress` in the same call. Multiple completions per call is fine.
-- If the plan changes mid-task, call `write_plan` with the updated plan and include an `explanation` of why.
-- When all steps are done, call `write_plan` once more to mark everything `completed`.
-- After calling `write_plan`, do **not** repeat the plan in your reply — the harness renders it. Briefly note the change or next step instead.
+- If the plan changes mid-task, call `update_plan` with the updated plan and include an `explanation` of why.
+- When all steps are done, call `update_plan` once more to mark everything `completed`.
+- After calling `update_plan`, do **not** repeat the plan in your reply — the harness renders it. Briefly note the change or next step instead.
 - If a single implementation pass completes everything, mark all steps `completed` in one call.
 """
 
 _GENERIC_PLAN_ERROR = "failed to update plan"
+_PLAN_UPDATED_MESSAGE = "Plan updated"
 
 
 class _PlanItem(BaseModel):
@@ -75,23 +76,11 @@ class _PlanItem(BaseModel):
 class _ToolArgs(BaseModel):
     """Model-visible arguments for the plan tool."""
 
-    task: str = Field(description="Short name for the current task.")
-    items: list[_PlanItem] = Field(
-        description="Authoritative replacement list of plan items."
-    )
     explanation: str | None = Field(
         default=None,
         description="Optional brief reason for this plan update.",
     )
-
-
-@dataclass(frozen=True, slots=True)
-class _ValidatedPlan:
-    """Validated plan content ready to render and persist."""
-
-    task: str
-    items: tuple[_PlanItem, ...]
-    explanation: str | None
+    plan: list[_PlanItem] = Field(description="The list of steps.")
 
 
 def plan_tool(
@@ -103,7 +92,7 @@ def plan_tool(
     """Build the first-party task-plan harness tool.
 
     Args:
-        persist_to: Optional callback that receives the latest validated plan.
+        persist_to: Optional callback that receives the latest plan update.
             `HarnessToolsShim` uses this to persist state in `RunState`.
         prompt_snippet: Optional prompt snippet rendered by `HarnessToolsShim`.
         prompt_guidelines: Prompt guidance rendered by `HarnessToolsShim`.
@@ -142,83 +131,19 @@ def _update_plan(
     *,
     persist_to: Callable[[dict[str, object]], None] | None,
 ) -> str:
-    """Validate, optionally persist, and render one plan update."""
-    validation_result = _validate_plan(args)
-    if isinstance(validation_result, str):
-        return validation_result
-
+    """Persist one plan update and return the model-facing success message."""
     if persist_to is not None:
-        persist_to(_plan_snapshot(validation_result))
+        persist_to(_plan_snapshot(args))
 
-    return _format_plan_output(validation_result)
-
-
-def _validate_plan(args: _ToolArgs) -> _ValidatedPlan | str:
-    """Return validated plan content or a model-facing error."""
-    task = args.task.strip()
-    if task == "":
-        return "task must not be empty"
-    if not args.items:
-        return "plan must include at least one item"
-
-    in_progress_count = 0
-    items: list[_PlanItem] = []
-    for item in args.items:
-        step = item.step.strip()
-        if step == "":
-            return "plan item step must not be empty"
-        if item.status == "in_progress":
-            in_progress_count += 1
-        items.append(_PlanItem(step=step, status=item.status))
-
-    if in_progress_count > 1:
-        return "plan may contain at most one in_progress item"
-
-    explanation = _normalize_explanation(args.explanation)
-    return _ValidatedPlan(
-        task=task,
-        items=tuple(items),
-        explanation=explanation,
-    )
+    return _PLAN_UPDATED_MESSAGE
 
 
-def _normalize_explanation(value: str | None) -> str | None:
-    """Normalize optional explanation text."""
-    if value is None:
-        return None
-    stripped = value.strip()
-    if stripped == "":
-        return None
-    return stripped
-
-
-def _plan_snapshot(plan: _ValidatedPlan) -> dict[str, object]:
+def _plan_snapshot(args: _ToolArgs) -> dict[str, object]:
     """Return the serialized form persisted by the shim."""
     return {
-        "task": plan.task,
-        "items": [{"step": item.step, "status": item.status} for item in plan.items],
-        "explanation": plan.explanation,
+        "explanation": args.explanation,
+        "plan": [{"step": item.step, "status": item.status} for item in args.plan],
     }
-
-
-def _format_plan_output(plan: _ValidatedPlan) -> str:
-    """Render one validated plan as plain text for model-visible output."""
-    lines = [f"Plan: {plan.task}", ""]
-    if plan.explanation is not None:
-        lines.extend((f"Explanation: {plan.explanation}", ""))
-
-    lines.extend(f"{_status_marker(item.status)} {item.step}" for item in plan.items)
-    counts = _status_counts(plan.items)
-    lines.extend(
-        (
-            "",
-            "Status: "
-            f"{counts['pending']} pending, "
-            f"{counts['in_progress']} in progress, "
-            f"{counts['completed']} completed.",
-        )
-    )
-    return "\n".join(lines)
 
 
 def _build_plan_tool(
@@ -232,22 +157,3 @@ def _build_plan_tool(
         args_model=_ToolArgs,
         handler=handler,
     )
-
-
-def _status_marker(status: Literal["pending", "in_progress", "completed"]) -> str:
-    if status == "pending":
-        return "- [ ]"
-    if status == "in_progress":
-        return "- [~]"
-    return "- [x]"
-
-
-def _status_counts(items: tuple[_PlanItem, ...]) -> dict[str, int]:
-    counts = {
-        "pending": 0,
-        "in_progress": 0,
-        "completed": 0,
-    }
-    for item in items:
-        counts[item.status] += 1
-    return counts

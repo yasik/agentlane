@@ -37,7 +37,7 @@ async def run_demo() -> None:
             tools=Tools(
                 tools=[],
                 tool_choice="required",
-                tool_call_limits={"write_plan": 1},
+                tool_call_limits={"update_plan": 1},
             ),
             shims=(HarnessToolsShim((plan_tool(),)),),
         )

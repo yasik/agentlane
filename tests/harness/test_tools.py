@@ -5,7 +5,6 @@ from typing import cast
 import pytest
 from pydantic import BaseModel
 
-import agentlane.harness.tools._plan as plan_module
 import agentlane.harness.tools._read as read_module
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.agents import DefaultAgent
@@ -143,7 +142,7 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
 
     assert [definition.tool.name for definition in definitions] == [
         "read",
-        "write_plan",
+        "update_plan",
     ]
 
 
@@ -211,97 +210,46 @@ def test_harness_tools_shim_rejects_duplicate_tool_names() -> None:
         )
 
 
-def test_plan_tool_creates_checklist_with_status_counts() -> None:
+def test_plan_tool_updates_plan_with_codex_success_message() -> None:
     output = _run_plan(
         plan_tool(),
-        task="Ship plan tool",
         explanation="Track the implementation.",
-        items=[
+        plan=[
             {"step": "Inspect implementation", "status": "completed"},
             {"step": "Add tests", "status": "in_progress"},
             {"step": "Update docs", "status": "pending"},
         ],
     )
 
-    assert output == (
-        "Plan: Ship plan tool\n"
-        "\n"
-        "Explanation: Track the implementation.\n"
-        "\n"
-        "- [x] Inspect implementation\n"
-        "- [~] Add tests\n"
-        "- [ ] Update docs\n"
-        "\n"
-        "Status: 1 pending, 1 in progress, 1 completed."
-    )
+    assert output == "Plan updated"
 
 
-def test_plan_tool_accepts_all_pending_and_all_completed_plans() -> None:
-    assert _run_plan(
-        plan_tool(),
-        task="Pending",
-        items=[{"step": "Start", "status": "pending"}],
-    ) == (
-        "Plan: Pending\n"
-        "\n"
-        "- [ ] Start\n"
-        "\n"
-        "Status: 1 pending, 0 in progress, 0 completed."
-    )
-    assert _run_plan(
-        plan_tool(),
-        task="Completed",
-        items=[{"step": "Finish", "status": "completed"}],
-    ) == (
-        "Plan: Completed\n"
-        "\n"
-        "- [x] Finish\n"
-        "\n"
-        "Status: 0 pending, 0 in progress, 1 completed."
-    )
-
-
-def test_plan_tool_returns_model_facing_validation_errors() -> None:
-    definition = plan_tool()
-
-    assert _run_plan(definition, task="   ", items=[]) == "task must not be empty"
-    assert _run_plan(definition, task="Invalid", items=[]) == (
-        "plan must include at least one item"
+def test_plan_tool_accepts_pending_completed_and_empty_plans() -> None:
+    assert (
+        _run_plan(
+            plan_tool(),
+            plan=[{"step": "Start", "status": "pending"}],
+        )
+        == "Plan updated"
     )
     assert (
         _run_plan(
-            definition,
-            task="Invalid",
-            items=[{"step": "   ", "status": "pending"}],
+            plan_tool(),
+            plan=[{"step": "Finish", "status": "completed"}],
         )
-        == "plan item step must not be empty"
+        == "Plan updated"
     )
-    assert (
-        _run_plan(
-            definition,
-            task="Invalid",
-            items=[
-                {"step": "One", "status": "in_progress"},
-                {"step": "Two", "status": "in_progress"},
-            ],
-        )
-        == "plan may contain at most one in_progress item"
-    )
+    assert _run_plan(plan_tool(), plan=[]) == "Plan updated"
 
 
-def test_plan_tool_sanitizes_unexpected_error_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def raise_unexpected_error(args: object) -> object:
-        del args
+def test_plan_tool_sanitizes_unexpected_error_text() -> None:
+    def raise_unexpected_error(snapshot: dict[str, object]) -> None:
+        del snapshot
         raise RuntimeError("Traceback (most recent call last): private details")
 
-    monkeypatch.setattr(plan_module, "_validate_plan", raise_unexpected_error)
-
     output = _run_plan(
-        plan_tool(),
-        task="Plan",
-        items=[{"step": "Start", "status": "pending"}],
+        plan_tool(persist_to=raise_unexpected_error),
+        plan=[{"step": "Start", "status": "pending"}],
     )
 
     assert output == "failed to update plan"
@@ -321,26 +269,22 @@ def test_plan_tool_persists_latest_plan_through_harness_tools_shim() -> None:
         args_model = bound_plan.args_type()
 
         first = args_model(
-            task="First plan",
-            items=[{"step": "Start", "status": "in_progress"}],
+            plan=[{"step": "Start", "status": "in_progress"}],
         )
         second = args_model(
-            task="Second plan",
-            items=[{"step": "Finish", "status": "completed"}],
+            plan=[{"step": "Finish", "status": "completed"}],
         )
 
         await bound_plan.run(first, CancellationToken())
         assert state.shim_state["harness-tools:plan"] == {
-            "task": "First plan",
-            "items": [{"step": "Start", "status": "in_progress"}],
             "explanation": None,
+            "plan": [{"step": "Start", "status": "in_progress"}],
         }
 
         await bound_plan.run(second, CancellationToken())
         assert state.shim_state["harness-tools:plan"] == {
-            "task": "Second plan",
-            "items": [{"step": "Finish", "status": "completed"}],
             "explanation": None,
+            "plan": [{"step": "Finish", "status": "completed"}],
         }
 
     asyncio.run(scenario())
@@ -355,9 +299,9 @@ def test_plan_tool_runs_through_normal_runner_execution() -> None:
                     tool_calls=[
                         _make_tool_call(
                             tool_id="call_1",
-                            name="write_plan",
+                            name="update_plan",
                             arguments=(
-                                '{"task":"Runner plan","items":['
+                                '{"plan":['
                                 '{"step":"Create plan","status":"completed"}]}'
                             ),
                         )
@@ -382,16 +326,14 @@ def test_plan_tool_runs_through_normal_runner_execution() -> None:
         if run_state is None:
             raise AssertionError("Expected DefaultAgent to return run state.")
         assert run_state.shim_state["harness-tools:plan"] == {
-            "task": "Runner plan",
-            "items": [{"step": "Create plan", "status": "completed"}],
             "explanation": None,
+            "plan": [{"step": "Create plan", "status": "completed"}],
         }
         assert any(
             isinstance(message, dict)
             and message["role"] == "tool"
-            and message["name"] == "write_plan"
-            and "Status: 0 pending, 0 in progress, 1 completed."
-            in str(message["content"])
+            and message["name"] == "update_plan"
+            and message["content"] == "Plan updated"
             for message in run_state.history
         )
 
@@ -412,12 +354,9 @@ def test_plan_tool_prompt_metadata_renders_through_shim() -> None:
         await bound.prepare_turn(turn)
 
         assert isinstance(state.instructions, str)
+        assert "- update_plan: Update the task plan" in state.instructions
         assert (
-            "- write_plan: Create or update a plan based on the user request"
-            in state.instructions
-        )
-        assert (
-            "Use `write_plan` to maintain a visible, step-by-step plan"
+            "Use `update_plan` to maintain a visible, step-by-step plan"
             in state.instructions
         )
         assert state.instructions.endswith("</default_tools>")

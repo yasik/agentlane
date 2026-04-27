@@ -16,5 +16,5 @@ OPENAI_API_KEY=sk-... uv run python examples/harness/base_tools_plan_quickstart/
 
 1. exposing `plan_tool()` through `HarnessToolsShim`
 2. forcing one plan call per run with `Tools(tool_choice="required")`
-3. replacing the previous plan with each valid tool call
+3. replacing the previous plan with each successful tool call
 4. persisting the latest plan under `harness-tools:plan`

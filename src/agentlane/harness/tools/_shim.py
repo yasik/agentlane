@@ -13,7 +13,7 @@ from ._read import read_tool
 from ._types import HarnessToolDefinition
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
-_PLAN_TOOL_NAME = "write_plan"
+_PLAN_TOOL_NAME = "update_plan"
 
 
 class _BoundHarnessToolsShim(BoundShim):
@@ -71,6 +71,7 @@ class _BoundHarnessToolsShim(BoundShim):
         """Attach shim-owned state to stateful first-party tools."""
         if definition.tool.name != _PLAN_TOOL_NAME:
             return definition
+
         return plan_tool(
             persist_to=self._persist_plan,
             prompt_snippet=definition.prompt_snippet,
