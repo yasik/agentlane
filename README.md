@@ -1,16 +1,22 @@
 # AgentLane
 
-**AgentLane** is a runtime-first framework for building AI agents with
-addressed messaging, model primitives, and a reusable agent harness.
+**AgentLane is a runtime-first orchestration layer for building reliable, inspectable, production AI agents and workflows workflows.**
 
-(Initially inspired by Microsoft's [autogen](https://github.com/microsoft/autogen) framework that is no longer being actively developed).
+It is designed for systems where agent behavior needs to be explicit, structured, testable, and operable — especially in serious domains like healthcare where opaque prompt chains and autonomous demo loops are not enough.
 
-It gives you three layers that can be used together or independently:
+AgentLane helps you turn fragile prompt/tool chains into workflows with clear runtime boundaries: long-lived agents, addressed messaging, structured model interactions, tool execution, handoffs, pub/sub flows, and a path from local development to distributed runtime execution.
 
-1. `agentlane.runtime` for delivery, routing, scheduling, and agent identity
-2. `agentlane.models` for prompts, schemas, tools, and model clients
-3. `agentlane.harness` for agent loops, tool execution, handoffs, and
-   high-level agents
+Most agent frameworks start with the agent loop.
+
+AgentLane starts one layer lower: with runtime, identity, and addressed messaging.
+
+That makes it useful when you want to build AI workflows that are easier to inspect, test, route, scale, and operate.
+
+AgentLane gives you three layers that can be used together or independently:
+
+1. `agentlane.runtime` — delivery, routing, scheduling, pub/sub, and agent identity
+2. `agentlane.models` — prompts, schemas, tools, structured outputs, and model clients
+3. `agentlane.harness` — agent loops, tool execution, handoffs, and high-level agents
 
 ```text
 ╔════════════════════════════════════════════════════════════════════════════════════╗
@@ -22,74 +28,97 @@ It gives you three layers that can be used together or independently:
 ║   ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████╗██║  ██║██║ ╚████║███████╗   ║
 ║   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝   ║
 ║                                                                                    ║
-║                    runtime-first AI agent framework                                ║
+║                reliable, inspectable AI agent workflows                            ║
 ║                                                                                    ║
-║        addressed messaging • model primitives • reusable agent harness             ║
-║                                                                                    ║ 
-╠════════════════════════════════════════════════════════════════════════════════════╣
+║              runtime • messaging • model primitives • harness                      ║
 ║                                                                                    ║
-║   Runtime      → delivery • routing • scheduling • identity                        ║
-║   Models       → prompts • schemas • tools • model clients                         ║
-║   Harness      → loops • execution • handoffs • agents                             ║
-║                                                                                    ║
-║   from local agents → to distributed multi-agent systems                           ║
+║                 from local agents → distributed agent systems                      ║
 ║                                                                                    ║
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-  <a href="https://img.shields.io/badge/python-3.12-blue?style=flat-square"><img src="https://img.shields.io/badge/python-3.12-blue?style=flat-square" alt="Python 3.12"></a>
-  <a href="https://pypi.org/project/agentlane/"><img src="https://img.shields.io/pypi/v/agentlane?style=flat-square" alt="PyPI"></a>
-</p>
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
+![PyPI](https://img.shields.io/pypi/v/agentlane.svg)
 
 ## Why AgentLane?
 
-AgentLane is built for AI systems where messaging, addressing, and runtime
-behavior are part of the application design.
+Many agent systems start as a prompt, a few tools, and a loop.
 
-It is a good fit when you want:
+That works for demos. But production systems usually need more structure:
 
-1. one programming model from local runs to distributed execution
-2. explicit message routing instead of hidden in-process orchestration
-3. a high-level agent interface without giving up lower-level runtime control
-4. thin provider adapters instead of provider-owned orchestration logic
-5. a path from simple local agents to multi-agent systems with tools and
-   handoffs
+1. stable agent identity across turns and tasks
+2. explicit message routing instead of hidden in-process calls
+3. background specialists that can run independently
+4. fan-out, fan-in, and pub/sub workflows
+5. bounded handoffs between agents and tools
+6. structured model calls that can be tested and reused
+7. a path from local execution to distributed workers
+8. runtime behavior that application code can reason about
 
-## Why Runtime And Messaging Matter
+AgentLane lets you start with simple local agents, then grow into addressed services, background workers, and multi-agent workflows without changing the core communication model.
 
-Many agent frameworks center on a single in-process agent loop or workflow
-graph. That is a good fit for one request running in one place.
+## What AgentLane is
 
-AgentLane starts one layer lower, at addressed messaging and runtime
-execution. That matters because it gives application code a stable way to:
+AgentLane is a framework for building AI systems as explicit workflows of addressed agents, model calls, tools, messages, and handoffs.
 
-1. send work to a specific long-lived agent or service by address
-2. keep state attached to that addressed instance across multiple turns
-3. publish one event to many subscribers without hard-coding the fan-out
-4. split work across specialists and gather results back
-5. move from local execution to distributed workers without changing the core
-   communication model
+It is useful when you care about runtime behavior: who receives work, where state lives, how messages are routed, how agents coordinate, and how a local prototype can evolve into a distributed system.
 
-In practice, that means the same framework can cover both:
+AgentLane is designed for builders who want production AI workflows to be:
 
-1. local agent(s) running in one process
-2. a system of addressed agents, background specialists, and pub/sub flows
-   spread across workers
+1. **Reliable** — agent execution should be structured enough to reason about, test, and debug.
+2. **Inspectable** — important behavior should be visible through explicit messages, tools, handoffs, and runtime boundaries.
+3. **Composable** — agents, model calls, tools, and services should be reusable building blocks.
+4. **Operable** — workflows should have a path from local development to long-running services and distributed workers.
+5. **Bounded** — agent autonomy should live inside application-controlled orchestration, not behind an opaque loop.
 
-The messaging layer is what makes those two use cases part of one model instead
-of two different frameworks glued together.
+## What AgentLane is not
 
-## When To Use It
+AgentLane is not a single autonomous agent loop.
 
-Use AgentLane for:
+It does not try to hide application architecture behind a provider-owned abstraction. The goal is to keep orchestration, routing, and workflow design in application code, where they can be inspected, tested, and evolved.
 
-1. local agents that need tools, delegation, or resumable runs
-2. background specialists and addressed services that communicate by message
-3. fan-out, fan-in, and pub/sub workflows
-4. applications that start in one process and may later move to a distributed
-   runtime
+## Serious domains need serious agent infrastructure
+
+In low-stakes demos, it may be enough to let an LLM call tools in a loop until it produces a plausible result.
+
+In serious domains — healthcare, finance, compliance, operations, infrastructure, or any product where users rely on the system — agent behavior needs stronger guarantees.
+
+You often need to know:
+
+1. which agent or service handled a task
+2. what messages were exchanged
+3. which tools were called
+4. where state was stored
+5. how work was delegated
+6. where a human should review or intervene
+7. how the workflow can be reproduced, tested, and improved
+
+AgentLane is built around that worldview: production agents should be explicit systems, not invisible loops.
+
+## When to use AgentLane
+
+Use AgentLane when you are building AI systems that need one or more of:
+
+1. local agents with tools, delegation, handoffs, or resumable runs
+2. long-lived agents or services with stable identities
+3. explicit routing between agents, tools, and background workers
+4. fan-out, fan-in, or pub/sub workflows
+5. structured model calls with schemas, tools, and provider adapters
+6. a path from local development to distributed execution
+7. application-level control instead of provider-owned orchestration
+
+AgentLane is especially useful when the agent workflow is part of the product architecture, not just a wrapper around a model call.
+
+## Design principles
+
+1. **Runtime first** — agent behavior should be part of the application runtime, not hidden inside a black-box loop.
+2. **Addressable by default** — agents and services should have stable identities that can receive messages directly.
+3. **Composable layers** — use the runtime, model primitives, or harness independently when needed.
+4. **Provider-thin** — keep orchestration in application code instead of outsourcing it to a model provider.
+5. **Local to distributed** — start in one process and preserve the same communication model as the system grows.
+6. **Explicit over magical** — prefer inspectable workflows, messages, tools, and handoffs over implicit control flow.
+7. **Human-compatible** — design workflows so humans can review, intervene, and understand what happened when needed.
 
 ## Installation
 
@@ -106,6 +135,8 @@ uv sync --all-extras
 ```
 
 ## Quick Start
+
+The harness gives you a simple agent interface when you want one, while still letting you drop down into explicit runtime and messaging primitives as your system grows.
 
 After installing the package, define an agent against your model client:
 
@@ -126,7 +157,11 @@ agent = SupportAgent()
 result = await agent.run("My order arrived damaged. What should I do first?")
 ```
 
-## Repository Examples
+This is the simplest entry point.
+
+For workflows that need explicit routing, background specialists, pub/sub, or distributed execution, use the runtime layer directly.
+
+## Repository examples
 
 If you are running from a repository checkout, run one runtime example:
 
@@ -142,46 +177,49 @@ OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/ma
 
 The runtime example shows explicit message passing.
 
-## Choose Your Level
+## Choose the layer you need
 
 ### Runtime
 
-Use the runtime when you want explicit messaging, stable identities, pub/sub,
-or distributed execution.
+Use the runtime when agent identity, message routing, pub/sub, scheduling, or distributed execution are part of your application design.
 
 Start here:
 
-1. [Runtime: Engine and Execution](./docs/runtime/engine-and-execution.md)
-2. [Messaging: Routing and Delivery](./docs/messaging/routing-and-delivery.md)
+1. [Runtime: Engine and Execution](docs/runtime/engine.md)
+2. [Messaging: Routing and Delivery](docs/runtime/messaging.md)
 
 ### Models
 
-Use the models layer when you want prompt templates, structured outputs, native
-tools, or provider clients without the full harness.
+Use the models layer when you want reusable prompt templates, schemas, structured outputs, tools, or provider clients without adopting the full agent harness.
 
 Start here:
 
-1. [Overview](./docs/models/overview.md)
-2. [Prompt Templating](./docs/models/prompt-templating.md)
+1. [Overview](docs/models/overview.md)
+2. [Prompt Templating](docs/models/prompt_templating.md)
 
 ### Harness
 
-Use the harness when you want reusable agent loops, tool execution, handoffs,
-agent-as-tool, or high-level local agents.
+Use the harness when you want high-level agents, reusable loops, tool execution, handoffs, or agent-as-tool patterns on top of the lower-level primitives.
 
 Start here:
 
-1. [Default Agents](./docs/harness/default-agents.md)
-2. [Architecture](./docs/harness/architecture.md)
+1. [Default Agents](docs/harness/default_agents.md)
+2. [Architecture](docs/harness/architecture.md)
 
 ## Documentation
 
 Use the documentation index for the full docs tree:
 
-1. [Documentation Index](./docs/README.md)
-2. [Examples Index](./examples/README.md)
+1. [Documentation Index](docs/README.md)
+2. [Examples Index](examples/README.md)
+
+## Origins
+
+AgentLane was initially inspired by Microsoft AutoGen, but takes a runtime-first approach focused on addressed messaging, explicit orchestration, and local-to-distributed execution.
 
 ## Development
+
+Format, lint, and test:
 
 ```bash
 /usr/bin/make format
