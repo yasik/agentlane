@@ -1,6 +1,6 @@
 [project]
 name = "agentlane"
-version = "0.6.1"
+version = "0.7.0"
 description = "An event-based runtime and messaging framework for AI agents."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
