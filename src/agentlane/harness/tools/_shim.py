@@ -16,7 +16,7 @@ from ._types import HarnessToolDefinition
 from ._write import write_tool
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
-_PLAN_TOOL_NAME = "update_plan"
+_PLAN_TOOL_NAME = "write_plan"
 
 
 class _BoundHarnessToolsShim(BoundShim):

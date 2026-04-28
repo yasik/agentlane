@@ -13,6 +13,24 @@ This is the primary local agent-building interface. Internally it uses the
 lower-level addressed `agentlane.harness.Agent`, but from the developer standpoint it
 is a first-class agent type, not a secondary adapter.
 
+## Starting Point For High-Level Agents
+
+`DefaultAgent` is the recommended starting point when you are developing a
+high-level local agent. It gives you one direct `run(...)` surface while still
+using the same descriptor, tools, shims, runner, and run-state contracts as the
+lower-level harness.
+
+A practical high-level agent usually starts with:
+
+1. `AgentDescriptor` for the agent name, model, instructions, tools, and shims
+2. `DefaultAgent` for local runtime and runner ownership
+3. `HarnessToolsShim` when the agent needs first-party workspace tools
+4. `Tools` limits when you want predictable tool-loop behavior
+
+This path keeps early application code compact. If the agent later needs direct
+runtime addressing, distributed workers, or custom orchestration, move the same
+descriptor and tool definitions to the lower-level harness APIs.
+
 ## Import Path
 
 ```python

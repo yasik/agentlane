@@ -1,15 +1,30 @@
 # Harness Tools
 
 `agentlane.harness.tools` provides first-party harness tool definitions for
-common local workspace actions. Each helper returns a
-`HarnessToolDefinition`, which wraps an executable `agentlane.models.Tool` plus
-optional prompt metadata for `HarnessToolsShim`.
+common local workspace actions. Each helper returns a `HarnessToolDefinition`,
+which wraps an executable `agentlane.models.Tool` plus optional prompt metadata
+for `HarnessToolsShim`.
+
+These tools are opinionated defaults for agent loops. They use stable argument
+names, deterministic text results, visible truncation messages, `.gitignore`
+handling where appropriate, and clear model-facing errors. That consistency
+lets higher-level agents spend fewer turns rediscovering local shell behavior
+and gives application code a predictable contract to test.
+
+Use these tools with
+[`DefaultAgent`](./default-agents.md) when you want the smallest local starting
+point for a high-level agent. `DefaultAgent` owns the local runtime, runner, run
+state, tool loop, and shim binding. `HarnessToolsShim` adds the tools and the
+model guidance that tells the agent how to use them. As the application grows,
+the same `AgentDescriptor`, `Tools`, shims, and native `Tool` values can move
+down to the lower-level harness agent or runtime APIs.
 
 ## Import Path
 
 ```python
 from agentlane.harness.tools import (
     HarnessToolsShim,
+    base_harness_tools,
     find_tool,
     grep_tool,
     plan_tool,
@@ -30,6 +45,24 @@ tool = definition.tool
 Use the definition when you want prompt snippets and guidelines to be rendered
 by `HarnessToolsShim`. Use `definition.tool` when you only need the executable
 `Tool` value.
+
+The current standard set is `read`, `find`, `grep`, `write`, and
+`write_plan`. The public base-tools set currently does not include `bash` or
+`ls`.
+
+`base_harness_tools()` returns the standard set with each filesystem tool
+capturing `Path.cwd()` at construction time. Prefer explicit per-tool
+construction when an agent should operate inside a specific workspace:
+
+```python
+workspace_tools = (
+    read_tool(cwd=WORKSPACE),
+    find_tool(cwd=WORKSPACE),
+    grep_tool(cwd=WORKSPACE),
+    write_tool(cwd=WORKSPACE),
+    plan_tool(),
+)
+```
 
 ## HarnessToolsShim
 
@@ -68,8 +101,17 @@ descriptor = AgentDescriptor(
 )
 ```
 
-`base_harness_tools()` returns the current standard tool set. It contains
-`read`, `find`, `grep`, `write`, and `update_plan`.
+For quick prototypes that should use the process working directory, pass the
+standard set directly:
+
+```python
+descriptor = AgentDescriptor(
+    name="Workspace Agent",
+    model=model,
+    instructions="Use workspace tools before answering workspace questions.",
+    shims=(HarnessToolsShim(base_harness_tools()),),
+)
+```
 
 ## Path Policy
 
@@ -362,7 +404,7 @@ return a stable generic failure message so the agent loop can continue.
 
 ## plan
 
-`plan_tool()` exposes an `update_plan` tool for creating or replacing the current
+`plan_tool()` exposes a `write_plan` tool for creating or replacing the current
 task plan.
 
 Parameters:
@@ -375,9 +417,9 @@ Each plan item has:
 1. `step: str`
 2. `status: "pending" | "in_progress" | "completed"`
 
-Each call replaces the previous plan. Partial item updates are intentionally
-not part of the Phase 11 contract. The model should keep at most one item
-`in_progress`.
+Each call replaces the previous plan. Partial item updates are not part of the
+current public contract. A plan must contain at least one item, each step must
+contain non-whitespace text, and at most one item may be `in_progress`.
 
 Successful model-facing tool result:
 
@@ -387,7 +429,11 @@ Plan updated
 
 The plan payload itself is intended for clients and shims to render. The tool
 does not echo the full checklist back to the model after a successful update.
-Malformed arguments are rejected by the normal tool argument validation path.
+Invalid plan structure returns stable text such as
+`plan must contain at least one item`,
+`plan steps must not be empty`, or
+`at most one plan step can be in_progress`. Malformed argument types are
+rejected by the normal tool argument validation path.
 
 When used through `HarnessToolsShim`, the latest plan update is persisted in
 `RunState.shim_state` under `harness-tools:plan` for the default shim name.

@@ -1,15 +1,12 @@
 import asyncio
 import os
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from pydantic import BaseModel, ValidationError
+from ripgrepy import RipGrepNotFound, Ripgrepy
 
-import agentlane.harness.tools._find as find_module
-import agentlane.harness.tools._grep as grep_module
-import agentlane.harness.tools._read as read_module
-import agentlane.harness.tools._write as write_module
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
@@ -93,6 +90,15 @@ def _set_mtime(path: Path, mtime: float) -> None:
     os.utime(path, (mtime, mtime))
 
 
+class _FakeRipgrepResult:
+    def __init__(self, output: str) -> None:
+        self._output = output
+
+    @property
+    def as_string(self) -> str:
+        return self._output
+
+
 def _make_assistant_response(
     content: str | None,
     *,
@@ -165,7 +171,7 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
         "find",
         "grep",
         "write",
-        "update_plan",
+        "write_plan",
     ]
 
 
@@ -247,7 +253,7 @@ def test_plan_tool_updates_plan_with_codex_success_message() -> None:
     assert output == "Plan updated"
 
 
-def test_plan_tool_accepts_pending_completed_and_empty_plans() -> None:
+def test_plan_tool_accepts_pending_and_completed_plans() -> None:
     assert (
         _run_plan(
             plan_tool(),
@@ -262,7 +268,26 @@ def test_plan_tool_accepts_pending_completed_and_empty_plans() -> None:
         )
         == "Plan updated"
     )
-    assert _run_plan(plan_tool(), plan=[]) == "Plan updated"
+
+
+def test_plan_tool_rejects_empty_or_invalid_plans() -> None:
+    definition = plan_tool()
+
+    assert _run_plan(definition, plan=[]) == "plan must contain at least one item"
+    assert (
+        _run_plan(definition, plan=[{"step": "   ", "status": "pending"}])
+        == "plan steps must not be empty"
+    )
+    assert (
+        _run_plan(
+            definition,
+            plan=[
+                {"step": "Start", "status": "in_progress"},
+                {"step": "Continue", "status": "in_progress"},
+            ],
+        )
+        == "at most one plan step can be in_progress"
+    )
 
 
 def test_plan_tool_sanitizes_unexpected_error_text() -> None:
@@ -322,7 +347,7 @@ def test_plan_tool_runs_through_normal_runner_execution() -> None:
                     tool_calls=[
                         _make_tool_call(
                             tool_id="call_1",
-                            name="update_plan",
+                            name="write_plan",
                             arguments=(
                                 '{"plan":['
                                 '{"step":"Create plan","status":"completed"}]}'
@@ -355,7 +380,7 @@ def test_plan_tool_runs_through_normal_runner_execution() -> None:
         assert any(
             isinstance(message, dict)
             and message["role"] == "tool"
-            and message["name"] == "update_plan"
+            and message["name"] == "write_plan"
             and message["content"] == "Plan updated"
             for message in run_state.history
         )
@@ -377,9 +402,9 @@ def test_plan_tool_prompt_metadata_renders_through_shim() -> None:
         await bound.prepare_turn(turn)
 
         assert isinstance(state.instructions, str)
-        assert "- update_plan: Update the task plan" in state.instructions
+        assert "- write_plan: Write or update the task plan" in state.instructions
         assert (
-            "Use `update_plan` to maintain a visible, step-by-step plan"
+            "Use `write_plan` to maintain a visible, step-by-step plan"
             in state.instructions
         )
         assert state.instructions.endswith("</default_tools>")
@@ -550,12 +575,12 @@ def test_read_tool_sanitizes_unexpected_error_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def raise_unexpected_error(args: object, *, resolver: object) -> str:
-        del args
-        del resolver
+    def raise_unexpected_error(self: ToolPathResolver, path: str | Path) -> Path:
+        del self
+        del path
         raise RuntimeError("Traceback (most recent call last): private details")
 
-    monkeypatch.setattr(read_module, "_read_file", raise_unexpected_error)
+    monkeypatch.setattr(ToolPathResolver, "resolve", raise_unexpected_error)
 
     output = _run_tool(read_tool(cwd=tmp_path), path="notes.txt")
 
@@ -793,12 +818,12 @@ def test_write_tool_sanitizes_unexpected_error_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def raise_unexpected_error(args: object, *, resolver: object) -> str:
-        del args
-        del resolver
+    def raise_unexpected_error(self: ToolPathResolver, path: str | Path) -> Path:
+        del self
+        del path
         raise RuntimeError("Traceback (most recent call last): private details")
 
-    monkeypatch.setattr(write_module, "_write_file", raise_unexpected_error)
+    monkeypatch.setattr(ToolPathResolver, "resolve", raise_unexpected_error)
 
     output = _run_write(write_tool(cwd=tmp_path), path="notes.txt", content="content")
 
@@ -1117,25 +1142,25 @@ def test_find_tool_marks_result_limit_truncation(tmp_path: Path) -> None:
     )
 
 
-def test_find_tool_marks_limit_capped_at_maximum(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(find_module, "FIND_DEFAULT_LIMIT", 2)
-    _touch(tmp_path / "a.py")
-    _touch(tmp_path / "b.py")
-    _touch(tmp_path / "c.py")
-    _set_mtime(tmp_path / "a.py", 3000)
-    _set_mtime(tmp_path / "b.py", 2000)
-    _set_mtime(tmp_path / "c.py", 1000)
+def test_find_tool_marks_limit_capped_at_maximum(tmp_path: Path) -> None:
+    for index in range(FIND_DEFAULT_LIMIT + 1):
+        path = tmp_path / f"file_{index:04d}.py"
+        _touch(path)
+        _set_mtime(path, 1000)
 
-    output = _run_tool(find_tool(cwd=tmp_path), pattern="*.py", limit=10)
+    output = _run_tool(
+        find_tool(cwd=tmp_path),
+        pattern="*.py",
+        limit=FIND_DEFAULT_LIMIT + 10,
+    )
 
-    assert output == (
-        f"Search directory: {tmp_path}\n"
-        "a.py\n"
-        "b.py\n"
-        "3 files matched; returned first 2 (maximum). "
+    lines = output.splitlines()
+    assert lines[0] == f"Search directory: {tmp_path}"
+    assert lines[1] == "file_0000.py"
+    assert lines[FIND_DEFAULT_LIMIT] == f"file_{FIND_DEFAULT_LIMIT - 1:04d}.py"
+    assert lines[-1] == (
+        f"{FIND_DEFAULT_LIMIT + 1} files matched; "
+        f"returned first {FIND_DEFAULT_LIMIT} (maximum). "
         "Refine the pattern or narrow `path`."
     )
 
@@ -1394,44 +1419,60 @@ def test_grep_tool_continues_when_directory_contains_binary_file(
     assert result == "Search path: .\ntext.txt:1:needle in text"
 
 
-def test_grep_tool_parser_ignores_binary_warnings() -> None:
+def test_grep_tool_ignores_binary_warnings_alongside_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text_path = tmp_path / "text.txt"
+    text_path.write_text("needle\n", encoding="utf-8")
     output = "\n".join(
         (
             'rg: ./binary.bin: binary file matches (found "\\0" byte around offset 0)',
             (
-                '{"type":"match","data":{"path":{"text":"/workspace/text.txt"},'
+                f'{{"type":"match","data":{{"path":{{"text":"{text_path.as_posix()}"}},'
                 '"lines":{"text":"needle\\n"},"line_number":1,'
                 '"absolute_offset":0,"submatches":[]}}'
             ),
         )
     )
 
-    parse_ripgrep_output = cast(Any, grep_module)._parse_ripgrep_output
-    parsed = parse_ripgrep_output(output)
+    def fake_run(self: Ripgrepy) -> _FakeRipgrepResult:
+        del self
+        return _FakeRipgrepResult(output)
 
-    assert parsed.error is None
-    assert parsed.match_count == 1
-    assert parsed.rows[0].path == Path("/workspace/text.txt")
+    monkeypatch.setattr(Ripgrepy, "run", fake_run)
+
+    result = _run_grep(grep_tool(cwd=tmp_path), pattern="needle", path=".")
+
+    assert result == "Search path: .\ntext.txt:1:needle"
 
 
-def test_grep_tool_parser_ignores_per_file_warnings_alongside_matches() -> None:
+def test_grep_tool_ignores_per_file_warnings_alongside_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    visible_path = tmp_path / "visible.py"
+    visible_path.write_text("hit\n", encoding="utf-8")
     output = "\n".join(
         (
             "rg: ./locked.txt: Permission denied (os error 13)",
             (
-                '{"type":"match","data":{"path":{"text":"/workspace/visible.py"},'
+                f'{{"type":"match","data":{{"path":{{"text":"{visible_path.as_posix()}"}},'
                 '"lines":{"text":"hit\\n"},"line_number":1,'
                 '"absolute_offset":0,"submatches":[]}}'
             ),
         )
     )
 
-    parse_ripgrep_output = cast(Any, grep_module)._parse_ripgrep_output
-    parsed = parse_ripgrep_output(output)
+    def fake_run(self: Ripgrepy) -> _FakeRipgrepResult:
+        del self
+        return _FakeRipgrepResult(output)
 
-    assert parsed.error is None
-    assert parsed.match_count == 1
-    assert parsed.rows[0].path == Path("/workspace/visible.py")
+    monkeypatch.setattr(Ripgrepy, "run", fake_run)
+
+    result = _run_grep(grep_tool(cwd=tmp_path), pattern="hit", path=".")
+
+    assert result == "Search path: .\nvisible.py:1:hit"
 
 
 def test_grep_tool_listing_mode_filters_warning_lines(
@@ -1441,14 +1482,6 @@ def test_grep_tool_listing_mode_filters_warning_lines(
     (tmp_path / "alpha.py").write_text("needle\n", encoding="utf-8")
     (tmp_path / "beta.py").write_text("needle\n", encoding="utf-8")
 
-    class _FakeRipgrep:
-        def __init__(self, output: str) -> None:
-            self._output = output
-
-        @property
-        def as_string(self) -> str:
-            return self._output
-
     fake_output = "\n".join(
         [
             f"{tmp_path / 'alpha.py'}",
@@ -1457,22 +1490,17 @@ def test_grep_tool_listing_mode_filters_warning_lines(
         ]
     )
 
-    real_run = grep_module.Ripgrepy.run
-
-    def fake_run(self: object) -> _FakeRipgrep:
+    def fake_run(self: Ripgrepy) -> _FakeRipgrepResult:
         del self
-        return _FakeRipgrep(fake_output)
+        return _FakeRipgrepResult(fake_output)
 
-    monkeypatch.setattr(grep_module.Ripgrepy, "run", fake_run)
-    try:
-        result = _run_grep(
-            grep_tool(cwd=tmp_path),
-            pattern="needle",
-            path=".",
-            outputMode="files_with_matches",
-        )
-    finally:
-        monkeypatch.setattr(grep_module.Ripgrepy, "run", real_run)
+    monkeypatch.setattr(Ripgrepy, "run", fake_run)
+    result = _run_grep(
+        grep_tool(cwd=tmp_path),
+        pattern="needle",
+        path=".",
+        outputMode="files_with_matches",
+    )
 
     assert result == "Search path: .\nalpha.py\nbeta.py"
 
@@ -1531,12 +1559,13 @@ def test_grep_tool_reports_missing_ripgrep_executable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def missing_ripgrep(*args: object, **kwargs: object) -> object:
-        del args
-        del kwargs
-        raise grep_module.RipGrepNotFound("private details")
+    def raise_not_found(self: Ripgrepy, pattern: str, path: str) -> None:
+        del self
+        del pattern
+        del path
+        raise RipGrepNotFound("private details")
 
-    monkeypatch.setattr(grep_module, "Ripgrepy", missing_ripgrep)
+    monkeypatch.setattr(Ripgrepy, "__init__", raise_not_found)
 
     result = _run_grep(grep_tool(cwd=tmp_path), pattern="needle", path=".")
 
@@ -1554,20 +1583,14 @@ def test_find_tool_sanitizes_unexpected_error_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def raise_unexpected_error(
-        args: object,
-        *,
-        resolver: object,
-        cancellation_token: object,
-    ) -> str:
-        del args
-        del resolver
-        del cancellation_token
+    def raise_unexpected_error(self: ToolPathResolver, path: str | Path) -> Path:
+        del self
+        del path
         raise RuntimeError("Traceback (most recent call last): private details")
 
-    monkeypatch.setattr(find_module, "_find_files", raise_unexpected_error)
+    monkeypatch.setattr(ToolPathResolver, "resolve", raise_unexpected_error)
 
-    output = _run_tool(find_tool(cwd=tmp_path), pattern="*.py")
+    output = _run_tool(find_tool(cwd=tmp_path), pattern="*.py", path=".")
 
     assert output == "failed to find files"
 
@@ -1659,16 +1682,12 @@ def test_grep_tool_sanitizes_unexpected_error_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def raise_unexpected_error(
-        args: object,
-        *,
-        resolver: object,
-    ) -> str:
-        del args
-        del resolver
+    def raise_unexpected_error(self: ToolPathResolver, path: str | Path) -> Path:
+        del self
+        del path
         raise RuntimeError("Traceback (most recent call last): private details")
 
-    monkeypatch.setattr(grep_module, "_search_files", raise_unexpected_error)
+    monkeypatch.setattr(ToolPathResolver, "resolve", raise_unexpected_error)
 
     result = _run_grep(grep_tool(cwd=tmp_path), pattern="needle", path=".")
 

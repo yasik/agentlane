@@ -10,14 +10,14 @@ from agentlane.runtime import CancellationToken
 
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "update_plan"
-_TOOL_DESCRIPTION = """Updates the task plan.
+_TOOL_NAME = "write_plan"
+_TOOL_DESCRIPTION = """Writes or updates the task plan.
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
 """
-_TOOL_PROMPT_SNIPPET = "Update the task plan"
+_TOOL_PROMPT_SNIPPET = "Write or update the task plan"
 _TOOL_PROMPT_GUIDELINE = """
-Use `update_plan` to maintain a visible, step-by-step plan for non-trivial tasks.
+Use `write_plan` to maintain a visible, step-by-step plan for non-trivial tasks.
 The plan demonstrates your understanding and approach, and gives the user checkpoints for feedback.
 
 **Use a plan when:**
@@ -54,9 +54,9 @@ Bad (vague, low-information):
 Each step has a `status`: `pending`, `in_progress`, or `completed`. Exactly one step is `in_progress` until the task is done.
 
 - Mark steps `completed` as you finish them; set the next one `in_progress` in the same call. Multiple completions per call is fine.
-- If the plan changes mid-task, call `update_plan` with the updated plan and include an `explanation` of why.
-- When all steps are done, call `update_plan` once more to mark everything `completed`.
-- After calling `update_plan`, do **not** repeat the plan in your reply — the harness renders it. Briefly note the change or next step instead.
+- If the plan changes mid-task, call `write_plan` with the updated plan and include an `explanation` of why.
+- When all steps are done, call `write_plan` once more to mark everything `completed`.
+- After calling `write_plan`, do **not** repeat the plan in your reply — the harness renders it. Briefly note the change or next step instead.
 - If a single implementation pass completes everything, mark all steps `completed` in one call.
 """
 
@@ -107,7 +107,7 @@ def plan_tool(
     ) -> str:
         del cancellation_token
         try:
-            return _update_plan(
+            return _write_plan(
                 args,
                 persist_to=persist_to,
             )
@@ -126,16 +126,37 @@ def plan_state_key(shim_name: str) -> str:
     return f"{shim_name}:plan"
 
 
-def _update_plan(
+def _write_plan(
     args: _ToolArgs,
     *,
     persist_to: Callable[[dict[str, object]], None] | None,
 ) -> str:
     """Persist one plan update and return the model-facing success message."""
+    validation_error = _validate_plan(args)
+    if validation_error is not None:
+        return validation_error
+
     if persist_to is not None:
         persist_to(_plan_snapshot(args))
 
     return _PLAN_UPDATED_MESSAGE
+
+
+def _validate_plan(args: _ToolArgs) -> str | None:
+    """Return one model-facing validation error when the plan is invalid."""
+    if not args.plan:
+        return "plan must contain at least one item"
+
+    in_progress_count = 0
+    for item in args.plan:
+        if item.step.strip() == "":
+            return "plan steps must not be empty"
+        if item.status == "in_progress":
+            in_progress_count += 1
+
+    if in_progress_count > 1:
+        return "at most one plan step can be in_progress"
+    return None
 
 
 def _plan_snapshot(args: _ToolArgs) -> dict[str, object]:
