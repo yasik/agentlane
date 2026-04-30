@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from typing import cast
 
 import structlog
 from agentlane_openai import ResponsesClient
@@ -10,7 +11,14 @@ from pydantic import BaseModel, Field
 
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
-from agentlane.models import Config, ModelResponse, ModelStreamEventKind, Tools, as_tool
+from agentlane.models import (
+    Config,
+    ModelResponse,
+    ModelStreamEventKind,
+    ToolCall,
+    Tools,
+    as_tool,
+)
 
 MODEL_NAME = "gpt-5.4-mini"
 
@@ -23,91 +31,93 @@ MODEL = ResponsesClient(
 
 
 @as_tool
-async def lookup_order_status(order_id: str) -> str:
-    """Look up the current order facts for one customer order."""
-    del order_id
+async def lookup_patient_snapshot(patient_id: str) -> str:
+    """Look up the current mock chart facts for one patient."""
+    del patient_id
     return (
-        "Order 88421: Acme UltraBook Pro, delivered yesterday, reported with a "
-        "cracked screen on arrival. The customer wants to know whether it can "
-        "be returned or must be handled as a damage claim."
+        "Patient MR-4421: 54F with type 2 diabetes started semaglutide this week. "
+        "She reports dizziness and two glucose readings in the 60s today. No "
+        "syncope reported yet. Current reading after glucose tablets is 92."
     )
 
 
-class PolicySpecialistArgs(BaseModel):
-    """Arguments exposed for the policy-specialist agent tool."""
+class MedicationSafetyArgs(BaseModel):
+    """Arguments exposed for the medication-safety agent tool."""
 
-    order_id: str = Field(description="The order id being reviewed.")
-    product_name: str = Field(description="The product name from the order.")
+    patient_id: str = Field(description="The patient id being reviewed.")
+    medication_name: str = Field(description="The medication being reviewed.")
     issue_summary: str = Field(
-        description="A short summary of the return or damage issue."
+        description="A short summary of the symptom or medication-safety issue."
     )
 
 
-RETURNS_SPECIALIST = AgentDescriptor(
-    name="Returns Specialist",
-    description="Takes over damaged-order and return-claim conversations.",
+NURSE_TRIAGE_SPECIALIST = AgentDescriptor(
+    name="Nurse Triage Specialist",
+    description="Takes over patient conversations that need clinical escalation.",
     model=MODEL,
     model_args={"reasoning": {"effort": "low", "summary": "detailed"}},
     tools=None,
     instructions=(
-        "You are Acme's returns specialist. "
-        "The conversation has already been triaged and includes order facts plus "
-        "policy findings. Take over directly with the customer. "
+        "You are the nurse triage specialist. "
+        "The conversation has already been triaged and includes chart facts plus "
+        "medication-safety findings. Take over directly with the patient. "
+        "Do not diagnose or change medications. "
         "Explain the next step in at most three bullet points."
     ),
 )
 
-POLICY_SPECIALIST = AgentDescriptor(
-    name="Policy Specialist",
-    description="Interprets Acme's return policy for a specific order issue.",
+MEDICATION_SAFETY_SPECIALIST = AgentDescriptor(
+    name="Medication Safety Specialist",
+    description="Reviews medication-safety concerns for a specific patient message.",
     model=MODEL,
     model_args={"reasoning": {"effort": "low", "summary": "detailed"}},
     tools=None,
     instructions=(
-        "You are Acme's policy specialist. "
-        "Policy: opened laptops may be returned within 30 days only when they "
-        "are in resellable condition. Cracked screens count as accidental damage "
-        "and are not eligible for the standard return window. "
-        "Return one short sentence with the final policy ruling."
+        "You are the medication safety specialist. "
+        "Safety policy: recurrent glucose readings under 70 mg/dL after a new "
+        "diabetes medication require same-day clinician review; readings under "
+        "54 mg/dL, confusion, fainting, or chest pain require urgent escalation. "
+        "Return one short sentence with the safety ruling."
     ),
 )
 
 
-class FrontlineSupportAgent(DefaultAgent):
-    """Frontline support agent that gathers facts, consults policy, then transfers."""
+class FrontlineCareAgent(DefaultAgent):
+    """Frontline care agent that gathers facts, consults safety, then transfers."""
 
     descriptor = AgentDescriptor(
-        name="Acme Frontline Support",
-        description="Frontline support that gathers facts and escalates damaged returns.",
+        name="Frontline Care Navigator",
+        description="Frontline care navigation that escalates medication-safety issues.",
         model=MODEL,
         model_args={"reasoning": {"effort": "medium", "summary": "detailed"}},
         instructions=(
-            "You are Acme frontline support. "
-            "For damaged-laptop return questions, follow this exact sequence: "
+            "You are frontline patient care navigation. "
+            "For low-glucose medication-safety questions, follow this exact sequence: "
             "1. In one short two-step preamble, explain what you are about to verify. "
-            "2. Call `lookup_order_status` exactly once. "
-            "3. Call `policy_specialist` exactly once with the order facts and issue summary. "
-            "4. If the case is damaged or not eligible for the standard return window, "
-            "handoff to `returns_specialist`. "
+            "2. Call `lookup_patient_snapshot` exactly once. "
+            "3. Call `medication_safety_specialist` exactly once with the chart facts "
+            "and issue summary. "
+            "4. If the case needs same-day clinician review or urgent escalation, "
+            "handoff to `nurse_triage_specialist`. "
             "Do not handoff before steps 2 and 3 are complete."
         ),
         tools=Tools(
             tools=[
-                lookup_order_status,
-                POLICY_SPECIALIST.as_tool(
-                    name="policy_specialist",
-                    description="Ask the policy specialist for a final policy ruling.",
-                    args_model=PolicySpecialistArgs,
+                lookup_patient_snapshot,
+                MEDICATION_SAFETY_SPECIALIST.as_tool(
+                    name="medication_safety_specialist",
+                    description="Ask the medication-safety specialist for a final safety ruling.",
+                    args_model=MedicationSafetyArgs,
                 ),
             ],
             tool_choice="required",
             parallel_tool_calls=False,
             tool_call_limits={
-                "lookup_order_status": 1,
-                "policy_specialist": 1,
+                "lookup_patient_snapshot": 1,
+                "medication_safety_specialist": 1,
             },
         ),
-        handoffs=(RETURNS_SPECIALIST,),
+        handoffs=(NURSE_TRIAGE_SPECIALIST,),
     )
 
 
@@ -115,7 +125,7 @@ def _tool_path(run_state_responses: list[ModelResponse]) -> list[str]:
     """Extract the sequence of tool or handoff calls from raw responses."""
     names: list[str] = []
     for response in run_state_responses:
-        tool_calls = response.choices[0].message.tool_calls or []
+        tool_calls = cast(list[ToolCall], response.choices[0].message.tool_calls or [])
         for tool_call in tool_calls:
             name = tool_call.function.name or ""
             if name:
@@ -130,10 +140,10 @@ async def run_demo() -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
 
-    agent = FrontlineSupportAgent()
+    agent = FrontlineCareAgent()
     user_message = (
-        "Order 88421 arrived with a cracked screen. Can I return it, or does this "
-        "need a different process?"
+        "I started my new diabetes injection and my glucose was 64 this morning "
+        "and 68 after lunch. I felt shaky. What should I do?"
     )
     stream = await agent.run_stream(user_message)
 
@@ -206,7 +216,7 @@ async def run_demo() -> None:
     print()
     print(
         "Note: the outer stream shows the parent run plus the transferred "
-        "specialist run after handoff. The internal policy-specialist "
+        "specialist run after handoff. The internal medication-safety-specialist "
         "agent-as-tool run stays internal in the current streaming contract."
     )
 

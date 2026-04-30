@@ -1,11 +1,13 @@
-# Simple Distributed Runtime Examples
+# Simple Distributed Finance Runtime Examples
 
-These are small, copyable distributed runtime starting points.
+These are small, copyable distributed runtime starting points for finance
+workflows.
 
-- `distributed_publish_fan_in.py`: one planner publishes work to two specialist
-  workers, and one stateful aggregator collects both results by `job_id`.
-- `distributed_scatter_gather.py`: one coordinator sends direct RPCs to two
-  specialist workers and merges both responses into one result.
+- `distributed_publish_fan_in.py`: one planner publishes a portfolio review to
+  market-data and risk workers, and one stateful aggregator collects both
+  results by `job_id`.
+- `distributed_scatter_gather.py`: one coordinator sends direct RPCs to
+  execution and risk specialists and merges both responses into one result.
 
 ## Run
 

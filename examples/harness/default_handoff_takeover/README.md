@@ -1,6 +1,6 @@
 # Default Handoff
 
-This example shows the generic `handoff` path.
+This example shows the generic `handoff` path in a patient triage scenario.
 
 Unlike a predefined handoff target, the parent does not point at one named
 child descriptor ahead of time. Instead, the runner creates a fresh child
@@ -19,11 +19,11 @@ The configuration is still small:
 
 ```python
 descriptor = AgentDescriptor(
-    name="Support Triage",
+    name="Patient Triage",
     tools=Tools(tools=[], tool_choice="required"),
     default_handoff=DefaultHandoff(
         model=model,
-        instructions="You are the specialist who takes over unresolved cases.",
+        instructions="You are the clinical escalation specialist.",
     ),
 )
 ```

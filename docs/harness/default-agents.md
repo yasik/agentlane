@@ -54,22 +54,22 @@ from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
 
 
-class SupportAgent(DefaultAgent):
+class CareNavigationAgent(DefaultAgent):
     descriptor = AgentDescriptor(
-        name="Support",
+        name="Care Navigation",
         model=model,
-        instructions="You are a support agent.",
+        instructions="You are a patient care navigation agent.",
     )
 
 
-agent = SupportAgent()
-result = await agent.run("My order arrived damaged.")
+agent = CareNavigationAgent()
+result = await agent.run("I feel dizzy after starting a new medication.")
 ```
 
 ### Streaming
 
 ```python
-stream = await agent.run_stream("My order arrived damaged.")
+stream = await agent.run_stream("I feel dizzy after starting a new medication.")
 
 async for event in stream:
     ...
@@ -85,13 +85,13 @@ from agentlane.harness.agents import DefaultAgent
 
 agent = DefaultAgent(
     descriptor=AgentDescriptor(
-        name="Support",
+        name="Portfolio Risk",
         model=model,
-        instructions="You are a support agent.",
+        instructions="You are a portfolio risk analyst.",
     )
 )
 
-result = await agent.run("My order arrived damaged.")
+result = await agent.run("Review semiconductor exposure before rebalancing.")
 ```
 
 ## What `DefaultAgent` Owns
@@ -145,7 +145,7 @@ Repeated `run(...)` calls on the same agent instance continue the same
 conversation by default.
 
 ```python
-first = await agent.run("My order arrived damaged.")
+first = await agent.run("I feel dizzy after starting a new medication.")
 second = await agent.run("Please summarize the next step.")
 ```
 
@@ -196,8 +196,8 @@ Simple current behavior:
 Example:
 
 ```python
-await agent.run("My order arrived damaged.")
-branch = await agent.fork("Draft a more formal reply.")
+await agent.run("Review semiconductor exposure before rebalancing.")
+branch = await agent.fork("Draft a more formal risk note.")
 ```
 
 After that call:

@@ -27,7 +27,7 @@ Attach it through `AgentDescriptor.shims`:
 
 ```python
 descriptor = AgentDescriptor(
-    name="Support",
+    name="Clinical Review",
     model=model,
     shims=(SkillsShim(),),
 )

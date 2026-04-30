@@ -38,13 +38,13 @@ from typing import TypedDict
 from agentlane.models import OutputSchema, PromptSpec, PromptTemplate
 
 
-class SupportVars(TypedDict):
-    customer_tier: str
+class IntakeVars(TypedDict):
+    clinic_name: str
     question: str
 
 
-template = PromptTemplate[SupportVars, str](
-    system_template="You are helping a {{ customer_tier }} customer.",
+template = PromptTemplate[IntakeVars, str](
+    system_template="You are helping with {{ clinic_name }} patient intake.",
     user_template="{{ question }}",
     output_schema=OutputSchema(str),
 )
@@ -52,8 +52,8 @@ template = PromptTemplate[SupportVars, str](
 prompt = PromptSpec(
     template=template,
     values={
-        "customer_tier": "business",
-        "question": "How do I rotate API keys?",
+        "clinic_name": "Harborview Endocrinology",
+        "question": "I feel dizzy after starting a new medication.",
     },
 )
 ```

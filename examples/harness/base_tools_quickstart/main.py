@@ -22,15 +22,15 @@ from agentlane.harness.tools import (
 from agentlane.models import Config, ToolCall, Tools
 
 MODEL_NAME = "gpt-5.4-mini"
-WORKSPACE_FILE = "restock_note.md"
+WORKSPACE_FILE = "portfolio_risk_note.md"
 WORKSPACE_TEXT = """\
-# Restock Note
+# Portfolio Risk Note
 
-- Product: Acme Field Charger
-- On-hand units: 8
-- Average daily orders: 6
-- Supplier lead time: 5 days
-TODO: confirm expedited supplier availability before Friday.
+- Portfolio: PM-17 Growth
+- Semiconductor exposure: 42%
+- Leveraged ETF sleeve: 12%
+- Cash position: 6%
+TODO: confirm portfolio manager approval before adding more sector exposure.
 """
 
 
@@ -46,7 +46,7 @@ async def run_demo() -> None:
     user_prompt = (
         f"Create {WORKSPACE_FILE} with exactly this content, then locate it "
         "with the find tool, use grep to find any TODO items inside it, read "
-        "it back, and summarize the restock risk in one sentence:\n\n"
+        "it back, and summarize the portfolio risk in one sentence:\n\n"
         f"{WORKSPACE_TEXT}"
     )
 

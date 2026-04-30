@@ -24,17 +24,18 @@ MODEL_NAME = "gpt-5.4-mini"
 
 
 class InstructionValues(TypedDict):
-    """Typed values used to render the support instructions."""
+    """Typed values used to render the risk-analysis instructions."""
 
-    company_name: str
+    firm_name: str
 
 
 INSTRUCTIONS_TEMPLATE = PromptTemplate[InstructionValues, str](
     system_template="""
-You are {{ company_name }} support.
+You are {{ firm_name }}'s portfolio risk analyst.
 Before any tool call, first tell the user in one short two-step preamble what
-you are about to check. Then call `search_returns_policy` exactly once.
-After the tool result arrives, answer in at most two bullet points.
+you are about to check. Then call `lookup_portfolio_risk_policy` exactly once.
+After the tool result arrives, answer in at most two bullet points. Do not give
+personalized financial advice or trade instructions.
 """.strip(),
     user_template=None,
     output_schema=OutputSchema(str),
@@ -49,27 +50,27 @@ MODEL = ResponsesClient(
 
 
 @as_tool
-async def search_returns_policy(question: str) -> str:
-    """Look up the current Acme returns policy."""
+async def lookup_portfolio_risk_policy(question: str) -> str:
+    """Look up the current portfolio risk policy."""
     del question
     return (
-        "Acme Returns Policy: Opened laptops may be returned within 30 days only "
-        "when they are in resellable condition. Accidental damage, including "
-        "cracked screens, is not covered by the standard return window."
+        "Northstar Risk Policy: Single-sector exposure above 35% requires a risk "
+        "review before new purchases. Leveraged ETF exposure above 10% requires "
+        "a portfolio manager approval note before execution."
     )
 
 
-class SupportAgent(DefaultAgent):
+class PortfolioRiskAgent(DefaultAgent):
     descriptor = AgentDescriptor(
-        name="Acme Support",
+        name="Portfolio Risk Analyst",
         model=MODEL,
         model_args={"reasoning": {"effort": "medium", "summary": "detailed"}},
         instructions=PromptSpec(
             template=INSTRUCTIONS_TEMPLATE,
-            values={"company_name": "Acme Devices"},
+            values={"firm_name": "Northstar Capital"},
         ),
         tools=Tools(
-            tools=[search_returns_policy],
+            tools=[lookup_portfolio_risk_policy],
             parallel_tool_calls=False,
         ),
     )
@@ -82,10 +83,12 @@ async def run_demo() -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
 
-    agent = SupportAgent()
-    stream = await agent.run_stream(
-        "Can I return an opened laptop if the screen is cracked?"
+    agent = PortfolioRiskAgent()
+    question = (
+        "The model portfolio is 42% semiconductors and includes a 12% leveraged "
+        "ETF sleeve. What risk policy applies before adding more exposure?"
     )
+    stream = await agent.run_stream(question)
 
     print("Example: default agent streaming quickstart")
     print(f"Model: {MODEL_NAME}")
@@ -96,7 +99,7 @@ async def run_demo() -> None:
     print("reasoning summaries, when available, and preamble/phase details come")
     print("through unchanged.")
     print()
-    print("User: Can I return an opened laptop if the screen is cracked?")
+    print(f"User: {question}")
     print("Assistant stream:")
 
     last_openai_phase: str | None = None

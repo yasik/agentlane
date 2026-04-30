@@ -1,9 +1,9 @@
-# High Throughput Messaging Demo
+# High Throughput Market Workflow Demo
 
-This example stress-tests AgentLane messaging using both:
+This example stress-tests AgentLane messaging for market workflows using both:
 
-1. RPC-style direct sends (`send_message`)
-2. event fan-out publishes (`publish_message`)
+1. execution-risk RPC-style direct sends (`send_message`)
+2. market-data fan-out publishes (`publish_message`)
 
 It streams progress to stdout while running.
 
@@ -29,7 +29,7 @@ uv run python examples/throughput/high_throughput_messaging/main.py \
 ## What You Should See
 
 1. Startup configuration banner.
-2. Rolling per-interval rates for RPC send/deliver and publish enqueue.
+2. Rolling per-interval rates for risk RPC send/deliver and market-data publish enqueue.
 3. Final summary with totals and aggregate throughput.
 
 Note:

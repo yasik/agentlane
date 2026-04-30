@@ -3,9 +3,9 @@
 This example wires the first-party `find`, `grep`, `read`, and `write` tools
 through `HarnessToolsShim`.
 
-It creates a temporary workspace, asks the model to write a file, find it,
-search inside it with `grep`, read it back, and summarize, then prints the
-assistant answer plus the observed tool calls.
+It creates a temporary workspace, asks the model to write a portfolio risk note,
+find it, search inside it with `grep`, read it back, and summarize, then prints
+the assistant answer plus the observed tool calls.
 
 ## Run
 

@@ -1,7 +1,7 @@
 # OpenAI Streaming Tool Reasoning
 
 This example uses `agentlane_openai.ResponsesClient.stream_response(...)`
-directly in an interactive chat loop.
+directly in an interactive chat loop for a portfolio risk policy lookup.
 
 It demonstrates:
 
@@ -26,7 +26,7 @@ OPENAI_API_KEY=sk-... uv run python examples/models/openai_streaming_tool_reason
 Then type a question such as:
 
 ```text
-Can I return an opened laptop if the screen is cracked? Please look it up.
+The portfolio is 42% semiconductors and 12% leveraged ETFs. Please look up the risk policy before answering.
 ```
 
 Type `exit` to quit.

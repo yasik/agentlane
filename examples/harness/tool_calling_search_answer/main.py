@@ -8,8 +8,8 @@ from typing import TypedDict, cast
 import structlog
 from agentlane_openai import ResponsesClient
 
-from agentlane.harness import Agent, AgentDescriptor, Runner, RunResult
-from agentlane.messaging import AgentId, DeliveryStatus
+from agentlane.harness import AgentDescriptor, Runner
+from agentlane.harness.agents import DefaultAgent
 from agentlane.models import (
     Config,
     OutputSchema,
@@ -19,31 +19,33 @@ from agentlane.models import (
     Tools,
     as_tool,
 )
-from agentlane.runtime import SingleThreadedRuntimeEngine
 
 MODEL_NAME = "gpt-5.4-mini"
 MOCK_SEARCH_RESULT = (
-    "Acme Help Center: Opened laptops may be returned within 30 days of delivery. "
-    "Standard returns do not cover devices with accidental damage."
+    "Harborview Clinical Protocol: A patient reporting new bruising while taking "
+    "warfarin should be asked about bleeding symptoms, medication changes, and "
+    "recent INR timing. Escalate same day for active bleeding, head injury, black "
+    "stools, or severe headache."
 )
 
 
 class AssistantInstructionValues(TypedDict):
-    """Typed values used to render the policy assistant instructions."""
+    """Typed values used to render the clinical protocol assistant instructions."""
 
-    company_name: str
+    clinic_name: str
     knowledge_source: str
     tone: str
 
 
 INSTRUCTIONS_TEMPLATE = PromptTemplate[AssistantInstructionValues, str](
     system_template="""
-You are {{ company_name }}'s policy assistant.
+You are {{ clinic_name }}'s clinical protocol assistant.
 Use a {{ tone }} tone.
 
-When the user asks about policy, returns, warranties, or shipping, you must call
-`search_help_center` before answering. Answer only from the returned {{ knowledge_source }}
-result and keep the answer under 80 words.
+When the user asks about a care protocol, you must call
+`search_clinical_protocol` before answering. Answer only from the returned
+{{ knowledge_source }} result and keep the answer under 80 words. Do not
+diagnose or recommend medication changes.
 """.strip(),
     user_template=None,
     output_schema=OutputSchema(str),
@@ -51,8 +53,8 @@ result and keep the answer under 80 words.
 
 
 @as_tool
-async def search_help_center(question: str) -> str:
-    """Search the Acme help center for the current policy answer."""
+async def search_clinical_protocol(question: str) -> str:
+    """Search the clinical protocol library for the current care guidance."""
     del question
     return MOCK_SEARCH_RESULT
 
@@ -64,23 +66,18 @@ async def run_demo() -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
     api_key = os.environ["OPENAI_API_KEY"]
-    runner = Runner(max_attempts=2)
-    runtime = SingleThreadedRuntimeEngine()
-    agent_id = AgentId.from_values("policy-agent", "tool-demo")
     instruction_values: AssistantInstructionValues = {
-        "company_name": "Acme",
-        "knowledge_source": "help-center",
+        "clinic_name": "Harborview Anticoagulation Clinic",
+        "knowledge_source": "protocol-library",
         "tone": "clear and practical",
     }
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
 
-    agent = Agent.bind(
-        runtime,
-        agent_id,
-        runner=runner,
+    agent = DefaultAgent(
+        runner=Runner(max_attempts=2),
         descriptor=AgentDescriptor(
-            name="Acme Policy Assistant",
-            description="Answers customer policy questions with a search tool",
+            name="Clinical Protocol Assistant",
+            description="Answers clinical workflow questions with a protocol search tool",
             model=model,
             model_args={"reasoning_effort": "low"},
             instructions=PromptSpec(
@@ -90,27 +87,21 @@ async def run_demo() -> None:
             # Require one search call so the example always exercises the tool
             # loop before the assistant answers.
             tools=Tools(
-                tools=[search_help_center],
+                tools=[search_clinical_protocol],
                 tool_choice="required",
-                tool_call_limits={"search_help_center": 1},
+                tool_call_limits={"search_clinical_protocol": 1},
             ),
         ),
     )
     question = (
-        "If I opened my Acme UltraBook yesterday, can I still return it next week?"
+        "A patient on warfarin reports new bruising and missed their last INR check. "
+        "What does our protocol say to ask and escalate?"
     )
 
-    outcome = await runtime.send_message(question, recipient=agent_id)
-    await runtime.stop_when_idle()
-
-    if outcome.status != DeliveryStatus.DELIVERED:
-        raise RuntimeError(f"Expected delivered outcome, got {outcome.status.value}.")
-    if not isinstance(outcome.response_payload, RunResult):
-        raise RuntimeError("Expected a RunResult response payload.")
-
+    result = await agent.run(question)
     run_state = agent.run_state
     if run_state is None:
-        raise RuntimeError("Expected the harness agent to expose persisted run state.")
+        raise RuntimeError("Expected the default agent to persist run state.")
 
     tool_name = "not found"
     tool_arguments = "not found"
@@ -138,7 +129,7 @@ async def run_demo() -> None:
     print()
     print(f"User: {question}")
     print()
-    print(f"Assistant: {outcome.response_payload.final_output}")
+    print(f"Assistant: {result.final_output}")
     print()
     print(f"Tool called: {tool_name}")
     print(f"Tool arguments: {tool_arguments}")

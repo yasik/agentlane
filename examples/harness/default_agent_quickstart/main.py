@@ -16,17 +16,18 @@ MODEL_NAME = "gpt-5.4-mini"
 
 
 class InstructionValues(TypedDict):
-    """Typed values used to render the support instructions."""
+    """Typed values used to render the patient intake instructions."""
 
-    company_name: str
+    clinic_name: str
     tone: str
 
 
 INSTRUCTIONS_TEMPLATE = PromptTemplate[InstructionValues, str](
     system_template="""
-You are {{ company_name }}'s support assistant.
+You are {{ clinic_name }}'s patient intake assistant.
 Use a {{ tone }} tone.
-Keep replies concise and practical.
+Keep replies concise and practical. Do not diagnose. Identify urgent red flags
+and tell the patient when to contact the care team or seek emergency care.
 """.strip(),
     user_template=None,
     output_schema=OutputSchema(str),
@@ -40,15 +41,15 @@ MODEL = ResponsesClient(
 )
 
 
-class SupportAgent(DefaultAgent):
+class PatientIntakeAgent(DefaultAgent):
     descriptor = AgentDescriptor(
-        name="Acme Support",
+        name="Patient Intake",
         model=MODEL,
         model_args={"reasoning_effort": "low"},
         instructions=PromptSpec(
             template=INSTRUCTIONS_TEMPLATE,
             values={
-                "company_name": "Acme Devices",
+                "clinic_name": "Harborview Cardiology",
                 "tone": "clear and calm",
             },
         ),
@@ -62,10 +63,15 @@ async def run_demo() -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
 
-    agent = SupportAgent()
+    agent = PatientIntakeAgent()
 
-    first = await agent.run("My order arrived damaged. What should I do first?")
-    second = await agent.run("Please summarize the next step in one sentence.")
+    first_question = (
+        "I started a new blood pressure medicine and felt lightheaded this morning. "
+        "What should I do first?"
+    )
+    second_question = "Please summarize the next step in one sentence."
+    first = await agent.run(first_question)
+    second = await agent.run(second_question)
 
     run_state = agent.run_state
     if run_state is None:
@@ -77,10 +83,10 @@ async def run_demo() -> None:
     print("The script creates one agent class and calls `run(...)` directly.")
     print("No runtime, runner, agent id, or send_message wiring is needed here.")
     print()
-    print("User: My order arrived damaged. What should I do first?")
+    print(f"User: {first_question}")
     print(f"Assistant: {first.final_output}")
     print()
-    print("User: Please summarize the next step in one sentence.")
+    print(f"User: {second_question}")
     print(f"Assistant: {second.final_output}")
     print()
     print(

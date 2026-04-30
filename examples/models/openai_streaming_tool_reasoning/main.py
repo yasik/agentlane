@@ -8,21 +8,30 @@ from typing import Any, cast
 import structlog
 from agentlane_openai import ResponsesClient
 
-from agentlane.models import Config, ModelStreamEvent, ModelStreamEventKind, Tools, as_tool
+from agentlane.models import (
+    Config,
+    ModelStreamEvent,
+    ModelStreamEventKind,
+    Tools,
+    as_tool,
+)
 from agentlane.runtime import CancellationToken
 
 MODEL_NAME = "gpt-5.4-mini"
-QUESTION = "Can I return an opened laptop if the screen is cracked? Please look it up."
+QUESTION = (
+    "The portfolio is 42% semiconductors and 12% leveraged ETFs. "
+    "Please look up the risk policy before answering."
+)
 TOOL_RESULT = (
-    "Acme Returns Policy: Opened laptops may be returned within 30 days only when they "
-    "are in resellable condition. Accidental damage, including cracked screens, is not "
-    "covered by the standard return window."
+    "Northstar Risk Policy: Single-sector exposure above 35% requires a risk review "
+    "before new purchases. Leveraged ETF exposure above 10% requires portfolio manager "
+    "approval before execution."
 )
 
 
 @as_tool
-async def search_returns_policy(question: str) -> str:
-    """Look up the current Acme returns policy."""
+async def search_portfolio_risk_policy(question: str) -> str:
+    """Look up the current portfolio risk policy."""
     del question
     return TOOL_RESULT
 
@@ -182,11 +191,11 @@ async def _run_assistant_turn(
         used_tools = True
         for tool_call in tool_calls:
             tool_call_id, tool_name, tool_arguments = _function_tool_payload(tool_call)
-            tool_args = search_returns_policy.args_type().model_validate_json(
+            tool_args = search_portfolio_risk_policy.args_type().model_validate_json(
                 tool_arguments
             )
-            tool_output = search_returns_policy.return_value_as_string(
-                await search_returns_policy.run(tool_args, CancellationToken())
+            tool_output = search_portfolio_risk_policy.return_value_as_string(
+                await search_portfolio_risk_policy.run(tool_args, CancellationToken())
             )
 
             print("Tool execution")
@@ -221,7 +230,7 @@ async def run_demo() -> None:
         )
     )
     tools = Tools(
-        tools=[search_returns_policy],
+        tools=[search_portfolio_risk_policy],
         tool_choice="required",
         parallel_tool_calls=False,
     )
@@ -230,10 +239,10 @@ async def run_demo() -> None:
         {
             "role": "system",
             "content": (
-                "You are Acme support. Before any tool call, first tell the user in one "
+                "You are a portfolio risk analyst. Before any tool call, first tell the user in one "
                 "short two-step preamble what you are about to check. Then call the "
                 "tool. After you get the tool result, answer in at most two bullet "
-                "points."
+                "points. Do not provide personalized financial advice or trade instructions."
             ),
         },
     ]

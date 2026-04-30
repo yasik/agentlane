@@ -52,7 +52,7 @@ process through the shared tracing API.
 from agentlane.tracing import emit_metric, generation_span, trace
 
 
-with trace("customer_support_run"):
+with trace("clinical_triage_run"):
     with generation_span(model="gpt-5.4-mini"):
         emit_metric("llm_calls", 1)
 ```

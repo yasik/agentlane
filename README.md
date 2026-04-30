@@ -145,16 +145,16 @@ from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
 
 
-class SupportAgent(DefaultAgent):
+class CareNavigationAgent(DefaultAgent):
     descriptor = AgentDescriptor(
-        name="Support",
+        name="Care Navigation",
         model=model,
-        instructions="You are a concise support agent.",
+        instructions="You are a concise patient care navigation agent.",
     )
 
 
-agent = SupportAgent()
-result = await agent.run("My order arrived damaged. What should I do first?")
+agent = CareNavigationAgent()
+result = await agent.run("I feel dizzy after starting a new medication. What should I do first?")
 ```
 
 This is the simplest entry point.

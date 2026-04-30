@@ -56,9 +56,9 @@ Shims are attached to
 
 ```python
 descriptor = AgentDescriptor(
-    name="Support",
+    name="Clinical Assistant",
     model=model,
-    instructions="You are a support assistant.",
+    instructions="You are a clinical workflow assistant.",
     shims=(ReplyPrefixShim(), TurnCounterShim()),
 )
 ```
@@ -194,21 +194,21 @@ class ReplyPrefixShim(Shim):
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         if turn.run_state.turn_count == 1:
             turn.append_system_instruction(
-                "Always start every reply with `Support:`.",
+                "Always start every reply with `Care note:`.",
                 separator="\n",
             )
 
 
 agent = DefaultAgent(
     descriptor=AgentDescriptor(
-        name="Support",
+        name="Clinical Assistant",
         model=model,
-        instructions="You are a concise support assistant.",
+        instructions="You are a concise clinical workflow assistant.",
         shims=(ReplyPrefixShim(),),
     )
 )
 
-result = await agent.run("My order arrived damaged.")
+result = await agent.run("Draft follow-up guidance for a patient with new bruising.")
 ```
 
 ## Advanced Bound Sessions

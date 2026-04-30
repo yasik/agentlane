@@ -1,7 +1,8 @@
 # Default Agent Streaming Quickstart
 
 This example shows the smallest high-level streaming surface in the harness:
-`agentlane.harness.agents.DefaultAgent.run_stream(...)`.
+`agentlane.harness.agents.DefaultAgent.run_stream(...)`. The scenario is a
+portfolio risk review that looks up a mocked risk policy before answering.
 
 It demonstrates:
 

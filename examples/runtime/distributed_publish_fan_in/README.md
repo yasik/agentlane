@@ -1,21 +1,22 @@
-# Distributed Publish Fan-In Demo
+# Distributed Portfolio Analysis Publish Fan-In Demo
 
-This example shows explicit distributed runtime topology with:
+This example shows explicit distributed runtime topology for portfolio analysis
+with:
 
 1. one `WorkerAgentRuntimeHost`
 2. five `WorkerAgentRuntime` instances
-3. publish fan-out from planner to two specialist workers
-4. fan-in into one stateful aggregator agent keyed by workflow id
+3. publish fan-out from planner to market-data and risk workers
+4. fan-in into one stateful aggregator agent keyed by analysis id
 
 Message flow:
 
 1. `IngressAgent -> PlannerAgent` via direct RPC
-2. `PlannerAgent -> InventoryWorkerAgent + PricingWorkerAgent` via publish
-3. `InventoryWorkerAgent + PricingWorkerAgent -> AggregatorAgent` via publish
+2. `PlannerAgent -> MarketDataWorkerAgent + RiskWorkerAgent` via publish
+3. `MarketDataWorkerAgent + RiskWorkerAgent -> AggregatorAgent` via publish
 4. `AggregatorAgent` merges both results and resolves external completion
 
 The aggregator demonstrates the key fan-in pattern: one agent instance collects
-multiple result events and produces one merged workflow summary.
+multiple result events and produces one merged portfolio analysis summary.
 
 ## ASCII Flow
 
@@ -40,8 +41,8 @@ main
     [host]
     /    \
    v      v
-[inventory_worker]      [pricing_worker]
-  InventoryWorkerAgent    PricingWorkerAgent
+[market_data_worker]      [risk_worker]
+  MarketDataWorkerAgent    RiskWorkerAgent
            \              /
             \            /
              v          v

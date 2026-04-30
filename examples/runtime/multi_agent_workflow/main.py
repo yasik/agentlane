@@ -1,4 +1,4 @@
-"""Multi-agent runtime demo with direct send + publish fan-out patterns."""
+"""Trading analysis runtime demo with direct send + publish fan-out patterns."""
 
 import argparse
 import asyncio
@@ -26,19 +26,19 @@ from agentlane.runtime import (
 
 INGRESS_AGENT_TYPE = "demo.ingress"
 PLANNER_AGENT_TYPE = "demo.planner"
-WORKER_A_AGENT_TYPE = "demo.worker_a"
-WORKER_B_AGENT_TYPE = "demo.worker_b"
+EXECUTION_AGENT_TYPE = "demo.execution_worker"
+RISK_AGENT_TYPE = "demo.risk_worker"
 AGGREGATOR_AGENT_TYPE = "demo.aggregator"
 
-PLAN_TOPIC_TYPE = "demo.workflow.plan_ready"
-RESULT_TOPIC_TYPE = "demo.workflow.result"
+PLAN_TOPIC_TYPE = "demo.trading.plan_ready"
+RESULT_TOPIC_TYPE = "demo.trading.result"
 CONSOLE = Console()
 COMPONENT_STYLES = {
     "demo": "bold cyan",
     "ingress": "bold green",
     "planner": "bold magenta",
-    "worker_a": "bold blue",
-    "worker_b": "bold yellow",
+    "execution": "bold blue",
+    "risk": "bold yellow",
     "aggregator": "bold white",
 }
 
@@ -56,16 +56,16 @@ def log_line(component: str, message: str) -> None:
 
 @dataclass(slots=True, frozen=True)
 class DemoConfig:
-    """Runtime configuration for the multi-agent workflow demo."""
+    """Runtime configuration for the trading analysis demo."""
 
     workflow_count: int
-    """Number of workflows to start in parallel."""
+    """Number of trading analysis runs to start in parallel."""
 
     worker_count: int
     """Worker count for `SingleThreadedRuntimeEngine`."""
 
     timeout_seconds: float
-    """Timeout waiting for aggregated workflow completion."""
+    """Timeout waiting for aggregated analysis completion."""
 
     aggregator_route_key: str
     """Route key used to force a single stateful aggregator instance."""
@@ -73,13 +73,13 @@ class DemoConfig:
 
 @dataclass(slots=True)
 class UserWorkflowRequest:
-    """Ingress payload to start one workflow."""
+    """Ingress payload to start one trading analysis."""
 
     workflow_id: str
-    """Unique workflow identifier."""
+    """Unique analysis identifier."""
 
     prompt: str
-    """Input task prompt for planner."""
+    """Input trading prompt for planner."""
 
 
 @dataclass(slots=True)
@@ -87,21 +87,21 @@ class PlannerTask:
     """Planner payload sent via direct message from ingress."""
 
     workflow_id: str
-    """Unique workflow identifier."""
+    """Unique analysis identifier."""
 
     prompt: str
-    """Workflow prompt forwarded from ingress."""
+    """Trading prompt forwarded from ingress."""
 
 
 @dataclass(slots=True)
 class PlanReadyEvent:
-    """Publish payload emitted by planner for worker fan-out."""
+    """Publish payload emitted by planner for execution/risk fan-out."""
 
     workflow_id: str
-    """Unique workflow identifier."""
+    """Unique analysis identifier."""
 
     plan: str
-    """Planned instructions consumed by workers."""
+    """Planned trading instructions consumed by workers."""
 
 
 @dataclass(slots=True)
@@ -109,10 +109,10 @@ class WorkerResultEvent:
     """Publish payload emitted by workers for aggregation."""
 
     workflow_id: str
-    """Unique workflow identifier."""
+    """Unique analysis identifier."""
 
     worker_name: str
-    """Worker label (`worker_a` or `worker_b`)."""
+    """Worker label (`execution` or `risk`)."""
 
     output: str
     """Worker output text."""
@@ -123,33 +123,33 @@ class AggregatedWorkflowResult:
     """Aggregated output tracked by the demo completion tracker."""
 
     workflow_id: str
-    """Unique workflow identifier."""
+    """Unique analysis identifier."""
 
     merged_output: str
-    """Deterministic merged worker output string."""
+    """Deterministic merged trading analysis output string."""
 
     worker_count: int
     """Number of worker outputs included in merge."""
 
 
 class CompletionTracker:
-    """Tracks workflow completion futures resolved by aggregator agent."""
+    """Tracks trading analysis completion futures resolved by aggregator agent."""
 
     def __init__(self, expected_worker_count: int) -> None:
-        """Initialize tracker with expected worker result count per workflow."""
+        """Initialize tracker with expected worker result count per analysis."""
         self._expected_worker_count = expected_worker_count
         self._futures: dict[str, asyncio.Future[AggregatedWorkflowResult]] = {}
         self._results: dict[str, dict[str, str]] = {}
 
     def register_workflow(self, workflow_id: str) -> None:
-        """Create completion future state for a new workflow id."""
+        """Create completion future state for a new analysis id."""
         if workflow_id in self._futures:
             return
         self._futures[workflow_id] = asyncio.get_running_loop().create_future()
         self._results[workflow_id] = {}
 
     def record_worker_result(self, event: WorkerResultEvent) -> None:
-        """Store one worker result and complete workflow future when ready."""
+        """Store one worker result and complete analysis future when ready."""
         if event.workflow_id not in self._futures:
             self.register_workflow(event.workflow_id)
 
@@ -179,7 +179,7 @@ class CompletionTracker:
         workflow_id: str,
         timeout_seconds: float,
     ) -> AggregatedWorkflowResult:
-        """Wait for aggregated result for one workflow id."""
+        """Wait for aggregated result for one analysis id."""
         if workflow_id not in self._futures:
             self.register_workflow(workflow_id)
         completion_future = self._futures[workflow_id]
@@ -187,7 +187,7 @@ class CompletionTracker:
 
 
 class IngressAgent(BaseAgent):
-    """Entry agent that receives user workflow requests."""
+    """Entry agent that receives trading analysis requests."""
 
     def __init__(self, engine: Engine, planner_recipient: AgentId) -> None:
         """Initialize ingress agent with planner recipient identity."""
@@ -195,8 +195,10 @@ class IngressAgent(BaseAgent):
         self._planner_recipient = planner_recipient
 
     @on_message
-    async def handle(self, payload: UserWorkflowRequest, context: MessageContext) -> object:
-        """Handle user request and forward to planner via direct send."""
+    async def handle(
+        self, payload: UserWorkflowRequest, context: MessageContext
+    ) -> object:
+        """Handle trading request and forward to planner via direct send."""
         log_line(
             "ingress",
             f"received workflow={payload.workflow_id} prompt='{payload.prompt}'",
@@ -217,12 +219,12 @@ class IngressAgent(BaseAgent):
 
 
 class PlannerAgent(BaseAgent):
-    """Planner agent that publishes one plan event for worker fan-out."""
+    """Planner agent that publishes one plan event for execution/risk fan-out."""
 
     @on_message
     async def handle(self, payload: PlannerTask, context: MessageContext) -> object:
-        """Create one plan and publish it to worker subscribers."""
-        plan_text = f"plan({payload.prompt})"
+        """Create one trading plan and publish it to worker subscribers."""
+        plan_text = f"trade-plan({payload.prompt})"
         log_line(
             "planner",
             f"workflow={payload.workflow_id} built plan='{plan_text}'",
@@ -242,27 +244,27 @@ class PlannerAgent(BaseAgent):
         return {"workflow_id": payload.workflow_id, "fanout_workers": 2}
 
 
-class WorkerAAgent(BaseAgent):
-    """First worker subscribed to planner publish events."""
+class ExecutionWorkerAgent(BaseAgent):
+    """Execution worker subscribed to planner publish events."""
 
     def __init__(self, engine: Engine, aggregator_route_key: str) -> None:
-        """Initialize worker A with aggregator route key."""
+        """Initialize execution worker with aggregator route key."""
         super().__init__(engine)
         self._aggregator_route_key = aggregator_route_key
 
     @on_message
     async def handle(self, payload: PlanReadyEvent, context: MessageContext) -> object:
-        """Process planner event and publish worker result."""
+        """Process planner event and publish execution result."""
         log_line(
-            "worker_a",
+            "execution",
             f"workflow={payload.workflow_id} received plan",
         )
-        result_text = f"A-processed<{payload.plan}>"
+        result_text = f"execution-path-reviewed<{payload.plan}>"
         await asyncio.sleep(0.1)
         await self.publish_message(
             WorkerResultEvent(
                 workflow_id=payload.workflow_id,
-                worker_name="worker_a",
+                worker_name="execution",
                 output=result_text,
             ),
             topic=TopicId.from_values(
@@ -272,33 +274,33 @@ class WorkerAAgent(BaseAgent):
             correlation_id=context.correlation_id,
         )
         log_line(
-            "worker_a",
+            "execution",
             f"workflow={payload.workflow_id} published result",
         )
         return None
 
 
-class WorkerBAgent(BaseAgent):
-    """Second worker subscribed to planner publish events."""
+class RiskWorkerAgent(BaseAgent):
+    """Risk worker subscribed to planner publish events."""
 
     def __init__(self, engine: Engine, aggregator_route_key: str) -> None:
-        """Initialize worker B with aggregator route key."""
+        """Initialize risk worker with aggregator route key."""
         super().__init__(engine)
         self._aggregator_route_key = aggregator_route_key
 
     @on_message
     async def handle(self, payload: PlanReadyEvent, context: MessageContext) -> object:
-        """Process planner event and publish worker result."""
+        """Process planner event and publish risk result."""
         log_line(
-            "worker_b",
+            "risk",
             f"workflow={payload.workflow_id} received plan",
         )
-        result_text = f"B-processed<{payload.plan}>"
+        result_text = f"risk-limits-reviewed<{payload.plan}>"
         await asyncio.sleep(0.2)
         await self.publish_message(
             WorkerResultEvent(
                 workflow_id=payload.workflow_id,
-                worker_name="worker_b",
+                worker_name="risk",
                 output=result_text,
             ),
             topic=TopicId.from_values(
@@ -308,7 +310,7 @@ class WorkerBAgent(BaseAgent):
             correlation_id=context.correlation_id,
         )
         log_line(
-            "worker_b",
+            "risk",
             f"workflow={payload.workflow_id} published result",
         )
         return None
@@ -324,7 +326,9 @@ class AggregatorAgent(BaseAgent):
         self._message_index = 0
 
     @on_message
-    async def handle(self, payload: WorkerResultEvent, context: MessageContext) -> object:
+    async def handle(
+        self, payload: WorkerResultEvent, context: MessageContext
+    ) -> object:
         """Aggregate worker results and complete workflows when both arrive."""
         _ = context
         self._message_index += 1
@@ -358,7 +362,7 @@ def print_banner(config: DemoConfig) -> None:
     CONSOLE.print(
         Panel(
             config_table,
-            title="[bold cyan]Runtime Demo: Multi-Agent Workflow[/bold cyan]",
+            title="[bold cyan]Runtime Demo: Trading Analysis[/bold cyan]",
             subtitle="Direct Send + Publish Fan-Out + In-Order Aggregator",
             border_style="cyan",
         )
@@ -366,9 +370,9 @@ def print_banner(config: DemoConfig) -> None:
 
 
 def print_final_results(results: list[AggregatedWorkflowResult]) -> None:
-    """Print final aggregated workflow results."""
+    """Print final aggregated trading analysis results."""
     result_table = Table(
-        title="[bold green]Final Aggregated Results[/bold green]",
+        title="[bold green]Final Aggregated Trading Results[/bold green]",
         header_style="bold cyan",
     )
     result_table.add_column("Workflow")
@@ -384,7 +388,7 @@ def print_final_results(results: list[AggregatedWorkflowResult]) -> None:
 
 
 async def run_demo(config: DemoConfig) -> None:
-    """Run multi-agent workflow demonstration."""
+    """Run trading analysis demonstration."""
     print_banner(config)
     tracker = CompletionTracker(expected_worker_count=2)
     runtime = SingleThreadedRuntimeEngine(worker_count=config.worker_count)
@@ -399,15 +403,15 @@ async def run_demo(config: DemoConfig) -> None:
         PlannerAgent,
     )
     runtime.register_factory(
-        WORKER_A_AGENT_TYPE,
-        lambda engine: WorkerAAgent(
+        EXECUTION_AGENT_TYPE,
+        lambda engine: ExecutionWorkerAgent(
             engine=engine,
             aggregator_route_key=config.aggregator_route_key,
         ),
     )
     runtime.register_factory(
-        WORKER_B_AGENT_TYPE,
-        lambda engine: WorkerBAgent(
+        RISK_AGENT_TYPE,
+        lambda engine: RiskWorkerAgent(
             engine=engine,
             aggregator_route_key=config.aggregator_route_key,
         ),
@@ -419,12 +423,12 @@ async def run_demo(config: DemoConfig) -> None:
 
     runtime.subscribe_exact(
         topic_type=PLAN_TOPIC_TYPE,
-        agent_type=WORKER_A_AGENT_TYPE,
+        agent_type=EXECUTION_AGENT_TYPE,
         delivery_mode=DeliveryMode.STATEFUL,
     )
     runtime.subscribe_exact(
         topic_type=PLAN_TOPIC_TYPE,
-        agent_type=WORKER_B_AGENT_TYPE,
+        agent_type=RISK_AGENT_TYPE,
         delivery_mode=DeliveryMode.STATEFUL,
     )
     runtime.subscribe_exact(
@@ -440,13 +444,13 @@ async def run_demo(config: DemoConfig) -> None:
         for workflow_id in workflow_ids:
             tracker.register_workflow(workflow_id)
 
-        log_line("demo", "sending workflow requests to ingress")
+        log_line("demo", "sending trading analysis requests to ingress")
         send_tasks = [
             asyncio.create_task(
                 runtime.send_message(
                     UserWorkflowRequest(
                         workflow_id=workflow_id,
-                        prompt=f"analyze-request-{workflow_id}",
+                        prompt=f"evaluate-block-trade-{workflow_id}",
                     ),
                     recipient=ingress_recipient,
                 )
@@ -457,9 +461,11 @@ async def run_demo(config: DemoConfig) -> None:
 
         for workflow_id, outcome in zip(workflow_ids, send_outcomes, strict=True):
             status = outcome.status.value
-            log_line("demo", f"ingress outcome workflow={workflow_id} status={status}")
+            log_line("demo", f"ingress outcome analysis={workflow_id} status={status}")
             if outcome.status != DeliveryStatus.DELIVERED:
-                raise RuntimeError(f"Workflow '{workflow_id}' failed to start: {status}")
+                raise RuntimeError(
+                    f"Trading analysis '{workflow_id}' failed to start: {status}"
+                )
 
         log_line("demo", "waiting for aggregator completions")
         result_tasks = [
@@ -478,7 +484,10 @@ async def run_demo(config: DemoConfig) -> None:
 def parse_args() -> DemoConfig:
     """Parse command line arguments into demo configuration."""
     parser = argparse.ArgumentParser(
-        description="Runtime demo: direct send + publish fan-out with in-order aggregator.",
+        description=(
+            "Trading analysis demo: direct send + publish fan-out "
+            "with in-order aggregator."
+        ),
     )
     parser.add_argument("--workflow-count", type=int, default=3)
     parser.add_argument("--worker-count", type=int, default=8)
@@ -494,7 +503,7 @@ def parse_args() -> DemoConfig:
 
 
 def main() -> None:
-    """CLI entry point for the multi-agent workflow runtime demo."""
+    """CLI entry point for the trading analysis runtime demo."""
     config = parse_args()
     asyncio.run(run_demo(config))
 

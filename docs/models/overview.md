@@ -131,28 +131,29 @@ from typing import TypedDict
 from agentlane.models import OutputSchema, PromptSpec, PromptTemplate, Tools, as_tool
 
 
-class SupportVars(TypedDict):
-    customer_tier: str
+class RiskVars(TypedDict):
+    portfolio_tier: str
 
 
-support_prompt = PromptTemplate[SupportVars, str](
-    system_template="You support {{ customer_tier }} customers.",
+risk_prompt = PromptTemplate[RiskVars, str](
+    system_template="You review {{ portfolio_tier }} portfolio risk alerts.",
     output_schema=OutputSchema(str),
 )
 
 
 @as_tool
-async def search_help_center(question: str) -> str:
-    """Search the help center."""
-    return "Reset your password from Settings > Security."
+async def search_risk_policy(question: str) -> str:
+    """Search the risk policy library."""
+    del question
+    return "Single-sector exposure above 35% requires risk review."
 
 
 instructions = PromptSpec(
-    template=support_prompt,
-    values={"customer_tier": "business"},
+    template=risk_prompt,
+    values={"portfolio_tier": "institutional"},
 )
 
-tools = Tools(tools=[search_help_center])
+tools = Tools(tools=[search_risk_policy])
 ```
 
 ## Related Docs
