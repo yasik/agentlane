@@ -1,1 +1,1 @@
-# Multi-agent workflow runtime demo package.
+# Trading analysis runtime demo package.

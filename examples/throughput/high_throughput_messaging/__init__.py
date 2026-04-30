@@ -1,1 +1,1 @@
-# High-throughput messaging demo package.
+# High-throughput market workflow demo package.

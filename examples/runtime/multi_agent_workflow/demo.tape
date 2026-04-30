@@ -11,7 +11,7 @@ Set TypingSpeed 35ms
 Set Padding 18
 
 Hide
-Type "cd /Users/yasik/code/personal/agentlane" Enter
+Type "cd /Users/yasik/.superset/worktrees/agentlane/rebuild-examples" Enter
 Type "clear" Enter
 Show
 

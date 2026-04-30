@@ -43,7 +43,9 @@ async def run_demo() -> None:
         )
     )
 
-    first_prompt = "Create a three-step plan for adding a small documentation page."
+    first_prompt = (
+        "Create a three-step plan for reviewing a portfolio concentration alert."
+    )
     first = await agent.run(first_prompt)
 
     second_prompt = (

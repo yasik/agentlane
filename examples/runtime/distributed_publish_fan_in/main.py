@@ -1,4 +1,4 @@
-"""Distributed publish fan-out / fan-in demo with a stateful aggregator."""
+"""Distributed publish fan-out / fan-in demo for portfolio analysis."""
 
 import argparse
 import asyncio
@@ -26,8 +26,8 @@ from agentlane.runtime import (
 
 INGRESS_AGENT_TYPE = "demo.dist.ingress"
 PLANNER_AGENT_TYPE = "demo.dist.planner"
-INVENTORY_AGENT_TYPE = "demo.dist.inventory"
-PRICING_AGENT_TYPE = "demo.dist.pricing"
+MARKET_DATA_AGENT_TYPE = "demo.dist.market_data"
+RISK_AGENT_TYPE = "demo.dist.risk"
 AGGREGATOR_AGENT_TYPE = "demo.dist.aggregator"
 
 PLAN_TOPIC_TYPE = "demo.dist.plan_ready"
@@ -38,8 +38,8 @@ COMPONENT_STYLES = {
     "host": "bold cyan",
     "ingress": "bold green",
     "planner": "bold magenta",
-    "inventory": "bold blue",
-    "pricing": "bold yellow",
+    "market_data": "bold blue",
+    "risk": "bold yellow",
     "aggregator": "bold white",
 }
 
@@ -60,18 +60,18 @@ class DemoConfig:
     """Configuration for the distributed publish fan-in demo."""
 
     workflow_count: int
-    """Number of workflows to run in parallel."""
+    """Number of portfolio analysis runs to start in parallel."""
 
     timeout_seconds: float
-    """Timeout for waiting on aggregated workflow completion."""
+    """Timeout for waiting on aggregated analysis completion."""
 
 
 @dataclass(slots=True)
 class WorkflowSummary:
-    """Final aggregated result for one workflow."""
+    """Final aggregated result for one portfolio analysis run."""
 
     workflow_id: str
-    """Unique workflow identifier."""
+    """Unique analysis identifier."""
 
     merged_output: str
     """Deterministic merged output from all worker results."""
@@ -89,20 +89,20 @@ def expect_str(payload: dict[str, object], field_name: str) -> str:
 
 
 class CompletionTracker:
-    """Tracks workflow completion futures resolved by the aggregator agent."""
+    """Tracks analysis completion futures resolved by the aggregator agent."""
 
     def __init__(self) -> None:
         """Initialize completion tracker state."""
         self._futures: dict[str, asyncio.Future[WorkflowSummary]] = {}
 
     def register_workflow(self, workflow_id: str) -> None:
-        """Register one workflow id with an incomplete future."""
+        """Register one analysis id with an incomplete future."""
         if workflow_id in self._futures:
             return
         self._futures[workflow_id] = asyncio.get_running_loop().create_future()
 
     def complete(self, summary: WorkflowSummary) -> None:
-        """Resolve one workflow completion future."""
+        """Resolve one analysis completion future."""
         self.register_workflow(summary.workflow_id)
         completion_future = self._futures[summary.workflow_id]
         if completion_future.done():
@@ -114,14 +114,14 @@ class CompletionTracker:
         workflow_id: str,
         timeout_seconds: float,
     ) -> WorkflowSummary:
-        """Wait for the final workflow summary."""
+        """Wait for the final analysis summary."""
         self.register_workflow(workflow_id)
         completion_future = self._futures[workflow_id]
         return await asyncio.wait_for(completion_future, timeout=timeout_seconds)
 
 
 class IngressAgent(BaseAgent):
-    """Entry agent that forwards workflow requests to planner."""
+    """Entry agent that forwards portfolio analysis requests to planner."""
 
     def __init__(self, engine: Engine, planner_recipient: AgentId) -> None:
         """Initialize ingress agent with planner recipient identity."""
@@ -134,7 +134,7 @@ class IngressAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Forward one workflow request to planner via direct RPC."""
+        """Forward one portfolio analysis request to planner via direct RPC."""
         workflow_id = expect_str(payload, "workflow_id")
         prompt = expect_str(payload, "prompt")
         log_line(
@@ -159,7 +159,7 @@ class IngressAgent(BaseAgent):
 
 
 class PlannerAgent(BaseAgent):
-    """Planner agent that fans one plan out through publish."""
+    """Planner agent that fans one analysis plan out through publish."""
 
     @on_message
     async def handle(
@@ -167,17 +167,17 @@ class PlannerAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Build one plan and publish it to specialist workers."""
+        """Build one portfolio plan and publish it to specialist workers."""
         workflow_id = expect_str(payload, "workflow_id")
         prompt = expect_str(payload, "prompt")
-        plan_text = f"plan<{prompt}>"
+        plan_text = f"portfolio-plan<{prompt}>"
         log_line(
             "planner",
             f"workflow={workflow_id} built plan='{plan_text}'",
         )
         # Publish decouples the planner from specialist placement. Reusing the
-        # workflow id as the topic route key lets downstream agents correlate
-        # every event that belongs to the same workflow.
+        # The analysis id as the topic route key lets downstream agents correlate
+        # every event that belongs to the same portfolio review.
         ack = await self.publish_message(
             {"workflow_id": workflow_id, "plan": plan_text},
             topic=TopicId.from_values(
@@ -196,8 +196,8 @@ class PlannerAgent(BaseAgent):
         }
 
 
-class InventoryWorkerAgent(BaseAgent):
-    """Specialist worker subscribed to plan events."""
+class MarketDataWorkerAgent(BaseAgent):
+    """Market data worker subscribed to portfolio plan events."""
 
     @on_message
     async def handle(
@@ -205,19 +205,19 @@ class InventoryWorkerAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Process planner event and publish inventory result."""
+        """Process planner event and publish market data result."""
         workflow_id = expect_str(payload, "workflow_id")
         plan = expect_str(payload, "plan")
         await asyncio.sleep(0.12)
-        result_text = f"inventory-checked<{plan}>"
+        result_text = f"market-data-snapshotted<{plan}>"
         log_line(
-            "inventory",
+            "market_data",
             f"workflow={workflow_id} publishing result",
         )
         await self.publish_message(
             {
                 "workflow_id": workflow_id,
-                "worker_name": "inventory",
+                "worker_name": "market_data",
                 "output": result_text,
             },
             topic=TopicId.from_values(
@@ -229,8 +229,8 @@ class InventoryWorkerAgent(BaseAgent):
         return None
 
 
-class PricingWorkerAgent(BaseAgent):
-    """Specialist worker subscribed to plan events."""
+class RiskWorkerAgent(BaseAgent):
+    """Risk worker subscribed to portfolio plan events."""
 
     @on_message
     async def handle(
@@ -238,19 +238,19 @@ class PricingWorkerAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Process planner event and publish pricing result."""
+        """Process planner event and publish risk result."""
         workflow_id = expect_str(payload, "workflow_id")
         plan = expect_str(payload, "plan")
         await asyncio.sleep(0.05)
-        result_text = f"price-estimated<{plan}>"
+        result_text = f"risk-limits-evaluated<{plan}>"
         log_line(
-            "pricing",
+            "risk",
             f"workflow={workflow_id} publishing result",
         )
         await self.publish_message(
             {
                 "workflow_id": workflow_id,
-                "worker_name": "pricing",
+                "worker_name": "risk",
                 "output": result_text,
             },
             topic=TopicId.from_values(
@@ -263,7 +263,7 @@ class PricingWorkerAgent(BaseAgent):
 
 
 class AggregatorAgent(BaseAgent):
-    """Stateful fan-in agent keyed by workflow id."""
+    """Stateful fan-in agent keyed by analysis id."""
 
     def __init__(
         self,
@@ -283,17 +283,17 @@ class AggregatorAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Collect worker results and resolve workflow completion when ready."""
+        """Collect worker results and resolve analysis completion when ready."""
         _ = context
         # For stateful topic delivery, the runtime materializes the subscriber
         # agent id from the topic route key. The aggregator can therefore use
-        # its own id key as the workflow id it is collecting for.
+        # its own id key as the analysis id it is collecting for.
         workflow_id = self.id.key.value
         worker_name = expect_str(payload, "worker_name")
         output = expect_str(payload, "output")
         # This state lives inside one logical aggregator agent instance, so each
-        # workflow accumulates results independently even when many workflows are
-        # active at the same time.
+        # Each analysis accumulates results independently even when many reviews
+        # are active at the same time.
         self._partial_results[worker_name] = output
         log_line(
             "aggregator",
@@ -332,13 +332,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--workflow-count",
         type=int,
         default=3,
-        help="Number of workflows to run in parallel.",
+        help="Number of portfolio analysis runs to start in parallel.",
     )
     parser.add_argument(
         "--timeout-seconds",
         type=float,
         default=10.0,
-        help="Timeout when waiting for aggregated workflow completion.",
+        help="Timeout when waiting for aggregated analysis completion.",
     )
     return parser
 
@@ -348,8 +348,8 @@ def print_cluster_layout(
     host: WorkerAgentRuntimeHost,
     ingress_worker: WorkerAgentRuntime,
     planner_worker: WorkerAgentRuntime,
-    inventory_worker: WorkerAgentRuntime,
-    pricing_worker: WorkerAgentRuntime,
+    market_data_worker: WorkerAgentRuntime,
+    risk_worker: WorkerAgentRuntime,
     aggregator_worker: WorkerAgentRuntime,
 ) -> None:
     """Print resolved host and worker addresses."""
@@ -359,16 +359,16 @@ def print_cluster_layout(
     table.add_row("host", host.address)
     table.add_row("ingress_worker", ingress_worker.address)
     table.add_row("planner_worker", planner_worker.address)
-    table.add_row("inventory_worker", inventory_worker.address)
-    table.add_row("pricing_worker", pricing_worker.address)
+    table.add_row("market_data_worker", market_data_worker.address)
+    table.add_row("risk_worker", risk_worker.address)
     table.add_row("aggregator_worker", aggregator_worker.address)
     CONSOLE.print(table)
 
 
 def print_final_results(summaries: list[WorkflowSummary]) -> None:
-    """Print final aggregated workflow summaries."""
-    table = Table(title="Aggregated Workflow Results", show_lines=False)
-    table.add_column("Workflow", style="bold green")
+    """Print final aggregated portfolio analysis summaries."""
+    table = Table(title="Aggregated Portfolio Analysis Results", show_lines=False)
+    table.add_column("Analysis", style="bold green")
     table.add_column("Sources", justify="right")
     table.add_column("Merged Output", style="white")
     for summary in summaries:
@@ -392,8 +392,8 @@ async def run_demo(config: DemoConfig) -> None:
 
     ingress_worker = WorkerAgentRuntime(host_address=host.address)
     planner_worker = WorkerAgentRuntime(host_address=host.address)
-    inventory_worker = WorkerAgentRuntime(host_address=host.address)
-    pricing_worker = WorkerAgentRuntime(host_address=host.address)
+    market_data_worker = WorkerAgentRuntime(host_address=host.address)
+    risk_worker = WorkerAgentRuntime(host_address=host.address)
     aggregator_worker = WorkerAgentRuntime(host_address=host.address)
 
     ingress_worker.register_factory(
@@ -405,19 +405,19 @@ async def run_demo(config: DemoConfig) -> None:
     )
     planner_worker.register_factory(PLANNER_AGENT_TYPE, PlannerAgent)
 
-    inventory_worker.register_factory(INVENTORY_AGENT_TYPE, InventoryWorkerAgent)
+    market_data_worker.register_factory(MARKET_DATA_AGENT_TYPE, MarketDataWorkerAgent)
     # Stateless subscribers receive one delivery per publish without keeping
-    # per-workflow local state between messages.
-    inventory_worker.subscribe_exact(
+    # per-analysis local state between messages.
+    market_data_worker.subscribe_exact(
         topic_type=PLAN_TOPIC_TYPE,
-        agent_type=INVENTORY_AGENT_TYPE,
+        agent_type=MARKET_DATA_AGENT_TYPE,
         delivery_mode=DeliveryMode.STATELESS,
     )
 
-    pricing_worker.register_factory(PRICING_AGENT_TYPE, PricingWorkerAgent)
-    pricing_worker.subscribe_exact(
+    risk_worker.register_factory(RISK_AGENT_TYPE, RiskWorkerAgent)
+    risk_worker.subscribe_exact(
         topic_type=PLAN_TOPIC_TYPE,
-        agent_type=PRICING_AGENT_TYPE,
+        agent_type=RISK_AGENT_TYPE,
         delivery_mode=DeliveryMode.STATELESS,
     )
 
@@ -437,8 +437,8 @@ async def run_demo(config: DemoConfig) -> None:
     workers = [
         ingress_worker,
         planner_worker,
-        inventory_worker,
-        pricing_worker,
+        market_data_worker,
+        risk_worker,
         aggregator_worker,
     ]
     # Starting a worker opens its gRPC listener and registers its factories and
@@ -448,8 +448,8 @@ async def run_demo(config: DemoConfig) -> None:
         host=host,
         ingress_worker=ingress_worker,
         planner_worker=planner_worker,
-        inventory_worker=inventory_worker,
-        pricing_worker=pricing_worker,
+        market_data_worker=market_data_worker,
+        risk_worker=risk_worker,
         aggregator_worker=aggregator_worker,
     )
 
@@ -462,7 +462,7 @@ async def run_demo(config: DemoConfig) -> None:
             workflow_requests.append(
                 {
                     "workflow_id": workflow_id,
-                    "prompt": f"launch-campaign-{index + 1}",
+                    "prompt": f"rebalance-portfolio-{index + 1}",
                 }
             )
             result_tasks.append(
@@ -513,9 +513,9 @@ def main() -> None:
     CONSOLE.print(
         Panel.fit(
             (
-                "Distributed publish fan-out / fan-in demo\n"
-                "- planner publishes one plan event\n"
-                "- specialist workers handle the fan-out\n"
+                "Distributed portfolio-analysis fan-out / fan-in demo\n"
+                "- planner publishes one portfolio plan event\n"
+                "- market data and risk workers handle the fan-out\n"
                 "- one stateful aggregator agent fans results back in"
             ),
             border_style="cyan",

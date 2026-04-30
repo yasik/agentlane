@@ -1,4 +1,4 @@
-"""Simple distributed direct scatter-gather starter example."""
+"""Simple distributed direct trade analysis scatter-gather starter example."""
 
 import asyncio
 from collections.abc import Mapping
@@ -14,8 +14,8 @@ from agentlane.runtime import (
 )
 
 COORDINATOR_AGENT_TYPE = "simple.scatter.coordinator"
-UPPERCASE_AGENT_TYPE = "simple.scatter.uppercase"
-REVERSE_AGENT_TYPE = "simple.scatter.reverse"
+EXECUTION_AGENT_TYPE = "simple.scatter.execution"
+RISK_AGENT_TYPE = "simple.scatter.risk"
 
 
 def expect_mapping(payload: object, context: str) -> dict[str, object]:
@@ -48,13 +48,13 @@ class CoordinatorAgent(BaseAgent):
     def __init__(
         self,
         engine: Engine,
-        uppercase_recipient: AgentId,
-        reverse_recipient: AgentId,
+        execution_recipient: AgentId,
+        risk_recipient: AgentId,
     ) -> None:
         """Initialize coordinator with specialist recipients."""
         super().__init__(engine)
-        self._uppercase_recipient = uppercase_recipient
-        self._reverse_recipient = reverse_recipient
+        self._execution_recipient = execution_recipient
+        self._risk_recipient = risk_recipient
 
     @on_message
     async def handle(
@@ -62,43 +62,43 @@ class CoordinatorAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Scatter direct RPCs to both specialists and gather their results."""
+        """Scatter direct RPCs to execution and risk specialists."""
         request_id = expect_str(payload, "request_id")
         text = expect_str(payload, "text")
-        print(f"coordinator: sending work for {request_id}")
+        print(f"coordinator: sending trade review for {request_id}")
 
-        uppercase_task = asyncio.create_task(
+        execution_task = asyncio.create_task(
             self.send_message(
                 {"request_id": request_id, "text": text},
-                recipient=self._uppercase_recipient,
+                recipient=self._execution_recipient,
                 correlation_id=context.correlation_id,
             )
         )
-        reverse_task = asyncio.create_task(
+        risk_task = asyncio.create_task(
             self.send_message(
                 {"request_id": request_id, "text": text},
-                recipient=self._reverse_recipient,
+                recipient=self._risk_recipient,
                 correlation_id=context.correlation_id,
             )
         )
 
-        uppercase_outcome, reverse_outcome = await asyncio.gather(
-            uppercase_task,
-            reverse_task,
+        execution_outcome, risk_outcome = await asyncio.gather(
+            execution_task,
+            risk_task,
         )
-        uppercase = expect_delivered(uppercase_outcome, "uppercase")
-        reverse = expect_delivered(reverse_outcome, "reverse")
+        execution = expect_delivered(execution_outcome, "execution")
+        risk = expect_delivered(risk_outcome, "risk")
         result = {
             "request_id": request_id,
-            "uppercase": expect_str(uppercase, "uppercase"),
-            "reversed": expect_str(reverse, "reversed"),
+            "execution": expect_str(execution, "execution"),
+            "risk": expect_str(risk, "risk"),
         }
         print(f"coordinator: merged result for {request_id}")
         return result
 
 
-class UppercaseAgent(BaseAgent):
-    """Returns an uppercase version of the text."""
+class ExecutionAgent(BaseAgent):
+    """Returns an execution analysis for the trade text."""
 
     @on_message
     async def handle(
@@ -110,12 +110,12 @@ class UppercaseAgent(BaseAgent):
         _ = context
         request_id = expect_str(payload, "request_id")
         text = expect_str(payload, "text")
-        print(f"uppercase: handling {request_id}")
-        return {"uppercase": text.upper()}
+        print(f"execution: handling {request_id}")
+        return {"execution": f"route-check<{text}>"}
 
 
-class ReverseAgent(BaseAgent):
-    """Returns a reversed version of the text."""
+class RiskAgent(BaseAgent):
+    """Returns a risk analysis for the trade text."""
 
     @on_message
     async def handle(
@@ -127,8 +127,8 @@ class ReverseAgent(BaseAgent):
         _ = context
         request_id = expect_str(payload, "request_id")
         text = expect_str(payload, "text")
-        print(f"reverse: handling {request_id}")
-        return {"reversed": text[::-1]}
+        print(f"risk: handling {request_id}")
+        return {"risk": f"limit-checks={len(text.split())}"}
 
 
 async def run_example() -> None:
@@ -137,32 +137,35 @@ async def run_example() -> None:
     await host.start()
 
     coordinator_worker = WorkerAgentRuntime(host_address=host.address)
-    uppercase_worker = WorkerAgentRuntime(host_address=host.address)
-    reverse_worker = WorkerAgentRuntime(host_address=host.address)
+    execution_worker = WorkerAgentRuntime(host_address=host.address)
+    risk_worker = WorkerAgentRuntime(host_address=host.address)
 
     coordinator_worker.register_factory(
         COORDINATOR_AGENT_TYPE,
         lambda engine: CoordinatorAgent(
             engine,
-            uppercase_recipient=AgentId.from_values(UPPERCASE_AGENT_TYPE, "uppercase"),
-            reverse_recipient=AgentId.from_values(REVERSE_AGENT_TYPE, "reverse"),
+            execution_recipient=AgentId.from_values(
+                EXECUTION_AGENT_TYPE,
+                "execution",
+            ),
+            risk_recipient=AgentId.from_values(RISK_AGENT_TYPE, "risk"),
         ),
     )
-    uppercase_worker.register_factory(UPPERCASE_AGENT_TYPE, UppercaseAgent)
-    reverse_worker.register_factory(REVERSE_AGENT_TYPE, ReverseAgent)
+    execution_worker.register_factory(EXECUTION_AGENT_TYPE, ExecutionAgent)
+    risk_worker.register_factory(RISK_AGENT_TYPE, RiskAgent)
 
-    workers = [coordinator_worker, uppercase_worker, reverse_worker]
+    workers = [coordinator_worker, execution_worker, risk_worker]
     await asyncio.gather(*(worker.start() for worker in workers))
 
     try:
         request = {
-            "request_id": "request-1",
-            "text": "simple distributed runtime example",
+            "request_id": "trade-1",
+            "text": "buy AAPL block order near market close",
         }
         print(f"main: sending {request['request_id']}")
         outcome = await coordinator_worker.send_message(
             request,
-            recipient=AgentId.from_values(COORDINATOR_AGENT_TYPE, "request-1"),
+            recipient=AgentId.from_values(COORDINATOR_AGENT_TYPE, "trade-1"),
         )
         result = expect_delivered(outcome, "coordinator")
         print(f"main: final result -> {result}")

@@ -6,6 +6,9 @@ This example shows the highest-level local harness path:
 2. set one `AgentDescriptor`,
 3. call `run(...)`.
 
+The scenario is a patient intake assistant that keeps a multi-turn care
+navigation conversation in `RunState`.
+
 The script does not create a runtime, a runner, an `AgentId`, or call
 `send_message(...)` directly. `DefaultAgent` provisions the default local
 runtime and the default runner automatically.

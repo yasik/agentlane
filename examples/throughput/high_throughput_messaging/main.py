@@ -1,4 +1,4 @@
-"""High-throughput demo wiring direct send and publish fan-out messaging."""
+"""High-throughput demo for execution checks and market data fan-out."""
 
 import argparse
 import asyncio
@@ -24,24 +24,24 @@ from agentlane.runtime import (
     single_threaded_runtime,
 )
 
-RPC_AGENT_TYPE = "demo.rpc_worker"
-EVENT_AGENT_TYPE = "demo.event_worker"
-EVENT_TOPIC_TYPE = "demo.throughput.events"
+RPC_AGENT_TYPE = "demo.execution_risk_worker"
+EVENT_AGENT_TYPE = "demo.market_data_worker"
+EVENT_TOPIC_TYPE = "demo.throughput.market_data"
 CONSOLE = Console()
 
 
 @dataclass(slots=True, frozen=True)
 class DemoConfig:
-    """Runtime configuration for the high-throughput demonstration."""
+    """Runtime configuration for the high-throughput market workflow."""
 
     duration_seconds: float
     """How long the producers should run."""
 
     rpc_concurrency: int
-    """Number of concurrent RPC producer tasks."""
+    """Number of concurrent execution-risk RPC producer tasks."""
 
     publish_concurrency: int
-    """Number of concurrent publish producer tasks."""
+    """Number of concurrent market-data publish producer tasks."""
 
     worker_count: int
     """Worker count passed to `SingleThreadedRuntimeEngine`."""
@@ -58,7 +58,7 @@ class DemoConfig:
 
 @dataclass(slots=True)
 class RpcRequest:
-    """RPC payload model used by producer tasks."""
+    """Execution-risk RPC payload model used by producer tasks."""
 
     producer_id: int
     """Producer task identifier."""
@@ -72,7 +72,7 @@ class RpcRequest:
 
 @dataclass(slots=True)
 class EventMessage:
-    """Publish payload model used by producer tasks."""
+    """Market-data publish payload model used by producer tasks."""
 
     producer_id: int
     """Producer task identifier."""
@@ -89,32 +89,32 @@ class StatsSnapshot:
     """Immutable snapshot of demo counters used for reporting."""
 
     rpc_sent: int
-    """Total RPC requests emitted by producers."""
+    """Total execution-risk RPC requests emitted by producers."""
 
     rpc_delivered: int
-    """Total RPC requests with `DELIVERED` outcome."""
+    """Total execution-risk RPC requests with `DELIVERED` outcome."""
 
     rpc_failed: int
-    """Total RPC requests with non-delivered outcome."""
+    """Total execution-risk RPC requests with non-delivered outcome."""
 
     rpc_handled: int
-    """Total RPC requests handled by worker agents."""
+    """Total execution-risk RPC requests handled by worker agents."""
 
     publish_sent: int
-    """Total publish calls emitted by producers."""
+    """Total market-data publish calls emitted by producers."""
 
     publish_acked_recipients: int
-    """Total recipient enqueue count returned by publish acknowledgments."""
+    """Total market-data recipient enqueue count returned by publish acknowledgments."""
 
     publish_failed: int
-    """Total publish calls that raised an exception."""
+    """Total market-data publish calls that raised an exception."""
 
     events_handled: int
-    """Total publish events handled by event worker agents."""
+    """Total market-data publish events handled by worker agents."""
 
 
 class ThroughputStats:
-    """Shared in-process counter store for demo metrics."""
+    """Shared in-process counter store for market workflow metrics."""
 
     def __init__(self) -> None:
         """Initialize all counters to zero."""
@@ -174,16 +174,16 @@ class ThroughputStats:
 
 
 class RpcWorkerAgent(BaseAgent):
-    """Worker handling direct RPC-style requests."""
+    """Worker handling direct execution-risk RPC requests."""
 
     def __init__(self, engine: Engine, stats: ThroughputStats) -> None:
-        """Initialize RPC worker with runtime engine and shared stats."""
+        """Initialize execution-risk worker with runtime engine and shared stats."""
         super().__init__(engine)
         self._stats = stats
 
     @on_message
     async def handle(self, payload: RpcRequest, context: MessageContext) -> object:
-        """Process one RPC request payload."""
+        """Process one execution-risk RPC request payload."""
         _ = context
         _ = payload.created_at_ms
         self._stats.record_rpc_handled()
@@ -191,16 +191,16 @@ class RpcWorkerAgent(BaseAgent):
 
 
 class EventWorkerAgent(BaseAgent):
-    """Worker handling publish event messages."""
+    """Worker handling market-data publish messages."""
 
     def __init__(self, engine: Engine, stats: ThroughputStats) -> None:
-        """Initialize event worker with runtime engine and shared stats."""
+        """Initialize market-data worker with runtime engine and shared stats."""
         super().__init__(engine)
         self._stats = stats
 
     @on_message
     async def handle(self, payload: EventMessage, context: MessageContext) -> object:
-        """Process one publish event payload."""
+        """Process one market-data publish payload."""
         _ = context
         _ = payload.created_at_ms
         self._stats.record_event_handled()
@@ -215,7 +215,7 @@ async def run_rpc_producer(
     stop_at: float,
     shard_count: int,
 ) -> None:
-    """Emit direct RPC requests until stop time is reached."""
+    """Emit direct execution-risk RPC requests until stop time is reached."""
     sequence = 0
     while perf_counter() < stop_at:
         route_key = f"rpc-{(producer_id + sequence) % shard_count}"
@@ -245,7 +245,7 @@ async def run_publish_producer(
     shard_count: int,
     publish_pause_seconds: float,
 ) -> None:
-    """Emit publish events until stop time is reached."""
+    """Emit market-data publish events until stop time is reached."""
     sequence = 0
     while perf_counter() < stop_at:
         route_key = f"pub-{(producer_id + sequence) % shard_count}"
@@ -302,9 +302,9 @@ def print_progress_header() -> None:
     """Print one progress table header for streaming rows."""
     CONSOLE.print(
         "[bold cyan] elapsed[/bold cyan] | "
-        "[bold cyan]rpc sent/delivered/failed[/bold cyan] | "
-        "[bold cyan]publish sent/acked/failed[/bold cyan] | "
-        "[bold cyan]rates (rpc/pub)[/bold cyan]"
+        "[bold cyan]risk rpc sent/delivered/failed[/bold cyan] | "
+        "[bold cyan]market data sent/acked/failed[/bold cyan] | "
+        "[bold cyan]rates (risk/market)[/bold cyan]"
     )
     CONSOLE.rule(style="dim")
 
@@ -391,7 +391,7 @@ def print_startup(config: DemoConfig) -> None:
     CONSOLE.print(
         Panel(
             config_table,
-            title="[bold cyan]AgentLane High Throughput Messaging Demo[/bold cyan]",
+            title="[bold cyan]AgentLane Market Workflow Throughput Demo[/bold cyan]",
             border_style="cyan",
         )
     )
@@ -410,30 +410,36 @@ def print_summary(
     summary_table = Table(show_header=False, box=None, pad_edge=False)
     summary_table.add_row("elapsed_seconds", f"{elapsed_seconds:.2f}")
     summary_table.add_row(
-        "rpc sent/delivered/failed",
+        "risk rpc sent/delivered/failed",
         (
             f"{format_count(snapshot.rpc_sent)}/"
             f"{format_count(snapshot.rpc_delivered)}/"
             f"{format_count(snapshot.rpc_failed)}"
         ),
     )
-    summary_table.add_row("rpc handled", f"{format_count(snapshot.rpc_handled)}")
+    summary_table.add_row("risk rpc handled", f"{format_count(snapshot.rpc_handled)}")
     summary_table.add_row(
-        "publish sent/acked/failed",
+        "market data sent/acked/failed",
         (
             f"{format_count(snapshot.publish_sent)}/"
             f"{format_count(snapshot.publish_acked_recipients)}/"
             f"{format_count(snapshot.publish_failed)}"
         ),
     )
-    summary_table.add_row("events handled", f"{format_count(snapshot.events_handled)}")
-    summary_table.add_row("avg rpc_sent rate", format_rate(snapshot.rpc_sent / elapsed))
     summary_table.add_row(
-        "avg rpc_delivered rate",
+        "market data handled",
+        f"{format_count(snapshot.events_handled)}",
+    )
+    summary_table.add_row(
+        "avg risk_rpc_sent rate",
+        format_rate(snapshot.rpc_sent / elapsed),
+    )
+    summary_table.add_row(
+        "avg risk_rpc_delivered rate",
         format_rate(snapshot.rpc_delivered / elapsed),
     )
     summary_table.add_row(
-        "avg publish_sent rate",
+        "avg market_data_sent rate",
         format_rate(snapshot.publish_sent / elapsed),
     )
     summary_table.add_row("workers", str(config.worker_count))
@@ -447,7 +453,7 @@ def print_summary(
 
 
 async def run_demo(config: DemoConfig) -> None:
-    """Run high-throughput messaging demo with live progress reporting."""
+    """Run high-throughput market workflow demo with live progress reporting."""
     stats = ThroughputStats()
     runtime = SingleThreadedRuntimeEngine(worker_count=config.worker_count)
     runtime.register_factory(
@@ -522,7 +528,7 @@ async def run_demo(config: DemoConfig) -> None:
 def parse_args() -> DemoConfig:
     """Parse command line arguments into immutable demo config."""
     parser = argparse.ArgumentParser(
-        description="AgentLane high-throughput messaging demonstration.",
+        description="AgentLane high-throughput market workflow demonstration.",
     )
     parser.add_argument("--duration-seconds", type=float, default=10.0)
     parser.add_argument("--rpc-concurrency", type=int, default=8)
@@ -544,7 +550,7 @@ def parse_args() -> DemoConfig:
 
 
 def main() -> None:
-    """CLI entrypoint for high-throughput messaging demo."""
+    """CLI entrypoint for high-throughput market workflow demo."""
     config = parse_args()
     asyncio.run(run_demo(config))
 

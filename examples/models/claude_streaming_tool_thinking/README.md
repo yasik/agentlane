@@ -1,7 +1,7 @@
 # Claude Streaming Tool Thinking
 
 This example uses `agentlane_litellm.Client.stream_response(...)` directly with
-`anthropic/claude-sonnet-4-6` in an interactive chat loop.
+`anthropic/claude-sonnet-4-6` in an interactive clinical triage chat loop.
 
 It demonstrates:
 
@@ -32,7 +32,7 @@ ANTHROPIC_API_KEY=... uv run python examples/models/claude_streaming_tool_thinki
 Then type a question such as:
 
 ```text
-I need to choose between returning a damaged laptop or filing a repair claim. Look up the policy first.
+A patient reports dizziness and two glucose readings in the 60s after starting a new diabetes medication. Look up the triage protocol first.
 ```
 
 Type `exit` to quit.

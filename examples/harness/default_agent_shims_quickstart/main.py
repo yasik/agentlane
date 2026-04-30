@@ -35,7 +35,7 @@ class ReplyPrefixShim(Shim):
         # deliberately changes it again.
         if turn.run_state.turn_count == 1:
             turn.append_system_instruction(
-                "Always start every reply with `Support:`.",
+                "Always start every reply with `Care note:`.",
                 separator="\n",
             )
 
@@ -56,13 +56,14 @@ class TurnCounterShim(Shim):
         await turn.run_state.shim_state.increment("completed-turns")
 
 
-class SupportAgent(DefaultAgent):
+class ClinicianAssistant(DefaultAgent):
     descriptor = AgentDescriptor(
-        name="Acme Support",
+        name="Clinician Assistant",
         model=MODEL,
         instructions=(
-            "You are Acme support. Keep replies short and practical. "
-            "Do not use bullet points."
+            "You help clinicians prepare concise follow-up guidance from patient "
+            "messages. Keep replies short and practical. Do not diagnose, and do "
+            "not use bullet points."
         ),
         shims=(ReplyPrefixShim(), TurnCounterShim()),
     )
@@ -75,10 +76,15 @@ async def run_demo() -> None:
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
 
-    agent = SupportAgent()
+    agent = ClinicianAssistant()
 
-    first = await agent.run("My order arrived damaged. What should I do first?")
-    second = await agent.run("Please summarize the next step in one sentence.")
+    first_question = (
+        "A patient on warfarin reports two missed INR checks and new bruising. "
+        "What follow-up guidance should we send?"
+    )
+    second_question = "Please summarize the next staff action in one sentence."
+    first = await agent.run(first_question)
+    second = await agent.run(second_question)
 
     run_state = agent.run_state
     if run_state is None:
@@ -94,10 +100,10 @@ async def run_demo() -> None:
         " methods at `RunState.shim_state`"
     )
     print()
-    print("User: My order arrived damaged. What should I do first?")
+    print(f"User: {first_question}")
     print(f"Assistant: {first.final_output}")
     print()
-    print("User: Please summarize the next step in one sentence.")
+    print(f"User: {second_question}")
     print(f"Assistant: {second.final_output}")
     print()
     print(f"Shim state: {dict(run_state.shim_state)}")

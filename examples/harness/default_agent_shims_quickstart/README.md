@@ -26,6 +26,6 @@ OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_shims_quickst
 ## Important Detail
 
 `RunState.instructions` is the single persisted system instruction for the
-conversation. In this example, the extra `Support:` line is appended once at
+conversation. In this example, the extra `Care note:` line is appended once at
 bootstrap time, before the first model turn. Later runs continue from that same
 saved instruction without re-appending it.

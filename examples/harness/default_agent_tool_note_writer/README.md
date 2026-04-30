@@ -1,6 +1,7 @@
 # Generic `agent` Tool
 
-This example shows the default spawned-helper path.
+This example shows the default spawned-helper path in a portfolio operations
+scenario.
 
 The model sees one normal tool named `agent` with this schema:
 

@@ -1,4 +1,4 @@
-"""Distributed direct scatter / gather demo with an aggregating coordinator."""
+"""Distributed direct scatter / gather demo for trade analysis."""
 
 import argparse
 import asyncio
@@ -21,17 +21,17 @@ from agentlane.runtime import (
 )
 
 COORDINATOR_AGENT_TYPE = "demo.scatter.coordinator"
-INVENTORY_AGENT_TYPE = "demo.scatter.inventory"
-PRICING_AGENT_TYPE = "demo.scatter.pricing"
-SHIPPING_AGENT_TYPE = "demo.scatter.shipping"
+POSITION_AGENT_TYPE = "demo.scatter.position"
+VALUATION_AGENT_TYPE = "demo.scatter.valuation"
+RISK_AGENT_TYPE = "demo.scatter.risk"
 
 CONSOLE = Console()
 COMPONENT_STYLES = {
     "host": "bold cyan",
     "coordinator": "bold magenta",
-    "inventory": "bold blue",
-    "pricing": "bold yellow",
-    "shipping": "bold green",
+    "position": "bold blue",
+    "valuation": "bold yellow",
+    "risk": "bold green",
 }
 
 
@@ -51,33 +51,33 @@ class DemoConfig:
     """Configuration for the distributed scatter / gather demo."""
 
     request_count: int
-    """Number of quote requests to run in parallel."""
+    """Number of trade analysis requests to run in parallel."""
 
 
 @dataclass(slots=True)
-class AggregatedQuote:
-    """Merged quote returned to the demo runner."""
+class TradeAnalysis:
+    """Merged trade analysis returned to the demo runner."""
 
     request_id: str
     """Unique request identifier."""
 
-    product_name: str
-    """Quoted product."""
+    symbol: str
+    """Analyzed instrument symbol."""
 
-    quantity: int
-    """Quoted quantity."""
+    shares: int
+    """Trade size in shares."""
 
-    inventory_status: str
-    """Inventory summary."""
+    position_status: str
+    """Portfolio position summary."""
 
-    subtotal_usd: float
-    """Total price for the request."""
+    notional_usd: float
+    """Estimated notional value for the trade."""
 
-    shipping_eta_days: int
-    """Estimated shipping time."""
+    risk_score: int
+    """Synthetic risk score for the proposed trade."""
 
-    service_level: str
-    """Selected shipping service level."""
+    risk_band: str
+    """Selected risk review band."""
 
 
 def expect_mapping(payload: object, context: str) -> dict[str, object]:
@@ -124,16 +124,16 @@ def expect_delivered(
     return expect_mapping(outcome.response_payload, label)
 
 
-def build_aggregated_quote(payload: dict[str, object]) -> AggregatedQuote:
-    """Construct one typed quote view from a JSON-like payload."""
-    return AggregatedQuote(
+def build_trade_analysis(payload: dict[str, object]) -> TradeAnalysis:
+    """Construct one typed trade analysis view from a JSON-like payload."""
+    return TradeAnalysis(
         request_id=expect_str(payload, "request_id"),
-        product_name=expect_str(payload, "product_name"),
-        quantity=expect_int(payload, "quantity"),
-        inventory_status=expect_str(payload, "inventory_status"),
-        subtotal_usd=expect_float(payload, "subtotal_usd"),
-        shipping_eta_days=expect_int(payload, "shipping_eta_days"),
-        service_level=expect_str(payload, "service_level"),
+        symbol=expect_str(payload, "symbol"),
+        shares=expect_int(payload, "shares"),
+        position_status=expect_str(payload, "position_status"),
+        notional_usd=expect_float(payload, "notional_usd"),
+        risk_score=expect_int(payload, "risk_score"),
+        risk_band=expect_str(payload, "risk_band"),
     )
 
 
@@ -143,15 +143,15 @@ class CoordinatorAgent(BaseAgent):
     def __init__(
         self,
         engine: Engine,
-        inventory_recipient: AgentId,
-        pricing_recipient: AgentId,
-        shipping_recipient: AgentId,
+        position_recipient: AgentId,
+        valuation_recipient: AgentId,
+        risk_recipient: AgentId,
     ) -> None:
         """Initialize coordinator with specialist recipients."""
         super().__init__(engine)
-        self._inventory_recipient = inventory_recipient
-        self._pricing_recipient = pricing_recipient
-        self._shipping_recipient = shipping_recipient
+        self._position_recipient = position_recipient
+        self._valuation_recipient = valuation_recipient
+        self._risk_recipient = risk_recipient
 
     @on_message
     async def handle(
@@ -159,52 +159,52 @@ class CoordinatorAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Scatter direct RPCs to specialists and gather one quote."""
+        """Scatter direct RPCs to specialists and gather one trade analysis."""
         request_id = expect_str(payload, "request_id")
-        product_name = expect_str(payload, "product_name")
-        quantity = expect_int(payload, "quantity")
+        symbol = expect_str(payload, "symbol")
+        shares = expect_int(payload, "shares")
         request_payload = {
             "request_id": request_id,
-            "product_name": product_name,
-            "quantity": quantity,
+            "symbol": symbol,
+            "shares": shares,
         }
         log_line(
             "coordinator",
-            f"request={request_id} scattering to inventory, pricing, and shipping",
+            f"request={request_id} scattering to position, valuation, and risk",
         )
         # create_task starts all three RPCs immediately so the specialist
         # workers can process them in parallel instead of serially.
-        inventory_task = asyncio.create_task(
+        position_task = asyncio.create_task(
             self.send_message(
                 request_payload,
-                recipient=self._inventory_recipient,
+                recipient=self._position_recipient,
                 correlation_id=context.correlation_id,
             )
         )
-        pricing_task = asyncio.create_task(
+        valuation_task = asyncio.create_task(
             self.send_message(
                 request_payload,
-                recipient=self._pricing_recipient,
+                recipient=self._valuation_recipient,
                 correlation_id=context.correlation_id,
             )
         )
-        shipping_task = asyncio.create_task(
+        risk_task = asyncio.create_task(
             self.send_message(
                 request_payload,
-                recipient=self._shipping_recipient,
+                recipient=self._risk_recipient,
                 correlation_id=context.correlation_id,
             )
         )
 
-        inventory_outcome, pricing_outcome, shipping_outcome = await asyncio.gather(
-            inventory_task,
-            pricing_task,
-            shipping_task,
+        position_outcome, valuation_outcome, risk_outcome = await asyncio.gather(
+            position_task,
+            valuation_task,
+            risk_task,
         )
 
-        inventory = expect_delivered(label="inventory", outcome=inventory_outcome)
-        pricing = expect_delivered(label="pricing", outcome=pricing_outcome)
-        shipping = expect_delivered(label="shipping", outcome=shipping_outcome)
+        position = expect_delivered(label="position", outcome=position_outcome)
+        valuation = expect_delivered(label="valuation", outcome=valuation_outcome)
+        risk = expect_delivered(label="risk", outcome=risk_outcome)
 
         log_line(
             "coordinator",
@@ -212,17 +212,17 @@ class CoordinatorAgent(BaseAgent):
         )
         return {
             "request_id": request_id,
-            "product_name": product_name,
-            "quantity": quantity,
-            "inventory_status": expect_str(inventory, "status"),
-            "subtotal_usd": expect_float(pricing, "subtotal_usd"),
-            "shipping_eta_days": expect_int(shipping, "eta_days"),
-            "service_level": expect_str(shipping, "service_level"),
+            "symbol": symbol,
+            "shares": shares,
+            "position_status": expect_str(position, "status"),
+            "notional_usd": expect_float(valuation, "notional_usd"),
+            "risk_score": expect_int(risk, "risk_score"),
+            "risk_band": expect_str(risk, "risk_band"),
         }
 
 
-class InventoryAgent(BaseAgent):
-    """Inventory specialist running on its own worker."""
+class PositionAgent(BaseAgent):
+    """Portfolio position specialist running on its own worker."""
 
     @on_message
     async def handle(
@@ -230,21 +230,21 @@ class InventoryAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Return one inventory assessment."""
+        """Return one portfolio position assessment."""
         _ = context
         request_id = expect_str(payload, "request_id")
-        quantity = expect_int(payload, "quantity")
+        shares = expect_int(payload, "shares")
         await asyncio.sleep(0.08)
-        log_line("inventory", f"request={request_id} reserved inventory")
+        log_line("position", f"request={request_id} checked portfolio capacity")
         return {
             "request_id": request_id,
-            "reserved_units": quantity,
-            "status": f"reserved {quantity} units",
+            "reserved_shares": shares,
+            "status": f"capacity available for {shares} shares",
         }
 
 
-class PricingAgent(BaseAgent):
-    """Pricing specialist running on its own worker."""
+class ValuationAgent(BaseAgent):
+    """Market valuation specialist running on its own worker."""
 
     @on_message
     async def handle(
@@ -252,23 +252,23 @@ class PricingAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Return one pricing assessment."""
+        """Return one valuation assessment."""
         _ = context
         request_id = expect_str(payload, "request_id")
-        quantity = expect_int(payload, "quantity")
+        shares = expect_int(payload, "shares")
         await asyncio.sleep(0.12)
-        unit_price_usd = 39.5
-        subtotal_usd = round(unit_price_usd * quantity, 2)
-        log_line("pricing", f"request={request_id} priced subtotal")
+        mark_price_usd = 187.42
+        notional_usd = round(mark_price_usd * shares, 2)
+        log_line("valuation", f"request={request_id} priced notional")
         return {
             "request_id": request_id,
-            "unit_price_usd": unit_price_usd,
-            "subtotal_usd": subtotal_usd,
+            "mark_price_usd": mark_price_usd,
+            "notional_usd": notional_usd,
         }
 
 
-class ShippingAgent(BaseAgent):
-    """Shipping specialist running on its own worker."""
+class RiskAgent(BaseAgent):
+    """Trade risk specialist running on its own worker."""
 
     @on_message
     async def handle(
@@ -276,17 +276,17 @@ class ShippingAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Return one shipping assessment."""
+        """Return one risk assessment."""
         _ = context
         request_id = expect_str(payload, "request_id")
-        quantity = expect_int(payload, "quantity")
+        shares = expect_int(payload, "shares")
         await asyncio.sleep(0.05)
-        eta_days = 2 if quantity <= 5 else 4
-        log_line("shipping", f"request={request_id} estimated shipping")
+        risk_score = 18 if shares <= 5 else 42
+        log_line("risk", f"request={request_id} scored trade risk")
         return {
             "request_id": request_id,
-            "eta_days": eta_days,
-            "service_level": "priority" if eta_days == 2 else "standard",
+            "risk_score": risk_score,
+            "risk_band": "standard-review" if risk_score <= 25 else "senior-review",
         }
 
 
@@ -299,7 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--request-count",
         type=int,
         default=2,
-        help="Number of quote requests to run in parallel.",
+        help="Number of trade analysis requests to run in parallel.",
     )
     return parser
 
@@ -308,9 +308,9 @@ def print_cluster_layout(
     *,
     host: WorkerAgentRuntimeHost,
     coordinator_worker: WorkerAgentRuntime,
-    inventory_worker: WorkerAgentRuntime,
-    pricing_worker: WorkerAgentRuntime,
-    shipping_worker: WorkerAgentRuntime,
+    position_worker: WorkerAgentRuntime,
+    valuation_worker: WorkerAgentRuntime,
+    risk_worker: WorkerAgentRuntime,
 ) -> None:
     """Print resolved host and worker addresses."""
     table = Table(title="Distributed Scatter / Gather Layout", show_lines=False)
@@ -318,31 +318,31 @@ def print_cluster_layout(
     table.add_column("Address", style="white")
     table.add_row("host", host.address)
     table.add_row("coordinator_worker", coordinator_worker.address)
-    table.add_row("inventory_worker", inventory_worker.address)
-    table.add_row("pricing_worker", pricing_worker.address)
-    table.add_row("shipping_worker", shipping_worker.address)
+    table.add_row("position_worker", position_worker.address)
+    table.add_row("valuation_worker", valuation_worker.address)
+    table.add_row("risk_worker", risk_worker.address)
     CONSOLE.print(table)
 
 
-def print_quotes(quotes: list[AggregatedQuote]) -> None:
-    """Print aggregated quote results."""
-    table = Table(title="Aggregated Quotes", show_lines=False)
+def print_trade_analyses(analyses: list[TradeAnalysis]) -> None:
+    """Print aggregated trade analysis results."""
+    table = Table(title="Aggregated Trade Analyses", show_lines=False)
     table.add_column("Request", style="bold green")
-    table.add_column("Product", style="white")
-    table.add_column("Qty", justify="right")
-    table.add_column("Inventory", style="white")
-    table.add_column("Subtotal USD", justify="right")
-    table.add_column("ETA (days)", justify="right")
-    table.add_column("Service", style="white")
-    for quote in quotes:
+    table.add_column("Symbol", style="white")
+    table.add_column("Shares", justify="right")
+    table.add_column("Position", style="white")
+    table.add_column("Notional USD", justify="right")
+    table.add_column("Risk Score", justify="right")
+    table.add_column("Risk Band", style="white")
+    for analysis in analyses:
         table.add_row(
-            quote.request_id,
-            quote.product_name,
-            str(quote.quantity),
-            quote.inventory_status,
-            f"{quote.subtotal_usd:.2f}",
-            str(quote.shipping_eta_days),
-            quote.service_level,
+            analysis.request_id,
+            analysis.symbol,
+            str(analysis.shares),
+            analysis.position_status,
+            f"{analysis.notional_usd:.2f}",
+            str(analysis.risk_score),
+            analysis.risk_band,
         )
     CONSOLE.print(table)
 
@@ -356,9 +356,9 @@ async def run_demo(config: DemoConfig) -> None:
     log_line("host", f"started distributed host at {host.address}")
 
     coordinator_worker = WorkerAgentRuntime(host_address=host.address)
-    inventory_worker = WorkerAgentRuntime(host_address=host.address)
-    pricing_worker = WorkerAgentRuntime(host_address=host.address)
-    shipping_worker = WorkerAgentRuntime(host_address=host.address)
+    position_worker = WorkerAgentRuntime(host_address=host.address)
+    valuation_worker = WorkerAgentRuntime(host_address=host.address)
+    risk_worker = WorkerAgentRuntime(host_address=host.address)
 
     # The coordinator keeps only logical recipient ids. It does not need to know
     # which worker currently owns each specialist.
@@ -366,20 +366,23 @@ async def run_demo(config: DemoConfig) -> None:
         COORDINATOR_AGENT_TYPE,
         lambda engine: CoordinatorAgent(
             engine,
-            inventory_recipient=AgentId.from_values(INVENTORY_AGENT_TYPE, "inventory"),
-            pricing_recipient=AgentId.from_values(PRICING_AGENT_TYPE, "pricing"),
-            shipping_recipient=AgentId.from_values(SHIPPING_AGENT_TYPE, "shipping"),
+            position_recipient=AgentId.from_values(POSITION_AGENT_TYPE, "position"),
+            valuation_recipient=AgentId.from_values(
+                VALUATION_AGENT_TYPE,
+                "valuation",
+            ),
+            risk_recipient=AgentId.from_values(RISK_AGENT_TYPE, "risk"),
         ),
     )
-    inventory_worker.register_factory(INVENTORY_AGENT_TYPE, InventoryAgent)
-    pricing_worker.register_factory(PRICING_AGENT_TYPE, PricingAgent)
-    shipping_worker.register_factory(SHIPPING_AGENT_TYPE, ShippingAgent)
+    position_worker.register_factory(POSITION_AGENT_TYPE, PositionAgent)
+    valuation_worker.register_factory(VALUATION_AGENT_TYPE, ValuationAgent)
+    risk_worker.register_factory(RISK_AGENT_TYPE, RiskAgent)
 
     workers = [
         coordinator_worker,
-        inventory_worker,
-        pricing_worker,
-        shipping_worker,
+        position_worker,
+        valuation_worker,
+        risk_worker,
     ]
     # Worker startup registers the available agent types with the host so direct
     # RPC routing can begin.
@@ -387,21 +390,21 @@ async def run_demo(config: DemoConfig) -> None:
     print_cluster_layout(
         host=host,
         coordinator_worker=coordinator_worker,
-        inventory_worker=inventory_worker,
-        pricing_worker=pricing_worker,
-        shipping_worker=shipping_worker,
+        position_worker=position_worker,
+        valuation_worker=valuation_worker,
+        risk_worker=risk_worker,
     )
 
     try:
         requests = [
             {
-                "request_id": f"quote-{index + 1}",
-                "product_name": "agentlane-widget",
-                "quantity": index + 2,
+                "request_id": f"trade-{index + 1}",
+                "symbol": "AAPL",
+                "shares": index + 2,
             }
             for index in range(config.request_count)
         ]
-        # Each quote request targets a coordinator agent keyed by request id.
+        # Each trade analysis targets a coordinator agent keyed by request id.
         # That keeps the logical recipient stable if the coordinator ever needs
         # per-request state later.
         outcomes = await asyncio.gather(
@@ -416,8 +419,8 @@ async def run_demo(config: DemoConfig) -> None:
                 for request in requests
             )
         )
-        quotes = [
-            build_aggregated_quote(
+        analyses = [
+            build_trade_analysis(
                 expect_delivered(
                     label=expect_str(request, "request_id"),
                     outcome=outcome,
@@ -425,7 +428,7 @@ async def run_demo(config: DemoConfig) -> None:
             )
             for request, outcome in zip(requests, outcomes, strict=True)
         ]
-        print_quotes(quotes)
+        print_trade_analyses(analyses)
     finally:
         await asyncio.gather(*(worker.stop_when_idle() for worker in workers))
         await host.stop_when_idle()
@@ -439,10 +442,10 @@ def main() -> None:
     CONSOLE.print(
         Panel.fit(
             (
-                "Distributed direct scatter / gather demo\n"
+                "Distributed trade-analysis scatter / gather demo\n"
                 "- coordinator sends direct RPCs to specialist workers\n"
                 "- specialist workers reply independently\n"
-                "- coordinator aggregates the responses into one quote"
+                "- coordinator aggregates responses into one trade analysis"
             ),
             border_style="magenta",
         )

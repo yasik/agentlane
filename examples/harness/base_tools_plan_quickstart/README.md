@@ -3,8 +3,9 @@
 This example shows the first-party `plan` tool exposed through
 `HarnessToolsShim`.
 
-The agent creates a tracked plan, updates it in a later run, and prints the
-latest serialized plan stored in `RunState.shim_state`.
+The agent creates a tracked plan for a portfolio concentration review, updates
+it in a later run, and prints the latest serialized plan stored in
+`RunState.shim_state`.
 
 ## Run
 

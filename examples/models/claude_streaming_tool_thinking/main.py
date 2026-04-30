@@ -20,19 +20,19 @@ from agentlane.runtime import CancellationToken
 
 MODEL_NAME = "anthropic/claude-sonnet-4-6"
 QUESTION = (
-    "I need to choose between returning a damaged laptop or filing a repair claim. "
-    "Look up the policy first."
+    "A patient reports dizziness and two glucose readings in the 60s after starting "
+    "a new diabetes medication. Look up the triage protocol first."
 )
 TOOL_RESULT = (
-    "Acme Device Policy: Standard returns cover opened laptops only when they are in "
-    "resellable condition. Cracked screens are treated as accidental damage and should "
-    "go through the repair claim path instead of the standard return path."
+    "Harborview Triage Protocol: Recurrent glucose readings below 70 mg/dL after a "
+    "new diabetes medication require same-day clinician review. Confusion, fainting, "
+    "chest pain, or glucose below 54 mg/dL require urgent escalation."
 )
 
 
 @as_tool
-async def search_device_policy(question: str) -> str:
-    """Look up the current Acme device policy."""
+async def search_triage_protocol(question: str) -> str:
+    """Look up the current clinical triage protocol."""
     del question
     return TOOL_RESULT
 
@@ -209,11 +209,11 @@ async def _run_assistant_turn(
 
         for tool_call in tool_calls:
             tool_call_id, tool_name, tool_arguments = _function_tool_payload(tool_call)
-            tool_args = search_device_policy.args_type().model_validate_json(
+            tool_args = search_triage_protocol.args_type().model_validate_json(
                 tool_arguments
             )
-            tool_output = search_device_policy.return_value_as_string(
-                await search_device_policy.run(tool_args, CancellationToken())
+            tool_output = search_triage_protocol.return_value_as_string(
+                await search_triage_protocol.run(tool_args, CancellationToken())
             )
 
             print("Tool execution")
@@ -248,7 +248,7 @@ async def run_demo() -> None:
         )
     )
     tools = Tools(
-        tools=[search_device_policy],
+        tools=[search_triage_protocol],
         tool_choice="auto",
         parallel_tool_calls=False,
     )
@@ -264,9 +264,10 @@ async def run_demo() -> None:
         {
             "role": "system",
             "content": (
-                "You are Acme support. Think carefully and you must call "
-                "`search_device_policy` before you answer. After the tool result "
-                "arrives, answer in at most two bullet points."
+                "You are a clinical triage assistant. Think carefully and you must call "
+                "`search_triage_protocol` before you answer. After the tool result "
+                "arrives, answer in at most two bullet points. Do not diagnose or "
+                "recommend medication changes."
             ),
         },
     ]

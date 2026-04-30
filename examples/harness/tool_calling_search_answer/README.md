@@ -1,60 +1,57 @@
-# Tool-Calling Search Answer
+# Tool-Calling Protocol Answer
 
-This example shows the smallest useful harness tool-calling flow:
+This example shows the smallest useful harness tool-calling flow in a clinical
+protocol lookup scenario:
 
 1. define templated agent instructions,
 2. decorate one typed Python function with `@as_tool`,
 3. send one user message, and
 4. let the harness runner execute the tool loop before returning a final answer.
 
-The search tool is mocked on purpose. It returns one fixed string so the demo
-stays focused on the harness API. The assistant answer is still generated live
-by `gpt-5.4-mini`.
-
-## Why This Example Exists
+The search tool is mocked on purpose. It returns one fixed clinical protocol
+snippet so the demo stays focused on the harness API. The assistant answer is
+still generated live by `gpt-5.4-mini`.
 
 The main thing to notice is how little framework code is needed in the main
 script itself:
 
 ```python
 @as_tool
-async def search_help_center(question: str) -> str:
-    """Search the Acme help center for the current policy answer."""
+async def search_clinical_protocol(question: str) -> str:
+    """Search the clinical protocol library for the current care guidance."""
     del question
     return MOCK_SEARCH_RESULT
 
 
 model = ResponsesClient(config=Config(api_key=api_key, model="gpt-5.4-mini"))
 descriptor = AgentDescriptor(
-    name="Acme Policy Assistant",
+    name="Clinical Protocol Assistant",
     model=model,
     instructions=PromptSpec(
         template=INSTRUCTIONS_TEMPLATE,
         values={
-            "company_name": "Acme",
-            "knowledge_source": "help-center",
+            "clinic_name": "Harborview Anticoagulation Clinic",
+            "knowledge_source": "protocol-library",
             "tone": "clear and practical",
         },
     ),
     tools=Tools(
-        tools=[search_help_center],
+        tools=[search_clinical_protocol],
         tool_choice="required",
-        tool_call_limits={"search_help_center": 1},
+        tool_call_limits={"search_clinical_protocol": 1},
     ),
 )
 
-agent = Agent.bind(runtime, agent_id, runner=Runner(max_attempts=2), descriptor=descriptor)
-outcome = await runtime.send_message(question, recipient=agent_id)
-if outcome.status != DeliveryStatus.DELIVERED:
-    raise RuntimeError(...)
+agent = DefaultAgent(descriptor=descriptor, runner=Runner(max_attempts=2))
+result = await agent.run(question)
 ```
 
-`tool_choice="required"` guarantees the first model turn calls the search tool.
-`tool_call_limits={"search_help_center": 1}` lets the runner remove that tool on
-the next turn so the model answers from the returned search result instead of
-calling the tool forever. `@as_tool` makes the function itself become a native
-`Tool`, so the framework still derives the tool name, schema, and description
-for you without extra boilerplate.
+`tool_choice="required"` guarantees the first model turn calls the protocol
+search tool. `tool_call_limits={"search_clinical_protocol": 1}` lets the runner
+remove that tool on the next turn so the model answers from the returned search
+result instead of calling the tool forever. `@as_tool` makes the function itself
+become a native `Tool`, so the framework still derives the tool name, schema,
+and description for you without extra boilerplate.
 
 ## Run
 
@@ -73,9 +70,9 @@ uv run python examples/harness/tool_calling_search_answer/main.py
 
 ## What You Should See
 
-1. one user policy question,
+1. one clinical protocol question,
 2. one real assistant answer,
 3. a short summary showing:
    - the tool name,
    - the tool arguments chosen by the model, and
-   - the mocked search result that the harness fed back into the loop.
+   - the mocked protocol result that the harness fed back into the loop.

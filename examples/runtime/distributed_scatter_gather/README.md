@@ -1,18 +1,19 @@
-# Distributed Scatter / Gather Demo
+# Distributed Trade Analysis Scatter / Gather Demo
 
-This example shows explicit distributed runtime topology with:
+This example shows explicit distributed runtime topology for a trade analysis
+request with:
 
 1. one `WorkerAgentRuntimeHost`
 2. four `WorkerAgentRuntime` instances
-3. one coordinator agent that fans direct RPCs out to specialist agents
+3. one coordinator agent that fans direct RPCs out to finance specialists
 4. direct fan-in where the coordinator gathers all responses into one result
 
 Message flow:
 
 1. `main -> CoordinatorAgent` via direct RPC
-2. `CoordinatorAgent -> InventoryAgent + PricingAgent + ShippingAgent` via direct RPC
+2. `CoordinatorAgent -> PositionAgent + ValuationAgent + RiskAgent` via direct RPC
 3. `CoordinatorAgent` waits for all outcomes with `asyncio.gather(...)`
-4. `CoordinatorAgent` returns one merged `AggregatedQuote`
+4. `CoordinatorAgent` returns one merged `TradeAnalysis`
 
 This demonstrates the other common fan-in pattern: one agent explicitly
 aggregates responses from multiple peer agents rather than aggregating through
@@ -33,8 +34,8 @@ main
                    [host]
                 /     |      \
                v      v       v
-[inventory_worker] [pricing_worker] [shipping_worker]
-  InventoryAgent     PricingAgent     ShippingAgent
+[position_worker] [valuation_worker] [risk_worker]
+  PositionAgent     ValuationAgent     RiskAgent
                \      |       /
                 \     |      /
                  v    v     v
@@ -48,7 +49,7 @@ main
                      | asyncio.gather(...) merges responses
                      v
                     main
-             (AggregatedQuote)
+             (TradeAnalysis)
 ```
 
 The host is drawn twice to separate outbound request routing from inbound

@@ -1,4 +1,4 @@
-"""Simple distributed publish fan-out / fan-in starter example."""
+"""Simple distributed portfolio analysis fan-out / fan-in starter example."""
 
 import asyncio
 
@@ -18,8 +18,8 @@ from agentlane.runtime import (
 )
 
 PLANNER_AGENT_TYPE = "simple.publish.planner"
-UPPERCASE_AGENT_TYPE = "simple.publish.uppercase"
-WORD_COUNT_AGENT_TYPE = "simple.publish.word_count"
+MARKET_DATA_AGENT_TYPE = "simple.publish.market_data"
+RISK_AGENT_TYPE = "simple.publish.risk"
 AGGREGATOR_AGENT_TYPE = "simple.publish.aggregator"
 
 WORK_TOPIC_TYPE = "simple.publish.work"
@@ -72,7 +72,7 @@ class JobTracker:
 
 
 class PlannerAgent(BaseAgent):
-    """Publishes one job to all subscribed specialist workers."""
+    """Publishes one portfolio review to all subscribed specialist workers."""
 
     @on_message
     async def handle(
@@ -80,10 +80,10 @@ class PlannerAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Publish one work item."""
+        """Publish one portfolio review item."""
         job_id = expect_str(payload, "job_id")
         text = expect_str(payload, "text")
-        print(f"planner: publishing work for {job_id}")
+        print(f"planner: publishing portfolio review for {job_id}")
         ack = await self.publish_message(
             {"job_id": job_id, "text": text},
             topic=TopicId.from_values(type_value=WORK_TOPIC_TYPE, route_key=job_id),
@@ -92,8 +92,8 @@ class PlannerAgent(BaseAgent):
         return {"enqueued": ack.enqueued_recipient_count}
 
 
-class UppercaseAgent(BaseAgent):
-    """Converts the incoming text to uppercase."""
+class MarketDataAgent(BaseAgent):
+    """Builds a compact market data view for the incoming portfolio review."""
 
     @on_message
     async def handle(
@@ -101,14 +101,14 @@ class UppercaseAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Process one published work item."""
+        """Process one published portfolio review item."""
         job_id = expect_str(payload, "job_id")
         text = expect_str(payload, "text")
-        print(f"uppercase: received work for {job_id}")
+        print(f"market_data: received portfolio review for {job_id}")
         await self.publish_message(
             {
-                "worker_name": "uppercase",
-                "value": text.upper(),
+                "worker_name": "market_data",
+                "value": f"snapshot<{text}>",
             },
             topic=TopicId.from_values(type_value=RESULT_TOPIC_TYPE, route_key=job_id),
             correlation_id=context.correlation_id,
@@ -116,8 +116,8 @@ class UppercaseAgent(BaseAgent):
         return None
 
 
-class WordCountAgent(BaseAgent):
-    """Counts words in the incoming text."""
+class RiskAgent(BaseAgent):
+    """Produces a compact risk summary for the incoming portfolio review."""
 
     @on_message
     async def handle(
@@ -125,14 +125,14 @@ class WordCountAgent(BaseAgent):
         payload: dict[str, object],
         context: MessageContext,
     ) -> object:
-        """Process one published work item."""
+        """Process one published portfolio review item."""
         job_id = expect_str(payload, "job_id")
         text = expect_str(payload, "text")
-        print(f"word_count: received work for {job_id}")
+        print(f"risk: received portfolio review for {job_id}")
         await self.publish_message(
             {
-                "worker_name": "word_count",
-                "value": str(len(text.split())),
+                "worker_name": "risk",
+                "value": f"limit_checks={len(text.split())}",
             },
             topic=TopicId.from_values(type_value=RESULT_TOPIC_TYPE, route_key=job_id),
             correlation_id=context.correlation_id,
@@ -173,21 +173,21 @@ async def run_example() -> None:
     await host.start()
 
     planner_worker = WorkerAgentRuntime(host_address=host.address)
-    uppercase_worker = WorkerAgentRuntime(host_address=host.address)
-    word_count_worker = WorkerAgentRuntime(host_address=host.address)
+    market_data_worker = WorkerAgentRuntime(host_address=host.address)
+    risk_worker = WorkerAgentRuntime(host_address=host.address)
     aggregator_worker = WorkerAgentRuntime(host_address=host.address)
 
     planner_worker.register_factory(PLANNER_AGENT_TYPE, PlannerAgent)
-    uppercase_worker.register_factory(UPPERCASE_AGENT_TYPE, UppercaseAgent)
-    uppercase_worker.subscribe_exact(
+    market_data_worker.register_factory(MARKET_DATA_AGENT_TYPE, MarketDataAgent)
+    market_data_worker.subscribe_exact(
         topic_type=WORK_TOPIC_TYPE,
-        agent_type=UPPERCASE_AGENT_TYPE,
+        agent_type=MARKET_DATA_AGENT_TYPE,
         delivery_mode=DeliveryMode.STATELESS,
     )
-    word_count_worker.register_factory(WORD_COUNT_AGENT_TYPE, WordCountAgent)
-    word_count_worker.subscribe_exact(
+    risk_worker.register_factory(RISK_AGENT_TYPE, RiskAgent)
+    risk_worker.subscribe_exact(
         topic_type=WORK_TOPIC_TYPE,
-        agent_type=WORD_COUNT_AGENT_TYPE,
+        agent_type=RISK_AGENT_TYPE,
         delivery_mode=DeliveryMode.STATELESS,
     )
     aggregator_worker.register_factory(
@@ -202,8 +202,8 @@ async def run_example() -> None:
 
     workers = [
         planner_worker,
-        uppercase_worker,
-        word_count_worker,
+        market_data_worker,
+        risk_worker,
         aggregator_worker,
     ]
     await asyncio.gather(*(worker.start() for worker in workers))
@@ -216,7 +216,7 @@ async def run_example() -> None:
         outcome = await planner_worker.send_message(
             {
                 "job_id": job_id,
-                "text": "distributed runtimes are easier to learn with small examples",
+                "text": "portfolio rebalance in volatile market conditions",
             },
             recipient=AgentId.from_values(PLANNER_AGENT_TYPE, "planner"),
         )
