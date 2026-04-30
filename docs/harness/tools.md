@@ -27,6 +27,7 @@ from agentlane.harness.tools import (
     base_harness_tools,
     find_tool,
     grep_tool,
+    patch_tool,
     plan_tool,
     read_tool,
     write_tool,
@@ -46,7 +47,7 @@ Use the definition when you want prompt snippets and guidelines to be rendered
 by `HarnessToolsShim`. Use `definition.tool` when you only need the executable
 `Tool` value.
 
-The current standard set is `read`, `find`, `grep`, `write`, and
+The current standard set is `read`, `find`, `grep`, `patch`, `write`, and
 `write_plan`. The public base-tools set currently does not include `bash` or
 `ls`.
 
@@ -59,6 +60,7 @@ workspace_tools = (
     read_tool(cwd=WORKSPACE),
     find_tool(cwd=WORKSPACE),
     grep_tool(cwd=WORKSPACE),
+    patch_tool(cwd=WORKSPACE),
     write_tool(cwd=WORKSPACE),
     plan_tool(),
 )
@@ -75,6 +77,7 @@ from agentlane.harness.tools import (
     HarnessToolsShim,
     find_tool,
     grep_tool,
+    patch_tool,
     read_tool,
     write_tool,
 )
@@ -86,7 +89,13 @@ descriptor = AgentDescriptor(
     instructions="Use workspace tools before answering workspace questions.",
     tools=Tools(
         tools=[],
-        tool_call_limits={"find": 1, "grep": 1, "read": 1, "write": 1},
+        tool_call_limits={
+            "find": 1,
+            "grep": 1,
+            "patch": 1,
+            "read": 1,
+            "write": 1,
+        },
     ),
     shims=(
         HarnessToolsShim(
@@ -94,6 +103,7 @@ descriptor = AgentDescriptor(
                 read_tool(cwd=WORKSPACE),
                 find_tool(cwd=WORKSPACE),
                 grep_tool(cwd=WORKSPACE),
+                patch_tool(cwd=WORKSPACE),
                 write_tool(cwd=WORKSPACE),
             )
         ),
@@ -129,7 +139,8 @@ Text output is capped at shared deterministic limits. `read` output is capped
 at 2000 lines or 51200 bytes, whichever limit is reached first. `find` output
 is capped at 1000 matching paths or 51200 bytes, whichever limit is reached
 first. `grep` output is capped at 100 matching entries or 51200 bytes,
-whichever limit is reached first.
+whichever limit is reached first. `patch` success output is intentionally
+minimal and does not need truncation.
 
 Caller-provided limits are applied before the global caps. For large files, call
 `read` repeatedly with `offset` and `limit`. For large search results, narrow
@@ -374,6 +385,49 @@ returns a clear text error. Invalid regular expressions, invalid globs, invalid
 file types, missing paths, empty inputs, invalid contexts, invalid limits,
 missing ripgrep, and unreadable explicit file paths also return clear text
 errors.
+
+## patch
+
+`patch_tool()` exposes a `patch` tool for precise edits to existing UTF-8 text
+files. It is backed by
+[`llm-patch-tool`](https://github.com/yasik/patch-tool), which handles parsing
+SEARCH/REPLACE blocks, exact-then-fuzzy matching, all-or-nothing application,
+and atomic writes.
+
+Parameters:
+
+1. `path: str`
+2. `edits: str`
+
+`path` is structured tool input and resolves through `ToolPathResolver`.
+`edits` should contain one or more bare SEARCH/REPLACE blocks without path
+lines:
+
+```text
+<<<<<<< SEARCH
+old text already present in the file
+=======
+replacement text
+>>>>>>> REPLACE
+```
+
+Example tool result:
+
+```text
+Applied 1 edit to /workspace/notes.txt.
+```
+
+Use `patch` after reading the file when you need targeted changes. Each SEARCH
+block must match exactly one location. If the text is missing, appears more
+than once, overlaps another edit, has an empty SEARCH block, or would not
+change the file, the tool returns a stable recoverable message and leaves the
+file unchanged. Use `write` instead for new files or full-file rewrites.
+
+The tool returns clear text errors for empty paths, paths containing null bytes,
+missing files, directory targets, malformed SEARCH/REPLACE blocks, invalid
+UTF-8 edit text, invalid UTF-8 files, permission failures, and failed writes.
+Unexpected implementation errors return a stable generic failure message so the
+agent loop can continue.
 
 ## write
 

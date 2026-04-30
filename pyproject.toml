@@ -23,6 +23,7 @@ dependencies = [
   "types-grpcio>=1.0.0.20251009",
   "wcmatch>=10.1,<11.0",
   "ripgrepy>=2.2.0,<3.0.0",
+  "llm-patch-tool>=0.1.0",
 ]
 classifiers = [
     "Typing :: Typed",

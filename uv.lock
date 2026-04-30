@@ -12,6 +12,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "json-repair" },
+    { name = "llm-patch-tool" },
     { name = "openai" },
     { name = "pathspec" },
     { name = "protobuf" },
@@ -62,6 +63,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.39.0,<1.0.0" },
     { name = "litellm", marker = "extra == 'all'", specifier = ">=1.71.1" },
     { name = "litellm", marker = "extra == 'litellm'", specifier = ">=1.71.1" },
+    { name = "llm-patch-tool", specifier = ">=0.1.0" },
     { name = "openai", specifier = ">=1.68.2" },
     { name = "pathspec", specifier = ">=1.0.4,<2.0.0" },
     { name = "protobuf", specifier = ">=5.29.0,<6.0.0" },
@@ -664,6 +666,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/29/75/1c537aa458426a9127a92bc2273787b2f987f4e5044e21f01f2eed5244fd/litellm-1.82.6.tar.gz", hash = "sha256:2aa1c2da21fe940c33613aa447119674a3ad4d2ad5eb064e4d5ce5ee42420136", size = 17414147, upload-time = "2026-03-22T06:36:00.452Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/02/6c/5327667e6dbe9e98cbfbd4261c8e91386a52e38f41419575854248bbab6a/litellm-1.82.6-py3-none-any.whl", hash = "sha256:164a3ef3e19f309e3cabc199bef3d2045212712fefdfa25fc7f75884a5b5b205", size = 15591595, upload-time = "2026-03-22T06:35:56.795Z" },
+]
+
+[[package]]
+name = "llm-patch-tool"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/71/c1/e9938459abe4873daebe21d659545e4708ee41ae941dfb834984f1f12481/llm_patch_tool-0.1.0.tar.gz", hash = "sha256:4ae1d7fc282e961ed3df29ea18bb75489cb3c4b8b005b602a3c8eec5c96f1af8", size = 67063, upload-time = "2026-04-29T21:33:00.919Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/5f/3edf69fd209054745d8e94eee2776f2117fe60225abb750911df3441c444/llm_patch_tool-0.1.0-py3-none-any.whl", hash = "sha256:f2222c6a7bd5ae734212704b4a59c73b048b38e38268a38344b08ed76fc519e4", size = 20912, upload-time = "2026-04-29T21:32:59.438Z" },
 ]
 
 [[package]]

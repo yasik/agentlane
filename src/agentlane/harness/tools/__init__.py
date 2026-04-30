@@ -15,6 +15,7 @@ from ._output import (
     TruncatedOutput,
     truncate_output,
 )
+from ._patch import patch_tool
 from ._paths import ToolPathResolver
 from ._plan import plan_tool
 from ._read import read_tool
@@ -39,6 +40,7 @@ __all__ = [
     "base_harness_tools",
     "find_tool",
     "grep_tool",
+    "patch_tool",
     "plan_tool",
     "read_tool",
     "truncate_output",

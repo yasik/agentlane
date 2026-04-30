@@ -1,11 +1,12 @@
 # Base Tools Quickstart
 
-This example wires the first-party `find`, `grep`, `read`, and `write` tools
-through `HarnessToolsShim`.
+This example wires the first-party `find`, `grep`, `patch`, `read`, and
+`write` tools through `HarnessToolsShim`.
 
 It creates a temporary workspace, asks the model to write a portfolio risk note,
-find it, search inside it with `grep`, read it back, and summarize, then prints
-the assistant answer plus the observed tool calls.
+patch a TODO line into an action item, find the file, search inside it with
+`grep`, read it back, and summarize, then prints the assistant answer plus the
+observed tool calls.
 
 ## Run
 

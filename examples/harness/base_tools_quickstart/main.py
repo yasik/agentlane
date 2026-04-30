@@ -16,6 +16,7 @@ from agentlane.harness.tools import (
     HarnessToolsShim,
     find_tool,
     grep_tool,
+    patch_tool,
     read_tool,
     write_tool,
 )
@@ -32,6 +33,7 @@ WORKSPACE_TEXT = """\
 - Cash position: 6%
 TODO: confirm portfolio manager approval before adding more sector exposure.
 """
+PATCHED_LINE = "Action: manager approval required before adding more sector exposure."
 
 
 async def run_demo() -> None:
@@ -44,9 +46,10 @@ async def run_demo() -> None:
     api_key = os.environ["OPENAI_API_KEY"]
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
     user_prompt = (
-        f"Create {WORKSPACE_FILE} with exactly this content, then locate it "
-        "with the find tool, use grep to find any TODO items inside it, read "
-        "it back, and summarize the portfolio risk in one sentence:\n\n"
+        f"Create {WORKSPACE_FILE} with exactly this content, use patch to "
+        f"replace the TODO line with `{PATCHED_LINE}`, locate the file with "
+        "find, use grep to confirm the Action line, read it back, and "
+        "summarize the portfolio risk in one sentence:\n\n"
         f"{WORKSPACE_TEXT}"
     )
 
@@ -60,15 +63,17 @@ async def run_demo() -> None:
                 model_args={"reasoning_effort": "low"},
                 instructions=(
                     "You create and inspect files in a local workspace. "
-                    "Call `write` to create requested files, `find` to locate "
-                    "them, `grep` to search inside text, and `read` before "
-                    "answering from the file."
+                    "Call `write` to create requested files, `patch` for "
+                    "precise edits to existing files, `find` to locate them, "
+                    "`grep` to search inside text, and `read` before answering "
+                    "from the file."
                 ),
                 tools=Tools(
                     tools=[],
                     tool_choice="required",
                     tool_call_limits={
                         "write": 1,
+                        "patch": 1,
                         "find": 1,
                         "grep": 1,
                         "read": 1,
@@ -78,6 +83,7 @@ async def run_demo() -> None:
                     HarnessToolsShim(
                         (
                             write_tool(cwd=workspace),
+                            patch_tool(cwd=workspace),
                             find_tool(cwd=workspace),
                             grep_tool(cwd=workspace),
                             read_tool(cwd=workspace),

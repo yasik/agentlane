@@ -24,6 +24,7 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
         "read",
         "find",
         "grep",
+        "patch",
         "write",
         "write_plan",
     ]
