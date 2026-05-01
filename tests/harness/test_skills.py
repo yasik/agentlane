@@ -541,6 +541,8 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
             "activate_skill"
         ]
         assert first_call_tools.normalized_tools[0].args_type() is ActivateSkillInput
+        first_tool_schema = first_call_tools.normalized_tools[0].schema
+        assert "enum" not in first_tool_schema["parameters"]["properties"]["name"]
 
         assert model.calls[0][0]["role"] == "system"
         system_prompt = str(model.calls[0][0]["content"])
@@ -555,6 +557,8 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
             in system_prompt
         )
         assert "with the skill's name to load its full instructions." in system_prompt
+        assert "Call activate_skill at most once per skill in a run." in system_prompt
+        assert "continue using that existing skill content" in system_prompt
         assert "<available_skills>" in system_prompt
         assert "<name>refund-policy</name>" in system_prompt
         assert (
@@ -586,12 +590,26 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
                 "</skill_content>"
             ),
         }
-        assert model.calls[2][-1] == {
-            "role": "tool",
-            "tool_call_id": "call_2",
-            "name": "activate_skill",
-            "content": "Skill `refund-policy` is already active in this run.",
-        }
+        assert model.calls[2][-1]["tool_call_id"] == "call_2"
+        assert model.calls[2][-1]["name"] == "activate_skill"
+        assert "Skill `refund-policy` is already active in this run." in str(
+            model.calls[2][-1]["content"]
+        )
+        assert "Continue using the existing" in str(model.calls[2][-1]["content"])
+        assert "do not call `activate_skill` for this skill again" in str(
+            model.calls[2][-1]["content"]
+        )
+
+        second_call_tools = model.call_options[1]["tools"]
+        if not isinstance(second_call_tools, Tools):
+            raise AssertionError("Expected cache-stable skills tool registration.")
+        assert second_call_tools.normalized_tools[0].args_type() is ActivateSkillInput
+        assert second_call_tools.normalized_tools[0].schema == first_tool_schema
+
+        final_call_tools = model.call_options[2]["tools"]
+        if not isinstance(final_call_tools, Tools):
+            raise AssertionError("Expected cache-stable skills tool registration.")
+        assert final_call_tools.normalized_tools[0].schema == first_tool_schema
 
         if agent.run_state is None:
             raise AssertionError("Expected persisted run state after completion.")
@@ -599,6 +617,70 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
         assert agent.run_state.shim_state == {
             "skills:active-skill-names": ["refund-policy"],
         }
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_deduplicates_duplicate_activation_calls_in_same_batch() -> None:
+    loaded_skill = LoadedSkill(
+        manifest=SkillManifest(
+            name="refund-policy",
+            description="Explain refund and return policy.",
+            skill_file=Path("/skills/refund-policy/SKILL.md"),
+            root=Path("/skills/refund-policy"),
+        ),
+        instructions="# Refund Policy\n\nUse this skill for refund questions.",
+        resources=(),
+    )
+    loader = _MemorySkillLoader(loaded_skill)
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "refund-policy"}),
+                    ),
+                    _make_tool_call(
+                        tool_id="call_2",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "refund-policy"}),
+                    ),
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(SkillsShim(loader=loader),),
+        )
+    )
+
+    async def scenario() -> None:
+        result = await agent.run("Can I still return my order?")
+
+        assert result.final_output == "done"
+        assert loader.load_calls == ["refund-policy"]
+        assert model.calls[1][-2]["name"] == "activate_skill"
+        assert "<skill_content" in str(model.calls[1][-2]["content"])
+        assert model.calls[1][-1] == {
+            "role": "tool",
+            "tool_call_id": "call_2",
+            "name": "activate_skill",
+            "content": (
+                "Skill `refund-policy` is already active in this run. "
+                "Continue using the existing "
+                '`<skill_content name="refund-policy">`; do not call '
+                "`activate_skill` for this skill again."
+            ),
+        }
+        assert isinstance(model.call_options[1]["tools"], Tools)
 
     asyncio.run(scenario())
 
@@ -979,19 +1061,128 @@ def test_skills_shim_activates_multiple_different_skills_in_one_run() -> None:
         assert result.final_output == "done"
         assert loader.load_calls == ["refund-policy", "shipping-info"]
 
+        first_call_tools = model.call_options[0]["tools"]
+        if not isinstance(first_call_tools, Tools):
+            raise AssertionError("Expected skills tool registration.")
+        first_tool_schema = first_call_tools.normalized_tools[0].schema
+        assert "enum" not in first_tool_schema["parameters"]["properties"]["name"]
+        assert first_call_tools.normalized_tools[0].args_type() is ActivateSkillInput
+
         first_activation = model.calls[1][-1]
         assert first_activation["name"] == "activate_skill"
         assert "# Refund instructions" in str(first_activation["content"])
 
+        second_call_tools = model.call_options[1]["tools"]
+        if not isinstance(second_call_tools, Tools):
+            raise AssertionError("Expected cache-stable skills tool registration.")
+        assert second_call_tools.normalized_tools[0].args_type() is ActivateSkillInput
+        assert second_call_tools.normalized_tools[0].schema == first_tool_schema
+
         second_activation = model.calls[2][-1]
         assert second_activation["name"] == "activate_skill"
         assert "# Shipping instructions" in str(second_activation["content"])
+        final_call_tools = model.call_options[2]["tools"]
+        if not isinstance(final_call_tools, Tools):
+            raise AssertionError("Expected cache-stable skills tool registration.")
+        assert final_call_tools.normalized_tools[0].schema == first_tool_schema
 
         if agent.run_state is None:
             raise AssertionError("Expected persisted run state after completion.")
         assert isinstance(agent.run_state.shim_state, ShimState)
         assert agent.run_state.shim_state == {
             "skills:active-skill-names": ["refund-policy", "shipping-info"],
+        }
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_returns_already_active_when_other_skills_remain() -> None:
+    skill_a = LoadedSkill(
+        manifest=SkillManifest(
+            name="refund-policy",
+            description="Handle refunds.",
+            skill_file=Path("/skills/refund-policy/SKILL.md"),
+            root=Path("/skills/refund-policy"),
+        ),
+        instructions="# Refund instructions",
+        resources=(),
+    )
+    skill_b = LoadedSkill(
+        manifest=SkillManifest(
+            name="shipping-info",
+            description="Handle shipping.",
+            skill_file=Path("/skills/shipping-info/SKILL.md"),
+            root=Path("/skills/shipping-info"),
+        ),
+        instructions="# Shipping instructions",
+        resources=(),
+    )
+    loader = _MultiSkillLoader([skill_a, skill_b])
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "refund-policy"}),
+                    )
+                ],
+            ),
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_2",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "refund-policy"}),
+                    )
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(SkillsShim(loader=loader),),
+        )
+    )
+
+    async def scenario() -> None:
+        result = await agent.run("Help me with my order")
+
+        assert result.final_output == "done"
+        assert loader.load_calls == ["refund-policy"]
+
+        first_call_tools = model.call_options[0]["tools"]
+        if not isinstance(first_call_tools, Tools):
+            raise AssertionError("Expected skills tool registration.")
+        first_tool_schema = first_call_tools.normalized_tools[0].schema
+
+        second_call_tools = model.call_options[1]["tools"]
+        if not isinstance(second_call_tools, Tools):
+            raise AssertionError("Expected cache-stable skills tool registration.")
+        assert second_call_tools.normalized_tools[0].args_type() is ActivateSkillInput
+        assert second_call_tools.normalized_tools[0].schema == first_tool_schema
+
+        repeated_activation_result = model.calls[2][-1]
+        assert repeated_activation_result["name"] == "activate_skill"
+        assert repeated_activation_result["tool_call_id"] == "call_2"
+        assert "Skill `refund-policy` is already active in this run." in str(
+            repeated_activation_result["content"]
+        )
+        assert "do not call `activate_skill` for this skill again" in str(
+            repeated_activation_result["content"]
+        )
+
+        if agent.run_state is None:
+            raise AssertionError("Expected persisted run state after completion.")
+        assert agent.run_state.shim_state == {
+            "skills:active-skill-names": ["refund-policy"],
         }
 
     asyncio.run(scenario())

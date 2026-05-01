@@ -10,6 +10,7 @@ DEFAULT_SKILLS_SYSTEM_PROMPT = """
 <skills_system>
 You have access to the following skills that provide specialized instructions for specific tasks.
 When a task matches a skill's description, call the {{ tool_name }} tool with the skill's name to load its full instructions.
+Call {{ tool_name }} at most once per skill in a run. If the conversation already contains a <skill_content name="..."> block for a skill, continue using that existing skill content instead of activating the same skill again.
 
 <available_skills>
 {% for skill in skills %}
@@ -26,7 +27,9 @@ When a task matches a skill's description, call the {{ tool_name }} tool with th
 
 ACTIVATE_SKILL_TOOL_DESCRIPTION = (
     "Activate a discovered skill by exact name. Use this when the current task "
-    "matches one of the available skill descriptions in the system instructions."
+    "matches one of the available skill descriptions in the system instructions. "
+    "Do not call this again for a skill whose skill_content block is already "
+    "visible in the conversation."
 )
 """Model-visible description for the `activate_skill` tool."""
 

@@ -38,7 +38,7 @@ That shim does five things:
 1. discovers skills once when it binds to a concrete agent instance,
 2. appends one skills guidance block to the system instruction before the first
    model turn, if any skills were discovered,
-3. contributes one `activate_skill(name: str)` tool,
+3. contributes one cache-stable `activate_skill(name: str)` tool,
 4. loads the full skill content only when the model activates a skill,
 5. deduplicates repeated activation through `RunState.shim_state`.
 
@@ -70,7 +70,14 @@ conversation history. Later turns in the same run continue with that skill
 content already visible to the model.
 
 Repeated activation of the same skill returns a plain tool-result message
-instead of injecting the same skill content again.
+instead of injecting the same skill content again when duplicate tool calls
+arrive in the same model response, through a race, or on a later model turn.
+
+On later model turns, the activation tool schema stays stable for prompt-cache
+reuse. The loaded skill content remains available in history, and the repeated
+activation result tells the model to continue using the existing
+`<skill_content>` block instead of calling `activate_skill` for that skill
+again.
 
 ## Hooks Around Skill Activation
 
@@ -187,10 +194,11 @@ skips that skill and continues with the rest.
 
 Activated skill names are persisted in `RunState.shim_state`.
 
-That gives two important properties:
+That gives three important properties:
 
 1. repeated activation can be deduplicated,
-2. later turns in the same run continue without reloading the same skill
+2. later turns keep a cache-stable activation tool schema,
+3. later turns in the same run continue without reloading the same skill
    instructions.
 
 The actual skill content remains visible because the activation tool result is
