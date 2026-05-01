@@ -19,7 +19,6 @@ from agentlane.runtime import CancellationToken
 from ._output import BASH_MAX_BYTES, BASH_MAX_LINES, TruncatedOutput, truncate_output
 
 _STREAM_READ_SIZE = 8192
-_STREAM_TAIL_BYTES = max(BASH_MAX_BYTES * 4, 256 * 1024)
 _COMBINED_LOG_THRESHOLD_BYTES = BASH_MAX_BYTES
 _COMBINED_LOG_BUFFER_BYTES = max(BASH_MAX_BYTES * 4, 256 * 1024)
 _TERMINATE_GRACE_SECONDS = 2.0
@@ -53,14 +52,14 @@ class BashExecutionResult:
     exit_code: int | None
     timed_out: bool
     cancelled: bool
-    stdout: TruncatedOutput
-    stderr: TruncatedOutput
+    timeout_seconds: float | None
+    output: TruncatedOutput
     full_output_path: Path | None
 
     @property
     def output_truncated(self) -> bool:
-        """Return whether either visible output stream was truncated."""
-        return self.stdout.truncated or self.stderr.truncated
+        """Return whether visible output was truncated."""
+        return self.output.truncated
 
 
 class BashExecutor(Protocol):
@@ -92,15 +91,13 @@ class LocalBashExecutor:
         request: BashExecutionRequest,
         cancellation_token: CancellationToken,
     ) -> BashExecutionResult:
-        """Run a command and return captured stdout/stderr metadata."""
+        """Run a command and return captured combined-output metadata."""
         effective_timeout = (
             request.timeout_seconds
             if request.timeout_seconds is not None
             else self._default_timeout
         )
         shell_config = self._shell_config or resolve_bash_shell()
-        stdout_capture = _StreamCapture()
-        stderr_capture = _StreamCapture()
         combined_output = _CombinedOutputRecorder(
             command=request.command,
             cwd=request.cwd,
@@ -122,16 +119,12 @@ class LocalBashExecutor:
         stdout_task = asyncio.create_task(
             _read_stream(
                 stream=process.stdout,
-                stream_name="stdout",
-                capture=stdout_capture,
                 combined_output=combined_output,
             )
         )
         stderr_task = asyncio.create_task(
             _read_stream(
                 stream=process.stderr,
-                stream_name="stderr",
-                capture=stderr_capture,
                 combined_output=combined_output,
             )
         )
@@ -205,10 +198,11 @@ class LocalBashExecutor:
             await _discard_cancelled_tasks(cleanup_tasks)
             combined_output.close()
 
-        stdout = _truncate_capture(stdout_capture)
-        stderr = _truncate_capture(stderr_capture)
+        output = _truncate_combined_output(combined_output)
         full_output_path = combined_output.path
-        if not stdout.truncated and not stderr.truncated:
+        if output.truncated and full_output_path is None:
+            full_output_path = combined_output.materialize()
+        if not output.truncated:
             combined_output.discard()
             full_output_path = None
 
@@ -218,8 +212,8 @@ class LocalBashExecutor:
             exit_code=process.returncode,
             timed_out=timed_out,
             cancelled=cancelled,
-            stdout=stdout,
-            stderr=stderr,
+            timeout_seconds=effective_timeout,
+            output=output,
             full_output_path=full_output_path,
         )
 
@@ -269,9 +263,9 @@ class _CombinedOutputRecorder:
         self._chunks: deque[_RecordedChunk] = deque()
         self._buffer_bytes = 0
         self._total_bytes = 0
+        self._dropped = False
         self._handle: Any | None = None
         self._path: Path | None = None
-        self._current_stream: str | None = None
         self._lock = asyncio.Lock()
         self._closed = False
 
@@ -280,13 +274,18 @@ class _CombinedOutputRecorder:
         """Return the temp log path when the recorder opened one."""
         return self._path
 
-    async def write(self, *, stream_name: str, chunk: bytes) -> None:
+    @property
+    def dropped(self) -> bool:
+        """Return whether bytes were dropped from the in-memory tail."""
+        return self._dropped
+
+    async def write(self, chunk: bytes) -> None:
         if not chunk:
             return
 
         async with self._lock:
             self._total_bytes += len(chunk)
-            recorded_chunk = _RecordedChunk(stream_name=stream_name, chunk=chunk)
+            recorded_chunk = _RecordedChunk(chunk=chunk)
             self._chunks.append(recorded_chunk)
             self._buffer_bytes += len(chunk)
             self._trim_buffer()
@@ -326,6 +325,33 @@ class _CombinedOutputRecorder:
         )
         self._handle = handle
         self._path = Path(handle.name)
+        self._write_header(handle)
+
+    def materialize(self) -> Path:
+        """Write the retained full output tail to a temp log."""
+        if self._path is not None:
+            return self._path
+
+        handle = tempfile.NamedTemporaryFile(
+            mode="wb",
+            delete=False,
+            prefix="agentlane-bash-",
+            suffix=".log",
+        )
+        path = Path(handle.name)
+        with handle:
+            self._write_header(handle)
+            for recorded_chunk in self._chunks:
+                handle.write(recorded_chunk.chunk)
+        self._path = path
+        return path
+
+    def _write_chunk(self, recorded_chunk: "_RecordedChunk") -> None:
+        if self._handle is None:
+            return
+        self._handle.write(recorded_chunk.chunk)
+
+    def _write_header(self, handle: Any) -> None:
         handle.write(
             f"Command: {self._command}\nWorking directory: {self._cwd}\n".encode(
                 "utf-8",
@@ -333,63 +359,32 @@ class _CombinedOutputRecorder:
             )
         )
 
-    def _write_chunk(self, recorded_chunk: "_RecordedChunk") -> None:
-        if self._handle is None:
-            return
-        if self._current_stream != recorded_chunk.stream_name:
-            self._handle.write(f"\n[{recorded_chunk.stream_name}]\n".encode())
-            self._current_stream = recorded_chunk.stream_name
-        self._handle.write(recorded_chunk.chunk)
-
     def _trim_buffer(self) -> None:
         while self._buffer_bytes > _COMBINED_LOG_BUFFER_BYTES and self._chunks:
             dropped = self._chunks.popleft()
             self._buffer_bytes -= len(dropped.chunk)
+            self._dropped = True
+
+    def text(self) -> str:
+        """Decode the retained chronological output tail."""
+        output = b"".join(chunk.chunk for chunk in self._chunks)
+        return output.decode("utf-8", errors="replace")
 
 
 @dataclass(frozen=True, slots=True)
 class _RecordedChunk:
     """One chronological output chunk."""
 
-    stream_name: str
     chunk: bytes
-
-
-class _StreamCapture:
-    """Keep a bounded tail of one output stream for model-visible output."""
-
-    def __init__(self) -> None:
-        self._tail = bytearray()
-        self._dropped = False
-
-    @property
-    def dropped(self) -> bool:
-        """Return whether bytes were dropped from the in-memory tail."""
-        return self._dropped
-
-    def append(self, chunk: bytes) -> None:
-        """Append bytes and retain only the bounded tail."""
-        self._tail.extend(chunk)
-        excess = len(self._tail) - _STREAM_TAIL_BYTES
-        if excess > 0:
-            del self._tail[:excess]
-            self._dropped = True
-
-    def text(self) -> str:
-        """Decode the retained bytes as replacement-tolerant text."""
-        return bytes(self._tail).decode("utf-8", errors="replace")
 
 
 async def _read_stream(
     *,
     stream: asyncio.StreamReader,
-    stream_name: str,
-    capture: _StreamCapture,
     combined_output: _CombinedOutputRecorder,
 ) -> None:
     while chunk := await stream.read(_STREAM_READ_SIZE):
-        capture.append(chunk)
-        await combined_output.write(stream_name=stream_name, chunk=chunk)
+        await combined_output.write(chunk)
 
 
 async def _watch_process_exit(
@@ -507,20 +502,27 @@ async def _propagate_stream_task_errors(tasks: set[asyncio.Task[None]]) -> None:
         await task
 
 
-def _truncate_capture(capture: _StreamCapture) -> TruncatedOutput:
+def _truncate_combined_output(recorder: _CombinedOutputRecorder) -> TruncatedOutput:
     output = truncate_output(
-        capture.text(),
+        recorder.text(),
         max_lines=BASH_MAX_LINES,
         max_bytes=BASH_MAX_BYTES,
         tail=True,
     )
-    if not capture.dropped or output.truncated:
+    if not recorder.dropped and not output.truncated:
         return output
 
     return TruncatedOutput(
-        text=(
-            f"[output truncated: showing last {BASH_MAX_LINES} lines or "
-            f"{BASH_MAX_BYTES} bytes]\n{output.text}"
-        ),
+        text=_remove_truncation_marker(output.text),
         truncated=True,
     )
+
+
+def _remove_truncation_marker(text: str) -> str:
+    if not text.startswith("[output truncated:"):
+        return text
+
+    _, separator, tail = text.partition("\n")
+    if separator == "":
+        return text
+    return tail

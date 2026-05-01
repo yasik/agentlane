@@ -22,8 +22,8 @@ from ._types import HarnessToolDefinition
 _TOOL_NAME = "bash"
 _TOOL_DESCRIPTION = (
     "Execute a non-interactive command with `bash -lc` in the current working "
-    "directory. Returns stdout and stderr. Output is tail-truncated to the "
-    "last 2000 lines or 51200 bytes per stream."
+    "directory. Returns combined stdout and stderr. Output is tail-truncated "
+    "to the last 2000 lines or 51200 bytes."
 )
 _TOOL_PROMPT_SNIPPET = "Execute non-interactive bash commands"
 _TOOL_PROMPT_GUIDELINES = (
@@ -154,8 +154,8 @@ async def _run_bash(
                 exit_code=None,
                 timed_out=False,
                 cancelled=True,
-                stdout=TruncatedOutput(text="", truncated=False),
-                stderr=TruncatedOutput(text="", truncated=False),
+                timeout_seconds=None,
+                output=TruncatedOutput(text="", truncated=False),
                 full_output_path=None,
             )
         )
@@ -180,41 +180,35 @@ async def _run_bash(
 
 def _format_bash_output(result: BashExecutionResult) -> str:
     """Render the final model-facing tool result."""
-    lines = [
-        f"Command: {result.command}",
-        f"Working directory: {result.cwd}",
-        f"Exit code: {_render_exit_code(result.exit_code)}",
-        f"Timed out: {_render_bool(result.timed_out)}",
-        f"Cancelled: {_render_bool(result.cancelled)}",
-        f"Output truncated: {_render_bool(result.output_truncated)}",
-    ]
-    if result.full_output_path is not None:
-        lines.append(f"Full output: {result.full_output_path}")
+    output = result.output.text.rstrip("\n") or "(no output)"
+    notices: list[str] = []
 
-    lines.extend(
-        [
-            "",
-            "stdout:",
-            _render_stream(result.stdout.text),
-            "",
-            "stderr:",
-            _render_stream(result.stderr.text),
-        ]
-    )
-    return "\n".join(lines)
+    if result.output_truncated and result.full_output_path is not None:
+        notices.append(
+            "Showing last "
+            f"2000 lines or 51200 bytes. Full output: {result.full_output_path}"
+        )
 
+    if result.timed_out:
+        if result.timeout_seconds is None:
+            notices.append("Command timed out")
+        else:
+            notices.append(
+                f"Command timed out after {_format_seconds(result.timeout_seconds)} seconds"
+            )
+    elif result.cancelled:
+        notices.append("Command cancelled")
+    elif result.exit_code is not None and result.exit_code != 0:
+        notices.append(f"Command exited with code {result.exit_code}")
 
-def _render_stream(text: str) -> str:
-    if text == "":
-        return "(empty)"
-    return text.rstrip("\n")
+    if not notices:
+        return output
+
+    return output + "\n\n" + "\n".join(f"[{notice}]" for notice in notices)
 
 
-def _render_exit_code(exit_code: int | None) -> str:
-    if exit_code is None:
-        return "unknown"
-    return str(exit_code)
-
-
-def _render_bool(value: bool) -> str:
-    return "true" if value else "false"
+def _format_seconds(seconds: float) -> str:
+    numeric_seconds = float(seconds)
+    if numeric_seconds.is_integer():
+        return str(int(numeric_seconds))
+    return str(seconds)

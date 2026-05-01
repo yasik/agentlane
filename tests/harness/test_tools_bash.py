@@ -30,6 +30,23 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
 
+def _full_output_path_from_output(output: str) -> Path:
+    full_output_line = next(
+        line for line in output.splitlines() if "Full output: " in line
+    )
+    return Path(
+        full_output_line.rsplit("Full output: ", maxsplit=1)[1].removesuffix("]")
+    )
+
+
+def _unlink_full_output_paths(output: str) -> None:
+    for line in output.splitlines():
+        if "Full output: " in line:
+            Path(line.rsplit("Full output: ", maxsplit=1)[1].removesuffix("]")).unlink(
+                missing_ok=True
+            )
+
+
 def _run_bash(
     command: str,
     *,
@@ -136,8 +153,8 @@ class _FakeBashExecutor:
             exit_code=0,
             timed_out=False,
             cancelled=False,
-            stdout=TruncatedOutput(text="fake stdout\n", truncated=False),
-            stderr=TruncatedOutput(text="", truncated=False),
+            timeout_seconds=request.timeout_seconds,
+            output=TruncatedOutput(text="fake output\n", truncated=False),
             full_output_path=None,
         )
 
@@ -151,20 +168,7 @@ class _DenyBashPolicy:
 def test_bash_tool_runs_successful_command(tmp_path: Path) -> None:
     output = _run_bash("printf 'hello\\n'", cwd=tmp_path)
 
-    assert output == (
-        "Command: printf 'hello\\n'\n"
-        f"Working directory: {tmp_path}\n"
-        "Exit code: 0\n"
-        "Timed out: false\n"
-        "Cancelled: false\n"
-        "Output truncated: false\n"
-        "\n"
-        "stdout:\n"
-        "hello\n"
-        "\n"
-        "stderr:\n"
-        "(empty)"
-    )
+    assert output == "hello"
 
 
 def test_bash_tool_rejects_invalid_default_timeout() -> None:
@@ -203,7 +207,7 @@ def test_bash_tool_adapter_passes_request_to_executor(tmp_path: Path) -> None:
 
     output, requests = asyncio.run(scenario())
 
-    assert "stdout:\nfake stdout" in output
+    assert output == "fake output"
     assert len(requests) == 1
     assert requests[0] == BashExecutionRequest(
         command="pwd",
@@ -234,25 +238,28 @@ def test_bash_tool_policy_can_deny_before_executor_runs(tmp_path: Path) -> None:
 
 
 def test_bash_tool_returns_nonzero_exit_code() -> None:
-    output = _run_bash("exit 7")
+    output = _run_bash("printf 'before fail\\n'; exit 7")
 
-    assert "Exit code: 7" in output
-    assert "Timed out: false" in output
+    assert output == "before fail\n\n[Command exited with code 7]"
+
+
+def test_bash_tool_renders_empty_successful_output() -> None:
+    output = _run_bash(":")
+
+    assert output == "(no output)"
 
 
 def test_bash_tool_captures_stderr() -> None:
     output = _run_bash("printf 'problem\\n' >&2")
 
-    assert "Exit code: 0" in output
-    assert "stdout:\n(empty)" in output
-    assert "stderr:\nproblem" in output
+    assert output == "problem"
 
 
 def test_bash_tool_captures_stdout_and_stderr() -> None:
     output = _run_bash("printf 'out\\n'; printf 'err\\n' >&2")
 
-    assert "stdout:\nout" in output
-    assert "stderr:\nerr" in output
+    assert "out" in output
+    assert "err" in output
 
 
 def test_bash_tool_uses_configured_cwd(tmp_path: Path) -> None:
@@ -260,7 +267,7 @@ def test_bash_tool_uses_configured_cwd(tmp_path: Path) -> None:
 
     output = _run_bash("pwd; ls", cwd=tmp_path)
 
-    assert f"stdout:\n{tmp_path}" in output
+    assert str(tmp_path) in output
     assert "visible.txt" in output
 
 
@@ -276,7 +283,7 @@ def test_bash_tool_honors_per_call_timeout(tmp_path: Path) -> None:
     marker = tmp_path / "should-not-exist"
     output = _run_bash(f"sleep 5; touch {marker}", cwd=tmp_path, timeout=0.1)
 
-    assert "Timed out: true" in output
+    assert "[Command timed out after 0.1 seconds]" in output
     assert marker.exists() is False
 
 
@@ -295,8 +302,7 @@ def test_bash_tool_honors_cancellation_token(tmp_path: Path) -> None:
 
     output = asyncio.run(scenario())
 
-    assert "Timed out: false" in output
-    assert "Cancelled: true" in output
+    assert output == "(no output)\n\n[Command cancelled]"
 
 
 def test_bash_tool_does_not_hang_on_inherited_pipe_handles(
@@ -317,8 +323,7 @@ def test_bash_tool_does_not_hang_on_inherited_pipe_handles(
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(python_code)}"
     output = _run_bash(command, cwd=tmp_path, timeout=1)
 
-    assert "Timed out: false" in output
-    assert "stdout:\ndone" in output
+    assert output == "done"
 
 
 def test_bash_tool_does_not_execute_when_token_already_cancelled(
@@ -339,8 +344,7 @@ def test_bash_tool_does_not_execute_when_token_already_cancelled(
 
     output = asyncio.run(scenario())
 
-    assert "Exit code: unknown" in output
-    assert "Cancelled: true" in output
+    assert output == "(no output)\n\n[Command cancelled]"
 
 
 def test_bash_tool_tail_truncates_large_output_and_preserves_full_log() -> None:
@@ -351,29 +355,42 @@ def test_bash_tool_tail_truncates_large_output_and_preserves_full_log() -> None:
     )
 
     try:
-        assert "Output truncated: true" in output
-        assert "[output truncated: showing last 2000 lines or 51200 bytes]" in output
+        assert "Showing last 2000 lines or 51200 bytes. Full output:" in output
         assert "line-2999" in output
         assert "line-0000" not in output
 
-        full_output_line = next(
-            line for line in output.splitlines() if line.startswith("Full output: ")
-        )
-        full_output_path = Path(full_output_line.removeprefix("Full output: "))
+        full_output_path = _full_output_path_from_output(output)
         assert full_output_path.exists()
         full_output_text = full_output_path.read_text(encoding="utf-8")
         assert "line-0000" in full_output_text
         assert "line-2999" in full_output_text
     finally:
-        for line in output.splitlines():
-            if line.startswith("Full output: "):
-                Path(line.removeprefix("Full output: ")).unlink(missing_ok=True)
+        _unlink_full_output_paths(output)
+
+
+def test_bash_tool_line_truncation_preserves_full_log() -> None:
+    output = _run_bash(
+        "for ((i=0; i<2500; i++)); do printf 'line-%04d\\n' \"$i\"; done"
+    )
+
+    try:
+        assert "Showing last 2000 lines or 51200 bytes. Full output:" in output
+        assert "line-2499" in output
+        assert "line-0000" not in output
+
+        full_output_path = _full_output_path_from_output(output)
+        assert full_output_path.exists()
+        full_output_text = full_output_path.read_text(encoding="utf-8")
+        assert "line-0000" in full_output_text
+        assert "line-2499" in full_output_text
+    finally:
+        _unlink_full_output_paths(output)
 
 
 def test_bash_tool_supports_quotes_and_shell_expansion() -> None:
     output = _run_bash("name='Agent Lane'; printf \"hello ${name}\\n\"")
 
-    assert "stdout:\nhello Agent Lane" in output
+    assert output == "hello Agent Lane"
 
 
 def test_bash_tool_sanitizes_unexpected_error_text(
@@ -405,7 +422,7 @@ def test_bash_tool_executes_through_tool_executor() -> None:
 
     assert messages[0]["role"] == "tool"
     assert messages[0]["name"] == "bash"
-    assert "stdout:\nexecutor" in cast(str, messages[0]["content"])
+    assert messages[0]["content"] == "executor"
 
 
 def test_bash_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
@@ -455,7 +472,7 @@ def test_bash_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
         tool_message = cast(dict[str, object], state.history[2])
         assert tool_message["role"] == "tool"
         assert tool_message["name"] == "bash"
-        assert "stdout:\nrunner content" in cast(str, tool_message["content"])
+        assert tool_message["content"] == "runner content"
 
     asyncio.run(scenario())
 
