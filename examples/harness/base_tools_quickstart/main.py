@@ -14,6 +14,7 @@ from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.tools import (
     HarnessToolsShim,
+    bash_tool,
     find_tool,
     grep_tool,
     patch_tool,
@@ -48,7 +49,8 @@ async def run_demo() -> None:
     user_prompt = (
         f"Create {WORKSPACE_FILE} with exactly this content, use patch to "
         f"replace the TODO line with `{PATCHED_LINE}`, locate the file with "
-        "find, use grep to confirm the Action line, read it back, and "
+        "find, use grep to confirm the Action line, list the workspace with "
+        "bash, read it back, and "
         "summarize the portfolio risk in one sentence:\n\n"
         f"{WORKSPACE_TEXT}"
     )
@@ -65,7 +67,8 @@ async def run_demo() -> None:
                     "You create and inspect files in a local workspace. "
                     "Call `write` to create requested files, `patch` for "
                     "precise edits to existing files, `find` to locate them, "
-                    "`grep` to search inside text, and `read` before answering "
+                    "`grep` to search inside text, `bash` only for simple "
+                    "workspace shell inspection, and `read` before answering "
                     "from the file."
                 ),
                 tools=Tools(
@@ -76,6 +79,7 @@ async def run_demo() -> None:
                         "patch": 1,
                         "find": 1,
                         "grep": 1,
+                        "bash": 1,
                         "read": 1,
                     },
                 ),
@@ -86,6 +90,7 @@ async def run_demo() -> None:
                             patch_tool(cwd=workspace),
                             find_tool(cwd=workspace),
                             grep_tool(cwd=workspace),
+                            bash_tool(cwd=workspace, default_timeout=5),
                             read_tool(cwd=workspace),
                         )
                     ),
