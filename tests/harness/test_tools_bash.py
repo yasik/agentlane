@@ -1,0 +1,500 @@
+"""Tests for the first-party bash harness tool."""
+
+import asyncio
+import json
+import os
+import shlex
+import sys
+from pathlib import Path
+from typing import Any, cast
+
+import pytest
+
+from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
+from agentlane.harness.shims import PreparedTurn, ShimBindingContext
+from agentlane.harness.tools import HarnessToolsShim, bash_tool
+from agentlane.harness.tools._bash import BashPolicyDecision
+from agentlane.harness.tools._bash_executor import (
+    BashExecutionRequest,
+    BashExecutionResult,
+)
+from agentlane.harness.tools._output import TruncatedOutput
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    ToolCall,
+    ToolExecutor,
+    Tools,
+)
+from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+
+
+def _run_bash(
+    command: str,
+    *,
+    cwd: Path | None = None,
+    timeout: float | None = None,
+) -> str:
+    async def scenario() -> str:
+        definition = bash_tool(cwd=cwd)
+        args_model = definition.tool.args_type()
+        kwargs: dict[str, Any] = {"command": command}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return await definition.tool.run(args_model(**kwargs), CancellationToken())
+
+    return asyncio.run(scenario())
+
+
+def _make_tool_call(*, tool_id: str, name: str, arguments: str) -> ToolCall:
+    return ToolCall.model_validate(
+        {
+            "id": tool_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": arguments,
+            },
+        }
+    )
+
+
+def _make_bash_tool_call(command: str) -> ToolCall:
+    return _make_tool_call(
+        tool_id="call_1",
+        name="bash",
+        arguments=json.dumps({"command": command}),
+    )
+
+
+def _make_assistant_response(
+    content: str | None,
+    *,
+    tool_calls: list[ToolCall] | None = None,
+) -> ModelResponse:
+    return ModelResponse.model_validate(
+        {
+            "id": "chatcmpl_test",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "gpt-test",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": tool_calls,
+                    },
+                }
+            ],
+        }
+    )
+
+
+class _SequenceModel(Model[ModelResponse]):
+    def __init__(self, responses: list[ModelResponse]) -> None:
+        self._responses = list(responses)
+        self.calls: list[list[MessageDict]] = []
+        self.call_tools: list[Tools | None] = []
+
+    async def get_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
+        **kwargs: object,
+    ) -> ModelResponse:
+        del extra_call_args
+        del schema
+        del cancellation_token
+        del kwargs
+
+        self.calls.append([dict(message) for message in messages])
+        self.call_tools.append(tools)
+        return self._responses.pop(0)
+
+
+class _FakeBashExecutor:
+    def __init__(self) -> None:
+        self.requests: list[BashExecutionRequest] = []
+
+    async def run(
+        self,
+        request: BashExecutionRequest,
+        cancellation_token: CancellationToken,
+    ) -> BashExecutionResult:
+        del cancellation_token
+        self.requests.append(request)
+        return BashExecutionResult(
+            command=request.command,
+            cwd=request.cwd,
+            exit_code=0,
+            timed_out=False,
+            cancelled=False,
+            stdout=TruncatedOutput(text="fake stdout\n", truncated=False),
+            stderr=TruncatedOutput(text="", truncated=False),
+            full_output_path=None,
+        )
+
+
+class _DenyBashPolicy:
+    def check(self, request: BashExecutionRequest) -> BashPolicyDecision:
+        del request
+        return BashPolicyDecision(allowed=False, reason="bash command denied by test")
+
+
+def test_bash_tool_runs_successful_command(tmp_path: Path) -> None:
+    output = _run_bash("printf 'hello\\n'", cwd=tmp_path)
+
+    assert output == (
+        "Command: printf 'hello\\n'\n"
+        f"Working directory: {tmp_path}\n"
+        "Exit code: 0\n"
+        "Timed out: false\n"
+        "Cancelled: false\n"
+        "Output truncated: false\n"
+        "\n"
+        "stdout:\n"
+        "hello\n"
+        "\n"
+        "stderr:\n"
+        "(empty)"
+    )
+
+
+def test_bash_tool_rejects_invalid_default_timeout() -> None:
+    with pytest.raises(ValueError, match="default_timeout must be greater than zero"):
+        bash_tool(default_timeout=0)
+
+
+def test_bash_tool_rejects_invalid_command_arguments(tmp_path: Path) -> None:
+    definition = bash_tool(cwd=tmp_path)
+    args_model = definition.tool.args_type()
+
+    assert (
+        asyncio.run(definition.tool.run(args_model(command=""), CancellationToken()))
+        == "command must not be empty"
+    )
+    assert (
+        asyncio.run(
+            definition.tool.run(
+                args_model(command="pwd", timeout=0), CancellationToken()
+            )
+        )
+        == "timeout must be greater than zero"
+    )
+
+
+def test_bash_tool_adapter_passes_request_to_executor(tmp_path: Path) -> None:
+    async def scenario() -> tuple[str, list[BashExecutionRequest]]:
+        executor = _FakeBashExecutor()
+        definition = bash_tool(cwd=tmp_path, executor=executor)
+        args_model = definition.tool.args_type()
+        output = await definition.tool.run(
+            args_model(command="pwd", timeout=3),
+            CancellationToken(),
+        )
+        return output, executor.requests
+
+    output, requests = asyncio.run(scenario())
+
+    assert "stdout:\nfake stdout" in output
+    assert len(requests) == 1
+    assert requests[0] == BashExecutionRequest(
+        command="pwd",
+        cwd=tmp_path,
+        timeout_seconds=3,
+    )
+
+
+def test_bash_tool_policy_can_deny_before_executor_runs(tmp_path: Path) -> None:
+    async def scenario() -> tuple[str, list[BashExecutionRequest]]:
+        executor = _FakeBashExecutor()
+        definition = bash_tool(
+            cwd=tmp_path,
+            executor=executor,
+            policy=_DenyBashPolicy(),
+        )
+        args_model = definition.tool.args_type()
+        output = await definition.tool.run(
+            args_model(command="pwd"),
+            CancellationToken(),
+        )
+        return output, executor.requests
+
+    output, requests = asyncio.run(scenario())
+
+    assert output == "bash command denied by test"
+    assert requests == []
+
+
+def test_bash_tool_returns_nonzero_exit_code() -> None:
+    output = _run_bash("exit 7")
+
+    assert "Exit code: 7" in output
+    assert "Timed out: false" in output
+
+
+def test_bash_tool_captures_stderr() -> None:
+    output = _run_bash("printf 'problem\\n' >&2")
+
+    assert "Exit code: 0" in output
+    assert "stdout:\n(empty)" in output
+    assert "stderr:\nproblem" in output
+
+
+def test_bash_tool_captures_stdout_and_stderr() -> None:
+    output = _run_bash("printf 'out\\n'; printf 'err\\n' >&2")
+
+    assert "stdout:\nout" in output
+    assert "stderr:\nerr" in output
+
+
+def test_bash_tool_uses_configured_cwd(tmp_path: Path) -> None:
+    (tmp_path / "visible.txt").write_text("content\n", encoding="utf-8")
+
+    output = _run_bash("pwd; ls", cwd=tmp_path)
+
+    assert f"stdout:\n{tmp_path}" in output
+    assert "visible.txt" in output
+
+
+def test_bash_tool_reports_missing_configured_cwd(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+
+    output = _run_bash("pwd", cwd=missing)
+
+    assert output == f"working directory not found: `{missing}`"
+
+
+def test_bash_tool_honors_per_call_timeout(tmp_path: Path) -> None:
+    marker = tmp_path / "should-not-exist"
+    output = _run_bash(f"sleep 5; touch {marker}", cwd=tmp_path, timeout=0.1)
+
+    assert "Timed out: true" in output
+    assert marker.exists() is False
+
+
+def test_bash_tool_honors_cancellation_token(tmp_path: Path) -> None:
+    async def scenario() -> str:
+        definition = bash_tool(cwd=tmp_path)
+        args_model = definition.tool.args_type()
+        token = CancellationToken()
+        task = asyncio.create_task(
+            definition.tool.run(args_model(command="sleep 5"), token)
+        )
+
+        await asyncio.sleep(0.1)
+        token.cancel()
+        return await task
+
+    output = asyncio.run(scenario())
+
+    assert "Timed out: false" in output
+    assert "Cancelled: true" in output
+
+
+def test_bash_tool_does_not_hang_on_inherited_pipe_handles(
+    tmp_path: Path,
+) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("requires POSIX fork semantics")
+
+    python_code = (
+        "import os, time\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    time.sleep(5)\n"
+        "else:\n"
+        "    print('done', flush=True)\n"
+        "    os._exit(0)\n"
+    )
+    command = f"{shlex.quote(sys.executable)} -c {shlex.quote(python_code)}"
+    output = _run_bash(command, cwd=tmp_path, timeout=1)
+
+    assert "Timed out: false" in output
+    assert "stdout:\ndone" in output
+
+
+def test_bash_tool_does_not_execute_when_token_already_cancelled(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> str:
+        marker = tmp_path / "should-not-exist"
+        definition = bash_tool(cwd=tmp_path)
+        args_model = definition.tool.args_type()
+        token = CancellationToken()
+        token.cancel()
+        output = await definition.tool.run(
+            args_model(command=f"touch {marker}"),
+            token,
+        )
+        assert marker.exists() is False
+        return output
+
+    output = asyncio.run(scenario())
+
+    assert "Exit code: unknown" in output
+    assert "Cancelled: true" in output
+
+
+def test_bash_tool_tail_truncates_large_output_and_preserves_full_log() -> None:
+    output = _run_bash(
+        "for ((i=0; i<3000; i++)); do "
+        "printf 'line-%04d-abcdefghijklmnopqrstuvwxyz0123456789\\n' \"$i\"; "
+        "done"
+    )
+
+    try:
+        assert "Output truncated: true" in output
+        assert "[output truncated: showing last 2000 lines or 51200 bytes]" in output
+        assert "line-2999" in output
+        assert "line-0000" not in output
+
+        full_output_line = next(
+            line for line in output.splitlines() if line.startswith("Full output: ")
+        )
+        full_output_path = Path(full_output_line.removeprefix("Full output: "))
+        assert full_output_path.exists()
+        full_output_text = full_output_path.read_text(encoding="utf-8")
+        assert "line-0000" in full_output_text
+        assert "line-2999" in full_output_text
+    finally:
+        for line in output.splitlines():
+            if line.startswith("Full output: "):
+                Path(line.removeprefix("Full output: ")).unlink(missing_ok=True)
+
+
+def test_bash_tool_supports_quotes_and_shell_expansion() -> None:
+    output = _run_bash("name='Agent Lane'; printf \"hello ${name}\\n\"")
+
+    assert "stdout:\nhello Agent Lane" in output
+
+
+def test_bash_tool_sanitizes_unexpected_error_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def raise_unexpected_error(*args: object, **kwargs: object) -> object:
+        del args
+        del kwargs
+        raise RuntimeError("Traceback (most recent call last): private details")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", raise_unexpected_error)
+
+    output = _run_bash("printf 'hidden\\n'", cwd=tmp_path)
+
+    assert output == "failed to execute bash command"
+
+
+def test_bash_tool_executes_through_tool_executor() -> None:
+    async def scenario() -> list[dict[str, Any]]:
+        definition = bash_tool()
+        executor = ToolExecutor()
+        return await executor.execute(
+            tool_calls=[_make_bash_tool_call("printf 'executor\\n'")],
+            tools=Tools(tools=[definition.tool]),
+        )
+
+    messages = asyncio.run(scenario())
+
+    assert messages[0]["role"] == "tool"
+    assert messages[0]["name"] == "bash"
+    assert "stdout:\nexecutor" in cast(str, messages[0]["content"])
+
+
+def test_bash_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        model = _SequenceModel(
+            [
+                _make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_1",
+                            name="bash",
+                            arguments='{"command":"printf \\"runner content\\\\n\\""}',
+                        )
+                    ],
+                ),
+                _make_assistant_response(content="done"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="BashRunner",
+                model=model,
+                tools=Tools(
+                    tools=[bash_tool(cwd=tmp_path).tool],
+                    tool_choice="required",
+                    tool_call_limits={"bash": 1},
+                ),
+            ),
+        )
+        state = RunState(
+            instructions="Run the requested shell command before answering.",
+            history=["run the command"],
+            responses=[],
+        )
+
+        result = await runner.run(agent, state)
+
+        assert result.final_output == "done"
+        first_turn_tools = model.call_tools[0]
+        assert first_turn_tools is not None
+        assert [tool.name for tool in first_turn_tools.normalized_tools] == ["bash"]
+        tool_message = cast(dict[str, object], state.history[2])
+        assert tool_message["role"] == "tool"
+        assert tool_message["name"] == "bash"
+        assert "stdout:\nrunner content" in cast(str, tool_message["content"])
+
+    asyncio.run(scenario())
+
+
+def test_bash_tool_prompt_snippet_through_harness_tools_shim() -> None:
+    async def scenario() -> str:
+        shim = HarnessToolsShim((bash_tool(),))
+        bound = await shim.bind(cast(ShimBindingContext, object()))
+        state = RunState(
+            instructions="Base",
+            history=[],
+            responses=[],
+            turn_count=1,
+        )
+        turn = PreparedTurn(
+            run_state=state,
+            tools=None,
+            model_args=None,
+        )
+
+        await bound.prepare_turn(turn)
+        return cast(str, state.instructions)
+
+    instructions = asyncio.run(scenario())
+
+    assert (
+        instructions == "Base\n\n"
+        "<default_tools>\n"
+        "Available tools:\n"
+        "- bash: Execute non-interactive bash commands\n\n"
+        "Guidelines:\n"
+        "- Use dedicated file tools for direct file reads, writes, searches, "
+        "and patches when they fit.\n"
+        "- Use bash for shell workflows, short inspection commands, and "
+        "commands that need existing CLIs.\n"
+        "- Prefer `rg` over `grep` or `find` when searching from bash.\n"
+        "- Avoid interactive commands; bash does not accept follow-up stdin.\n"
+        "- Set `timeout` for commands that may hang or run for a long time.\n"
+        "- The bash tool does not provide sandboxing, approvals, or "
+        "permission enforcement.\n"
+        "</default_tools>"
+    )

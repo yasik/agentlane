@@ -1,5 +1,6 @@
 """First-party harness tool definitions and integration helpers."""
 
+from ._bash import bash_tool
 from ._find import find_tool
 from ._gitignore import GitignoreMatcher
 from ._grep import grep_tool
@@ -38,6 +39,7 @@ __all__ = [
     "ToolPathResolver",
     "TruncatedOutput",
     "base_harness_tools",
+    "bash_tool",
     "find_tool",
     "grep_tool",
     "patch_tool",

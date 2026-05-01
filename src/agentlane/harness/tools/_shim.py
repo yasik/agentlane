@@ -8,6 +8,7 @@ from agentlane.models.run import RunContext
 from .._run import RunState, ShimState
 from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
+from ._bash import bash_tool
 from ._find import find_tool
 from ._grep import grep_tool
 from ._patch import patch_tool
@@ -124,6 +125,7 @@ def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
         patch_tool(),
         write_tool(),
         plan_tool(),
+        bash_tool(),
     )
 
 

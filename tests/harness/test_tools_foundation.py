@@ -27,6 +27,7 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
         "patch",
         "write",
         "write_plan",
+        "bash",
     ]
 
 
