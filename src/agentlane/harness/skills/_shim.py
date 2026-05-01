@@ -97,7 +97,7 @@ class _BoundSkillsShim(BoundShim):
         if skill_name in _active_skill_names(
             shim_state=shim_state, key=active_names_key
         ):
-            return f"Skill `{skill_name}` is already active in this run."
+            return _already_active_message(skill_name)
 
         loaded_skill = await self._catalog.load(skill_name)
         appended = await shim_state.append_if_unique(
@@ -106,7 +106,7 @@ class _BoundSkillsShim(BoundShim):
             lambda value: value,
         )
         if not appended:
-            return f"Skill `{skill_name}` is already active in this run."
+            return _already_active_message(skill_name)
         return render_loaded_skill(loaded_skill)
 
     def _require_shim_state(self) -> ShimState:
@@ -189,3 +189,12 @@ def _active_skill_names(
     raw_items = cast(list[object], raw_value)
     values = [value for value in raw_items if isinstance(value, str)]
     return tuple(values)
+
+
+def _already_active_message(skill_name: str) -> str:
+    """Return a directive idempotent response for repeated activation."""
+    return (
+        f"Skill `{skill_name}` is already active in this run. "
+        f'Continue using the existing `<skill_content name="{skill_name}">`; '
+        "do not call `activate_skill` for this skill again."
+    )

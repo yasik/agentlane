@@ -10,7 +10,8 @@ The script uses:
 
 1. a local `skills/` directory beside the example,
 2. an explicit `FilesystemSkillLoader`,
-3. one `SkillsShim` that exposes `activate_skill(name: str)` to the model,
+3. one `SkillsShim` that exposes a cache-stable `activate_skill(name: str)`
+   tool,
 4. one `RunnerHooks` implementation that logs lifecycle and skill-activation
    events.
 
