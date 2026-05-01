@@ -65,6 +65,7 @@ class BashPolicy(Protocol):
 
     def check(self, request: BashExecutionRequest) -> BashPolicyDecision:
         """Return whether the command should execute."""
+        ...
 
 
 class _AllowBashPolicy:

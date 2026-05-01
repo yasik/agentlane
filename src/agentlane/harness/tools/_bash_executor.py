@@ -72,6 +72,7 @@ class BashExecutor(Protocol):
         cancellation_token: CancellationToken,
     ) -> BashExecutionResult:
         """Execute one bash command."""
+        ...
 
 
 class LocalBashExecutor:
@@ -473,9 +474,12 @@ def _send_process_signal(
 
 
 def _kill_windows_process_tree(pid: int) -> None:
+    taskkill_path = (
+        Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+    )
     try:
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
+        subprocess.run(  # noqa: S603
+            [str(taskkill_path), "/F", "/T", "/PID", str(pid)],
             check=False,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
