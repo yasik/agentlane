@@ -213,6 +213,7 @@ Use the documentation index for the full docs tree:
 
 1. [Documentation Index](docs/README.md)
 2. [Examples Index](examples/README.md)
+3. [Changelog](CHANGELOG.md)
 
 ## Origins
 

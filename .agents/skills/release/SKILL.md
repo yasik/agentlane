@@ -1,29 +1,22 @@
 ---
 name: release
-description: Prepare an AgentLane release with lockstep versioning across the root package and workspace packages, release notes based on changes since the last remote tag, full verification, and local-only git tag creation.
+description: Prepare and publish an AgentLane release with lockstep versioning, generated Keep a Changelog release notes, verification, a release commit, an annotated tag, and a GitHub release.
 ---
 
 # Release
 
 Use this skill when the user wants to cut a release, bump versions, draft
-release notes, or create a git tag for PyPI or GitHub release preparation.
+release notes, create a release tag, or publish a GitHub release.
 
-## Quick start
+The skill owns the full release workflow: choosing the version, editing version
+files, generating the Keep a Changelog entry from commits, verifying the
+change, committing, tagging, and publishing. The only script involved is the
+skill-local publish helper, which pushes the already-prepared release commit and
+tag, then calls `gh release create`.
 
-1. Run `bash .agents/skills/release/scripts/run.sh`.
-2. The release must halt unless the current branch is `main`.
-3. The release must halt if `git status --short` is not empty.
-4. If the current versions are not in lockstep yet, update:
-   - `pyproject.toml`
-   - every discovered `packages/*/pyproject.toml`
-5. Keep all package versions identical for a release.
-6. Do not add compatibility bounds between workspace packages as part of this
-   release workflow.
-7. Write release notes to `docs/releases/v<version>.md` using the short
-   template in `references/release_notes_template.md`.
-8. Run `/usr/bin/make format`, `/usr/bin/make lint`, and `/usr/bin/make tests`.
-9. Create a local annotated tag with `git tag -a v<version> -F docs/releases/v<version>.md`.
-10. Do not push the tag. Leave tag pushing to the user after review.
+Do not create new `docs/releases/v<version>.md` files. `CHANGELOG.md` is the
+release-notes source of truth, and its version entry is used as the annotated
+tag message and GitHub release body.
 
 ## Versioning policy
 
@@ -39,7 +32,7 @@ Rules:
 4. Use a `MINOR` bump for new public capabilities or any public behavior change
    users should adapt to.
 
-## Release workflow
+## Workflow
 
 ### 1. Confirm repository state
 
@@ -47,56 +40,67 @@ Before editing anything:
 
 1. ensure the current branch is exactly `main`
 2. ensure `git status --short` is empty
-3. halt immediately if either check fails
-4. do not discard unrelated changes just to force a release through
+3. fetch tags from `origin`
+4. ensure local `main` matches `origin/main`
+5. halt immediately if any guardrail fails
+6. do not discard unrelated changes just to force a release through
 
-### 2. Review release context from the remote
-
-Always base the release review on the latest remote tag, not just local tags.
-
-Run:
+Useful commands:
 
 ```bash
-bash .agents/skills/release/scripts/run.sh
+git branch --show-current
+git status --short
+git fetch --tags origin
+git rev-parse HEAD
+git rev-parse origin/main
 ```
 
-This helper:
+### 2. Review release context
 
-1. verifies the current branch is `main`
-2. verifies the worktree is clean
-3. fetches tags from `origin`
-4. reads the current versions from the root and workspace packages
-5. checks whether the repo is already in lockstep
-6. finds the latest remote semver tag
-7. prints the review range and the git commands to inspect commits and files
+Always base the release review on the latest remote semver tag, not just local
+tags.
 
-If there are no remote tags yet, treat the release as the initial release and
-review the full history.
+Use the latest remote `vX.Y.Z` tag as the base. If there are no remote semver
+tags yet, treat the release as the initial release and review the full history.
 
-### 3. Bump versions in lockstep
+Review:
 
-Update:
+```bash
+git log --reverse --no-merges --oneline <last-tag>..HEAD
+git diff --name-only <last-tag>..HEAD
+```
 
-1. `pyproject.toml`
-2. every discovered `packages/*/pyproject.toml`
+For an initial release, use:
 
-All version values should match exactly.
+```bash
+git log --reverse --no-merges --oneline HEAD
+git log --name-only --pretty=format: --diff-filter=AM HEAD
+```
 
-Do not add or change inter-package compatibility bounds as part of this
-workflow.
+### 3. Choose and apply the version
 
-### 4. Write release notes
+Read the root package and any discovered `packages/*/pyproject.toml` version
+values. All version values must match exactly before release preparation.
 
-Create `docs/releases/v<version>.md`.
+Rules:
 
-Base the notes on:
+1. use an explicit user-provided version when given
+2. otherwise apply the versioning policy from this skill
+3. update `pyproject.toml`
+4. update every discovered `packages/*/pyproject.toml`
+5. do not add or change inter-package compatibility bounds as part of this
+   workflow
 
-1. `git log --reverse --no-merges --oneline <range>`
-2. `git diff --name-only <range>` or `git log --name-only --pretty=format: --diff-filter=AM HEAD` for an initial release
+### 4. Generate the changelog entry
+
+Generate the release entry from:
+
+1. the non-merge commits in the review range
+2. the changed files in the review range
 3. user-facing API and behavior changes
 4. examples and documentation added or updated
 
-Keep the notes short. Prefer one or two sentences of summary plus a few bullets
+Keep the notes concise. Prefer one short summary paragraph plus a few bullets
 for the most notable user-facing changes. Do not turn release notes into a full
 project history dump.
 
@@ -104,42 +108,18 @@ Use `references/release_notes_template.md` as the starting point.
 
 Format rules:
 
-1. summarize the release in one or two sentences
-2. keep only the most notable changes and fixes
-3. group them into short sections such as `Added`, `Changed`, and `Fixed`
-4. attach commit links or short commit references for each bullet
-5. omit low-signal internal churn unless it materially affects users
-6. do not hard-wrap or reflow the release notes to fit an 80-column line limit
-7. keep each summary paragraph on one physical line
-8. keep each bullet on one physical line
-
-The template shape is intentionally short, closer to:
-
-```markdown
-# v<version>
-
-## Summary
-
-One or two concise sentences.
-
-## Added
-
-- Short user-facing addition (`abc1234`)
-
-## Changed
-
-- Short user-facing change (`def5678`)
-
-## Fixed
-
-- Short user-facing fix (`fedcba9`)
-```
-
-For an initial release, make that explicit in the summary.
-
-The helper intentionally stops at guardrails plus release context. Do the
-commit review and release-note writing directly in the release task instead of
-trying to encode the whole release process in a script.
+1. insert or replace `## [<version>] - <YYYY-MM-DD>` near the top of
+   `CHANGELOG.md`
+2. start the body with one short summary paragraph
+3. group bullets under Keep a Changelog sections: `Added`, `Changed`,
+   `Deprecated`, `Removed`, `Fixed`, and `Security`
+4. include only sections that have content
+5. attach commit links or short commit references for each bullet
+6. omit low-signal internal churn unless it materially affects users
+7. update the compare link at the bottom of `CHANGELOG.md`
+8. do not hard-wrap or reflow the release notes to fit an 80-column line limit
+9. keep each summary paragraph on one physical line
+10. keep each bullet on one physical line
 
 ### 5. Verify
 
@@ -151,22 +131,46 @@ Run from the repository root:
 /usr/bin/make tests
 ```
 
-Do not create a release tag until all three pass.
+Do not commit or tag the release until all three pass.
 
-### 6. Create the tag locally only
+### 6. Commit and tag locally
 
-Create the tag:
+Commit only the release files:
 
 ```bash
-git tag -a v<version> -F docs/releases/v<version>.md
+git add pyproject.toml packages/*/pyproject.toml CHANGELOG.md
+git commit -m "release: v<version>"
 ```
 
-Rules:
+If there are no `packages/*/pyproject.toml` files, omit that path.
 
-1. create the tag locally only
-2. do not push the tag
-3. use the release notes file as the annotated tag body
-4. report the tag name and release notes path back to the user
+Create the annotated tag from the new `CHANGELOG.md` entry. Use a temporary
+file outside the repository if needed:
+
+```bash
+git tag -a v<version> -F <temporary-release-notes-file>
+```
+
+### 7. Publish
+
+Publish only after the release commit and annotated tag already exist locally:
+
+```bash
+bash .agents/skills/release/scripts/run.sh --tag v<version>
+```
+
+The publish command:
+
+1. verifies the local tag exists
+2. reads the GitHub release body from the matching `CHANGELOG.md` entry
+3. verifies a GitHub release does not already exist for the tag
+4. asks for explicit confirmation
+5. pushes the current `main` commit to `origin`
+6. pushes the tag to `origin`
+7. creates the GitHub release with `gh release create`
+
+If confirmation is declined, publishing is skipped and no remote changes are
+made.
 
 ## Expected output
 
@@ -174,9 +178,9 @@ A release-ready result should include:
 
 1. the chosen version
 2. confirmation that the release was cut from `main`
-3. confirmation that the worktree was clean before the release started
+3. confirmation that the worktree was clean before release edits started
 4. confirmation that all package versions match
-5. the release notes file path
-6. the verification results
-7. the local tag name
-8. an explicit note that the tag was not pushed
+5. confirmation that `CHANGELOG.md` was updated
+6. verification results
+7. the local release commit and tag name
+8. whether publishing was confirmed or skipped
