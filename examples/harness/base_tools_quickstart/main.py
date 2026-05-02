@@ -192,8 +192,8 @@ async def run_demo() -> None:
         print(f"Model: {MODEL_NAME}")
         print(f"Workspace: {workspace}")
         print()
-        print("This run streams model text and tool argument deltas, while hooks")
-        print("print each base tool start/result as it executes.")
+        print("This run streams model text, while hooks print each base tool")
+        print("start/result as it executes.")
         print()
         print(f"User: {user_prompt}")
         print("Assistant/tool stream:")
@@ -234,13 +234,6 @@ async def run_demo() -> None:
             if event.kind == ModelStreamEventKind.TEXT_DELTA and event.text:
                 print(event.text, end="", flush=True)
                 continue
-
-            if (
-                event.kind == ModelStreamEventKind.TOOL_CALL_ARGUMENTS_DELTA
-                and event.arguments_delta
-            ):
-                print()
-                print(f"[tool arguments delta] {event.arguments_delta}")
 
         result = await stream.result()
         run_state = agent.run_state

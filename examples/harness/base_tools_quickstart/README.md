@@ -7,9 +7,8 @@ and `write` tools through `HarnessToolsShim`, then runs the agent with
 It creates a temporary workspace, asks the model to create a portfolio risk
 note plus a controls checklist, patch a TODO line into an action item, find the
 Markdown files, search inside them with `grep`, inspect the workspace with
-`bash`, read both files back, and summarize. The console streams model text,
-tool argument deltas, and hook-based tool start/result logs while the agent is
-working.
+`bash`, read both files back, and summarize. The console streams model text and
+hook-based tool start/result logs while the agent is working.
 
 ## Run
 
