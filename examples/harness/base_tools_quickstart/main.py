@@ -1,29 +1,37 @@
-"""Real OpenAI-backed quickstart for first-party base harness tools."""
+"""Real OpenAI-backed streaming quickstart for first-party base harness tools."""
 
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
 
 import structlog
 from agentlane_openai import ResponsesClient
 
-from agentlane.harness import AgentDescriptor
+from agentlane.harness import AgentDescriptor, RunnerHooks, Task
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.tools import (
     HarnessToolsShim,
+    bash_tool,
     find_tool,
     grep_tool,
     patch_tool,
+    plan_tool,
     read_tool,
     write_tool,
 )
-from agentlane.models import Config, ToolCall, Tools
+from agentlane.models import (
+    Config,
+    ModelStreamEventKind,
+    ToolCall,
+    Tools,
+)
 
 MODEL_NAME = "gpt-5.4-mini"
 WORKSPACE_FILE = "portfolio_risk_note.md"
+CHECKLIST_FILE = "risk_controls_checklist.md"
 WORKSPACE_TEXT = """\
 # Portfolio Risk Note
 
@@ -33,7 +41,63 @@ WORKSPACE_TEXT = """\
 - Cash position: 6%
 TODO: confirm portfolio manager approval before adding more sector exposure.
 """
-PATCHED_LINE = "Action: manager approval required before adding more sector exposure."
+CHECKLIST_TEXT = """\
+# Risk Controls Checklist
+
+- Confirm sector exposure threshold.
+- Confirm leveraged ETF sleeve threshold.
+- Record approval owner before any new purchase.
+- Archive final note in the review workspace.
+"""
+MAX_CONSOLE_RESULT_CHARS = 1400
+
+
+class ToolTraceHooks(RunnerHooks):
+    """Print tool execution while the streamed run is active."""
+
+    async def on_tool_call_start(self, task: Task, tool_call: ToolCall) -> None:
+        del task
+        tool_name = tool_call.function.name or "unknown"
+        print()
+        print(f"[tool start] {tool_name}")
+        print(_indent(_format_tool_arguments(tool_call.function.arguments)))
+
+    async def on_tool_call_end(
+        self,
+        task: Task,
+        tool_call: ToolCall,
+        result: object,
+    ) -> None:
+        del task
+        tool_name = tool_call.function.name or "unknown"
+        print()
+        print(f"[tool result] {tool_name}")
+        print(_indent(_truncate_console_text(str(result))))
+
+
+def _format_tool_arguments(arguments: str | None) -> str:
+    """Pretty-print one tool call's JSON arguments."""
+    if not arguments:
+        return "{}"
+    try:
+        parsed_arguments = json.loads(arguments)
+    except json.JSONDecodeError:
+        return arguments
+    return json.dumps(parsed_arguments, indent=2, sort_keys=True)
+
+
+def _truncate_console_text(text: str) -> str:
+    """Keep streamed console output readable for large tool results."""
+    if len(text) <= MAX_CONSOLE_RESULT_CHARS:
+        return text
+    trimmed = text[:MAX_CONSOLE_RESULT_CHARS].rstrip()
+    return f"{trimmed}\n[console output truncated]"
+
+
+def _indent(text: str) -> str:
+    """Indent a multi-line block for console display."""
+    lines = text.splitlines() or [""]
+    return "\n".join(f"  {line}" for line in lines)
 
 
 async def run_demo() -> None:
@@ -46,11 +110,20 @@ async def run_demo() -> None:
     api_key = os.environ["OPENAI_API_KEY"]
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
     user_prompt = (
-        f"Create {WORKSPACE_FILE} with exactly this content, use patch to "
-        f"replace the TODO line with `{PATCHED_LINE}`, locate the file with "
-        "find, use grep to confirm the Action line, read it back, and "
-        "summarize the portfolio risk in one sentence:\n\n"
-        f"{WORKSPACE_TEXT}"
+        "Build a tiny portfolio risk review workspace from the source material "
+        "below. Use the available workspace tools however you think is most "
+        "appropriate to create, edit, inspect, and verify the workspace. "
+        "You must create and maintain a plan: start by writing a concise plan, "
+        "update it as you complete meaningful phases, and mark every step "
+        "completed before your final response. The finished workspace should "
+        f"include `{WORKSPACE_FILE}` and `{CHECKLIST_FILE}`. Complete the draft "
+        "portfolio note so it is ready for review, resolving any unfinished "
+        "items in the source material as you see fit. Before answering, verify "
+        "the files exist and the workspace contents are readable. Use bash if a "
+        "shell inspection is the most direct way to verify the workspace. "
+        "Provide your final output in Markdown format.\n\n"
+        f"Portfolio note content:\n{WORKSPACE_TEXT}\n"
+        f"Checklist content:\n{CHECKLIST_TEXT}"
     )
 
     with TemporaryDirectory() as workspace_dir:
@@ -63,76 +136,104 @@ async def run_demo() -> None:
                 model_args={"reasoning_effort": "low"},
                 instructions=(
                     "You create and inspect files in a local workspace. "
-                    "Call `write` to create requested files, `patch` for "
-                    "precise edits to existing files, `find` to locate them, "
-                    "`grep` to search inside text, and `read` before answering "
-                    "from the file."
+                    "Use the available tools to accomplish the user's requested "
+                    "workspace outcome, choosing the sequence yourself. Start "
+                    "non-trivial work with `write_plan`, keep the plan current "
+                    "as phases complete, and mark the plan completed before "
+                    "your final answer. Prefer `write` for new files, `patch` "
+                    "for precise edits, `find` for file discovery, `grep` for "
+                    "text confirmation, `bash` for concise non-interactive "
+                    "workspace inspection, and `read` before answering from "
+                    "file facts."
                 ),
                 tools=Tools(
                     tools=[],
-                    tool_choice="required",
-                    tool_call_limits={
-                        "write": 1,
-                        "patch": 1,
-                        "find": 1,
-                        "grep": 1,
-                        "read": 1,
-                    },
+                    tool_choice="auto",
+                    parallel_tool_calls=False,
+                    max_tool_round_trips=12,
                 ),
                 shims=(
                     HarnessToolsShim(
                         (
+                            plan_tool(),
                             write_tool(cwd=workspace),
                             patch_tool(cwd=workspace),
                             find_tool(cwd=workspace),
                             grep_tool(cwd=workspace),
+                            bash_tool(cwd=workspace, default_timeout=5),
                             read_tool(cwd=workspace),
                         )
                     ),
                 ),
-            )
+            ),
+            hooks=ToolTraceHooks(),
         )
 
-        result = await agent.run(user_prompt)
+        stream = await agent.run_stream(user_prompt)
+
+        print("Example: base tools streaming quickstart")
+        print(f"Model: {MODEL_NAME}")
+        print(f"Workspace: {workspace}")
+        print()
+        print("This run streams model text, while hooks print each base tool")
+        print("start/result as it executes.")
+        print()
+        print(f"User: {user_prompt}")
+        print("Assistant/tool stream:")
+
+        last_openai_phase: str | None = None
+        saw_reasoning = False
+        async for event in stream:
+            if (
+                event.kind == ModelStreamEventKind.REASONING
+                and event.reasoning is not None
+            ):
+                reasoning_value = event.reasoning
+                reasoning_text = (
+                    reasoning_value
+                    if isinstance(reasoning_value, str)
+                    else str(reasoning_value)
+                )
+                if reasoning_text.strip():
+                    if not saw_reasoning:
+                        print()
+                        print("[reasoning]")
+                        saw_reasoning = True
+                    print(reasoning_text, end="", flush=True)
+                continue
+
+            if (
+                event.kind == ModelStreamEventKind.PROVIDER
+                and event.provider_event_type is not None
+            ):
+                raw_item = getattr(event.raw, "item", None)
+                raw_phase = getattr(raw_item, "phase", None)
+                if isinstance(raw_phase, str) and raw_phase != last_openai_phase:
+                    last_openai_phase = raw_phase
+                    print()
+                    print(f"[model result] {raw_phase}")
+                continue
+
+            if event.kind == ModelStreamEventKind.TEXT_DELTA and event.text:
+                print(event.text, end="", flush=True)
+                continue
+
+        result = await stream.result()
         run_state = agent.run_state
         if run_state is None:
             raise RuntimeError("Expected the default agent to persist run state.")
 
-    tool_calls_seen: list[str] = []
-    for response in run_state.responses:
-        tool_calls = cast(list[ToolCall], response.choices[0].message.tool_calls or [])
-        for tool_call in tool_calls:
-            tool_calls_seen.append(
-                f"{tool_call.function.name or 'not found'}: "
-                f"{tool_call.function.arguments or 'not found'}"
-            )
-
-    tool_outputs: list[str] = []
-    for item in run_state.history:
-        if not isinstance(item, dict):
-            continue
-        message = cast(dict[str, object], item)
-        if message.get("role") != "tool":
-            continue
-        tool_name = message.get("name")
-        content = message.get("content")
-        tool_output = content if isinstance(content, str) else str(content)
-        tool_outputs.append(f"{tool_name}: {tool_output}")
-
-    print("Example: base tools quickstart")
-    print(f"Model: {MODEL_NAME}")
     print()
-    print(f"User: {user_prompt}")
     print()
-    print(f"Assistant: {result.final_output}")
+    print(f"Final output: {result.final_output}")
+    print(
+        "Run summary:"
+        f" {run_state.turn_count} turns,"
+        f" {len(run_state.responses)} raw model responses."
+    )
     print()
-    print("Tool calls:")
-    for tool_call in tool_calls_seen:
-        print(f"- {tool_call}")
-    print()
-    print("Tool results:")
-    print("\n\n".join(tool_outputs) if tool_outputs else "not found")
-    print(f"Turns completed: {run_state.turn_count}")
+    print("Final plan state:")
+    print(json.dumps(dict(run_state.shim_state).get("harness-tools:plan"), indent=2))
 
 
 def main() -> None:

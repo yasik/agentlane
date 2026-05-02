@@ -195,7 +195,7 @@ Use the models layer when you want reusable prompt templates, schemas, structure
 Start here:
 
 1. [Overview](docs/models/overview.md)
-2. [Prompt Templating](docs/models/prompt_templating.md)
+2. [Prompt Templating](docs/models/prompt-templating.md)
 
 ### Harness
 
@@ -203,8 +203,9 @@ Use the harness when you want high-level agents, reusable loops, tool execution,
 
 Start here:
 
-1. [Default Agents](docs/harness/default_agents.md)
+1. [Default Agents](docs/harness/default-agents.md)
 2. [Architecture](docs/harness/architecture.md)
+3. [Tools](docs/harness/tools.md)
 
 ## Documentation
 
