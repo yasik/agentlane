@@ -41,7 +41,6 @@ WORKSPACE_TEXT = """\
 - Cash position: 6%
 TODO: confirm portfolio manager approval before adding more sector exposure.
 """
-PATCHED_LINE = "Action: manager approval required before adding more sector exposure."
 CHECKLIST_TEXT = """\
 # Risk Controls Checklist
 
@@ -117,12 +116,12 @@ async def run_demo() -> None:
         "You must create and maintain a plan: start by writing a concise plan, "
         "update it as you complete meaningful phases, and mark every step "
         "completed before your final response. The finished workspace should "
-        f"include `{WORKSPACE_FILE}` and `{CHECKLIST_FILE}`. The portfolio note "
-        f"should replace its TODO with `{PATCHED_LINE}`. Before answering, "
-        "verify the files exist, the Action line is present, and the workspace "
-        "contents are readable. Use bash if a shell inspection is the most "
-        "direct way to verify the workspace. Provide your final output in "
-        "Markdown format.\n\n"
+        f"include `{WORKSPACE_FILE}` and `{CHECKLIST_FILE}`. Complete the draft "
+        "portfolio note so it is ready for review, resolving any unfinished "
+        "items in the source material as you see fit. Before answering, verify "
+        "the files exist and the workspace contents are readable. Use bash if a "
+        "shell inspection is the most direct way to verify the workspace. "
+        "Provide your final output in Markdown format.\n\n"
         f"Portfolio note content:\n{WORKSPACE_TEXT}\n"
         f"Checklist content:\n{CHECKLIST_TEXT}"
     )

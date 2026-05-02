@@ -4,14 +4,13 @@ This example wires the first-party `bash`, `find`, `grep`, `patch`, `read`,
 `write`, and `write_plan` tools through `HarnessToolsShim`, then runs the agent
 with `DefaultAgent.run_stream(...)`.
 
-It creates a temporary workspace, asks the model to create a portfolio risk
-note plus a controls checklist, patch a TODO line into an action item, find the
-Markdown files, search inside them with `grep`, inspect the workspace with
-`bash` when useful, read files back, and summarize. The prompt describes the
-workspace outcome instead of an exact tool sequence, so the model chooses how
-to use the tools. It must create a plan, update progress while working, and
-mark the plan complete before the final answer. The console streams model text
-and hook-based tool start/result logs while the agent is working.
+It creates a temporary workspace, asks the model to create a finished portfolio
+risk note plus a controls checklist, verify the workspace, and summarize the
+result. The prompt describes the workspace outcome instead of an exact tool
+sequence, so the model chooses how to use the tools. It must create a plan,
+update progress while working, and mark the plan complete before the final
+answer. The console streams model text and hook-based tool start/result logs
+while the agent is working.
 
 ## Run
 
