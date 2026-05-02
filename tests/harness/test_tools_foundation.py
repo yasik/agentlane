@@ -129,6 +129,18 @@ def test_truncate_output_limits_tail_by_byte_count() -> None:
     )
 
 
+def test_truncate_output_can_omit_marker() -> None:
+    output = truncate_output(
+        "a\nb\nc\n",
+        max_lines=2,
+        max_bytes=100,
+        include_marker=False,
+    )
+
+    assert output.truncated is True
+    assert output.text == "a\nb\n"
+
+
 def test_gitignore_matcher_respects_root_rules_and_git_directory(
     tmp_path: Path,
 ) -> None:

@@ -1,9 +1,11 @@
 """Tests for the first-party bash harness tool."""
 
 import asyncio
+import importlib
 import json
 import os
 import shlex
+import signal
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -12,11 +14,12 @@ import pytest
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
-from agentlane.harness.tools import HarnessToolsShim, bash_tool
-from agentlane.harness.tools._bash import BashPolicyDecision
-from agentlane.harness.tools._bash_executor import (
+from agentlane.harness.tools import (
     BashExecutionRequest,
     BashExecutionResult,
+    BashPolicyDecision,
+    HarnessToolsShim,
+    bash_tool,
 )
 from agentlane.harness.tools._output import TruncatedOutput
 from agentlane.models import (
@@ -39,12 +42,8 @@ def _full_output_path_from_output(output: str) -> Path:
     )
 
 
-def _unlink_full_output_paths(output: str) -> None:
-    for line in output.splitlines():
-        if "Full output: " in line:
-            Path(line.rsplit("Full output: ", maxsplit=1)[1].removesuffix("]")).unlink(
-                missing_ok=True
-            )
+def _unlink_full_output_path(output: str) -> None:
+    _full_output_path_from_output(output).unlink(missing_ok=True)
 
 
 def _run_bash(
@@ -356,6 +355,7 @@ def test_bash_tool_tail_truncates_large_output_and_preserves_full_log() -> None:
 
     try:
         assert "Showing last 2000 lines or 51200 bytes. Full output:" in output
+        assert "[output truncated:" not in output
         assert "line-2999" in output
         assert "line-0000" not in output
 
@@ -365,7 +365,7 @@ def test_bash_tool_tail_truncates_large_output_and_preserves_full_log() -> None:
         assert "line-0000" in full_output_text
         assert "line-2999" in full_output_text
     finally:
-        _unlink_full_output_paths(output)
+        _unlink_full_output_path(output)
 
 
 def test_bash_tool_line_truncation_preserves_full_log() -> None:
@@ -375,6 +375,7 @@ def test_bash_tool_line_truncation_preserves_full_log() -> None:
 
     try:
         assert "Showing last 2000 lines or 51200 bytes. Full output:" in output
+        assert "[output truncated:" not in output
         assert "line-2499" in output
         assert "line-0000" not in output
 
@@ -384,7 +385,39 @@ def test_bash_tool_line_truncation_preserves_full_log() -> None:
         assert "line-0000" in full_output_text
         assert "line-2499" in full_output_text
     finally:
-        _unlink_full_output_paths(output)
+        _unlink_full_output_path(output)
+
+
+def test_bash_tool_windows_graceful_signal_uses_process_group_break(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWindowsProcess:
+        pid = 123
+        returncode: int | None = None
+
+        def __init__(self) -> None:
+            self.signals: list[object] = []
+            self.terminated = False
+
+        def send_signal(self, sig: object) -> None:
+            self.signals.append(sig)
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    ctrl_break_event = object()
+    process = FakeWindowsProcess()
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(signal, "CTRL_BREAK_EVENT", ctrl_break_event, raising=False)
+
+    bash_executor = importlib.import_module("agentlane.harness.tools._bash_executor")
+    helper_name = "_send_process_signal"
+    send_process_signal = getattr(bash_executor, helper_name)
+    send_process_signal(cast(Any, process), signal.SIGTERM)
+
+    assert process.signals == [ctrl_break_event]
+    assert process.terminated is False
 
 
 def test_bash_tool_supports_quotes_and_shell_expansion() -> None:

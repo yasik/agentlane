@@ -23,6 +23,7 @@ _COMBINED_LOG_THRESHOLD_BYTES = BASH_MAX_BYTES
 _COMBINED_LOG_BUFFER_BYTES = max(BASH_MAX_BYTES * 4, 256 * 1024)
 _TERMINATE_GRACE_SECONDS = 2.0
 _EXIT_STDIO_GRACE_SECONDS = 0.1
+_PROCESS_EXIT_POLL_SECONDS = 0.01
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,7 @@ class BashExecutionRequest:
     command: str
     cwd: Path
     timeout_seconds: float | None = None
+    # Executor-only override for host callers; no LLM-side path sets it today.
     env: Mapping[str, str] | None = None
 
 
@@ -328,7 +330,10 @@ class _CombinedOutputRecorder:
         self._write_header(handle)
 
     def materialize(self) -> Path:
-        """Write the retained full output tail to a temp log."""
+        """Write the retained full output tail to a temp log.
+
+        Safe to call after close(); this opens a separate file handle.
+        """
         if self._path is not None:
             return self._path
 
@@ -395,7 +400,9 @@ async def _watch_process_exit(
     while process.returncode is None:
         if process_wait_task.done():
             return await process_wait_task
-        await asyncio.sleep(0.01)
+        # asyncio's wait task can remain pending until inherited pipe handles
+        # close, even after the child process returncode is known.
+        await asyncio.sleep(_PROCESS_EXIT_POLL_SECONDS)
     return process.returncode
 
 
@@ -412,7 +419,7 @@ async def _wait_for_stream_tasks_after_exit(
         await _propagate_stream_task_errors(done)
         return
 
-    _send_process_signal(process, signal.SIGKILL, include_exited_group=True)
+    _kill_process_group(process, include_exited_group=True)
     for task in pending:
         task.cancel()
     await _discard_cancelled_tasks(pending)
@@ -439,7 +446,7 @@ async def _terminate_process_group(
         )
         return
 
-    _send_process_signal(process, signal.SIGKILL, include_exited_group=True)
+    _kill_process_group(process, include_exited_group=True)
     with suppress(TimeoutError):
         await asyncio.wait_for(asyncio.shield(process_exit_task), 1.0)
     await _wait_for_stream_tasks_after_exit(
@@ -460,12 +467,43 @@ def _send_process_signal(
     try:
         if os.name == "posix":
             os.killpg(process.pid, sig)
-        elif sig == signal.SIGKILL:
-            _kill_windows_process_tree(process.pid)
         elif process.returncode is None:
-            process.terminate()
+            _send_windows_graceful_signal(process)
     except ProcessLookupError:
         return
+
+
+def _kill_process_group(
+    process: asyncio.subprocess.Process,
+    *,
+    include_exited_group: bool = False,
+) -> None:
+    if process.returncode is not None and not include_exited_group:
+        return
+
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif os.name == "nt":
+            _kill_windows_process_tree(process.pid)
+    except ProcessLookupError:
+        return
+
+
+def _send_windows_graceful_signal(process: asyncio.subprocess.Process) -> None:
+    ctrl_break_event = getattr(signal, "CTRL_BREAK_EVENT", None)
+    if ctrl_break_event is not None:
+        try:
+            process.send_signal(ctrl_break_event)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+
+    # Fallback is leader-only, used when CTRL_BREAK_EVENT is unavailable or
+    # cannot be delivered to the process group.
+    process.terminate()
 
 
 def _kill_windows_process_tree(pid: int) -> None:
@@ -508,21 +546,9 @@ def _truncate_combined_output(recorder: _CombinedOutputRecorder) -> TruncatedOut
         max_lines=BASH_MAX_LINES,
         max_bytes=BASH_MAX_BYTES,
         tail=True,
+        include_marker=False,
     )
     if not recorder.dropped and not output.truncated:
         return output
 
-    return TruncatedOutput(
-        text=_remove_truncation_marker(output.text),
-        truncated=True,
-    )
-
-
-def _remove_truncation_marker(text: str) -> str:
-    if not text.startswith("[output truncated:"):
-        return text
-
-    _, separator, tail = text.partition("\n")
-    if separator == "":
-        return text
-    return tail
+    return TruncatedOutput(text=output.text, truncated=True)

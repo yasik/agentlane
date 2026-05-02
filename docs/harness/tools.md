@@ -146,7 +146,7 @@ is capped at 1000 matching paths or 51200 bytes, whichever limit is reached
 first. `grep` output is capped at 100 matching entries or 51200 bytes,
 whichever limit is reached first. `patch` success output is intentionally
 minimal and does not need truncation. `bash` output is tail-truncated to the
-most recent 2000 lines or 51200 bytes per stream.
+most recent 2000 combined stdout/stderr lines or 51200 bytes.
 
 Caller-provided limits are applied before the global caps. For large files, call
 `read` repeatedly with `offset` and `limit`. For large search results, narrow
@@ -527,6 +527,12 @@ calls that omit `timeout`. A model call can override it with a positive
 per-call timeout. Invalid empty commands and non-positive timeouts return
 stable text errors before any process starts.
 
+Host applications can import the executor-facing contracts
+`BashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`,
+`BashExecutionResult`, `BashShellConfig`, `resolve_bash_shell`, `BashPolicy`,
+and `BashPolicyDecision` from `agentlane.harness.tools` when they need to wrap
+or replace local execution.
+
 Empty successful commands return `(no output)`. Non-zero exits, timeouts,
 cancellations, and truncation add short bracketed notices after the output:
 
@@ -538,7 +544,11 @@ before failure
 
 If output is truncated, the result includes a temporary log path with the full
 combined output. On timeout or cancellation, the tool terminates the process
-group and kills it if graceful termination does not finish promptly. The tool
-is intentionally non-interactive: it does not stream partial output to the model
-and does not accept follow-up stdin for a running command. It does not provide a
-sandbox boundary, permission allowlist, or approval workflow.
+group and kills it if graceful termination does not finish promptly. On POSIX,
+both graceful and forced termination target the process group. On Windows,
+graceful termination sends `CTRL_BREAK_EVENT` to the new process group when
+available, then falls back to leader-only termination; forced termination uses
+`taskkill /F /T` for the process tree. The tool is intentionally
+non-interactive: it does not stream partial output to the model and does not
+accept follow-up stdin for a running command. It does not provide a sandbox
+boundary, permission allowlist, or approval workflow.

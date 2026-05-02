@@ -42,8 +42,12 @@ def truncate_output(
     max_lines: int,
     max_bytes: int,
     tail: bool = False,
+    include_marker: bool = True,
 ) -> TruncatedOutput:
-    """Apply deterministic line and byte limits to a tool output string."""
+    """Apply deterministic line and byte limits to a tool output string.
+
+    Set include_marker=False when a caller renders its own truncation notice.
+    """
     if max_lines < 1:
         raise ValueError("max_lines must be at least 1.")
     if max_bytes < 1:
@@ -65,6 +69,9 @@ def truncate_output(
     truncated = line_truncated or byte_truncated
     if not truncated:
         return TruncatedOutput(text=selected_text, truncated=False)
+
+    if not include_marker:
+        return TruncatedOutput(text=selected_text, truncated=True)
 
     direction = "last" if tail else "first"
     marker = (

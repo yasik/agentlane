@@ -15,7 +15,7 @@ from ._bash_executor import (
     BashExecutor,
     LocalBashExecutor,
 )
-from ._output import TruncatedOutput
+from ._output import BASH_MAX_BYTES, BASH_MAX_LINES, TruncatedOutput
 from ._paths import ToolPathResolver
 from ._types import HarnessToolDefinition
 
@@ -23,7 +23,7 @@ _TOOL_NAME = "bash"
 _TOOL_DESCRIPTION = (
     "Execute a non-interactive command with `bash -lc` in the current working "
     "directory. Returns combined stdout and stderr. Output is tail-truncated "
-    "to the last 2000 lines or 51200 bytes."
+    f"to the last {BASH_MAX_LINES} lines or {BASH_MAX_BYTES} bytes."
 )
 _TOOL_PROMPT_SNIPPET = "Execute non-interactive bash commands"
 _TOOL_PROMPT_GUIDELINES = (
@@ -186,7 +186,8 @@ def _format_bash_output(result: BashExecutionResult) -> str:
     if result.output_truncated and result.full_output_path is not None:
         notices.append(
             "Showing last "
-            f"2000 lines or 51200 bytes. Full output: {result.full_output_path}"
+            f"{BASH_MAX_LINES} lines or {BASH_MAX_BYTES} bytes. "
+            f"Full output: {result.full_output_path}"
         )
 
     if result.timed_out:
@@ -208,7 +209,6 @@ def _format_bash_output(result: BashExecutionResult) -> str:
 
 
 def _format_seconds(seconds: float) -> str:
-    numeric_seconds = float(seconds)
-    if numeric_seconds.is_integer():
-        return str(int(numeric_seconds))
+    if seconds.is_integer():
+        return str(int(seconds))
     return str(seconds)
