@@ -9,7 +9,7 @@ harness directly.
 2. [default_agent_shims_quickstart](./default_agent_shims_quickstart/): custom clinician-assistant shim quickstart showing instruction augmentation and persisted `RunState.shim_state`.
 3. [default_agent_streaming_quickstart](./default_agent_streaming_quickstart/): highest-level local portfolio-risk streaming quickstart using `DefaultAgent.run_stream(...)`, including provider-native reasoning and preamble details.
 4. [default_agent_skills_quickstart](./default_agent_skills_quickstart/): local skills quickstart using `SkillsShim` plus an explicit `FilesystemSkillLoader`.
-5. [base_tools_quickstart](./base_tools_quickstart/): first-party portfolio-risk workspace quickstart exposing `read`, `find`, `grep`, `patch`, `write`, and `bash` through `HarnessToolsShim`.
+5. [base_tools_quickstart](./base_tools_quickstart/): streamed first-party portfolio-risk workspace quickstart exposing `read`, `find`, `grep`, `patch`, `write`, and `bash` through `HarnessToolsShim`.
 6. [base_tools_plan_quickstart](./base_tools_plan_quickstart/): focused portfolio concentration `plan` tool quickstart showing replacement semantics and persisted shim state.
 7. [clinical_inbox_copilot](./clinical_inbox_copilot/): clinical case triage demo with skills and lifecycle hooks.
 8. [streaming_escalation_flow](./streaming_escalation_flow/): one streamed clinical safety run that combines a normal tool call, a predefined agent-as-tool delegation, and a first-class handoff.

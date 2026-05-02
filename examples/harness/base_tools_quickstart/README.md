@@ -1,12 +1,15 @@
 # Base Tools Quickstart
 
 This example wires the first-party `bash`, `find`, `grep`, `patch`, `read`,
-and `write` tools through `HarnessToolsShim`.
+and `write` tools through `HarnessToolsShim`, then runs the agent with
+`DefaultAgent.run_stream(...)`.
 
-It creates a temporary workspace, asks the model to write a portfolio risk note,
-patch a TODO line into an action item, find the file, search inside it with
-`grep`, list the workspace with `bash`, read it back, and summarize, then
-prints the assistant answer plus the observed tool calls.
+It creates a temporary workspace, asks the model to create a portfolio risk
+note plus a controls checklist, patch a TODO line into an action item, find the
+Markdown files, search inside them with `grep`, inspect the workspace with
+`bash`, read both files back, and summarize. The console streams model text,
+tool argument deltas, and hook-based tool start/result logs while the agent is
+working.
 
 ## Run
 
