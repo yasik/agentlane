@@ -6,7 +6,6 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
 
 import structlog
 from agentlane_openai import ResponsesClient
@@ -19,12 +18,12 @@ from agentlane.harness.tools import (
     find_tool,
     grep_tool,
     patch_tool,
+    plan_tool,
     read_tool,
     write_tool,
 )
 from agentlane.models import (
     Config,
-    ModelResponse,
     ModelStreamEventKind,
     ToolCall,
     Tools,
@@ -102,18 +101,6 @@ def _indent(text: str) -> str:
     return "\n".join(f"  {line}" for line in lines)
 
 
-def _tool_path(responses: list[ModelResponse]) -> list[str]:
-    """Extract the completed tool-call path from raw model responses."""
-    tool_names: list[str] = []
-    for response in responses:
-        tool_calls = cast(list[ToolCall], response.choices[0].message.tool_calls or [])
-        for tool_call in tool_calls:
-            tool_name = tool_call.function.name
-            if tool_name:
-                tool_names.append(tool_name)
-    return tool_names
-
-
 async def run_demo() -> None:
     """Run the base tools quickstart example."""
     logging.basicConfig(level=logging.WARNING)
@@ -124,19 +111,18 @@ async def run_demo() -> None:
     api_key = os.environ["OPENAI_API_KEY"]
     model = ResponsesClient(config=Config(api_key=api_key, model=MODEL_NAME))
     user_prompt = (
-        "Build a tiny portfolio risk review workspace. Follow this exact tool "
-        "sequence: "
-        f"1. Create `{WORKSPACE_FILE}` with the portfolio note below. "
-        f"2. Create `{CHECKLIST_FILE}` with the checklist below. "
-        f"3. Use patch to replace the TODO line in `{WORKSPACE_FILE}` with "
-        f"`{PATCHED_LINE}`. "
-        "4. Use find to locate the Markdown files. "
-        "5. Use grep to confirm the Action line. "
-        "6. Use bash for one non-interactive shell inspection that prints the "
-        "workspace path, sorted Markdown filenames, and line counts. "
-        "7. Read both Markdown files back. "
-        "Then answer with three bullets: files created, required approval, and "
-        "workspace verification.\n\n"
+        "Build a tiny portfolio risk review workspace from the source material "
+        "below. Use the available workspace tools however you think is most "
+        "appropriate to create, edit, inspect, and verify the workspace. "
+        "You must create and maintain a plan: start by writing a concise plan, "
+        "update it as you complete meaningful phases, and mark every step "
+        "completed before your final response. The finished workspace should "
+        f"include `{WORKSPACE_FILE}` and `{CHECKLIST_FILE}`. The portfolio note "
+        f"should replace its TODO with `{PATCHED_LINE}`. Before answering, "
+        "verify the files exist, the Action line is present, and the workspace "
+        "contents are readable. Use bash if a shell inspection is the most "
+        "direct way to verify the workspace. Provide your final output in "
+        "Markdown format.\n\n"
         f"Portfolio note content:\n{WORKSPACE_TEXT}\n"
         f"Checklist content:\n{CHECKLIST_TEXT}"
     )
@@ -151,28 +137,26 @@ async def run_demo() -> None:
                 model_args={"reasoning_effort": "low"},
                 instructions=(
                     "You create and inspect files in a local workspace. "
-                    "Follow the user's requested base-tool sequence exactly. "
-                    "Call `write` for new files, `patch` for precise edits, "
-                    "`find` to locate files, `grep` to confirm exact text, "
-                    "`bash` only for simple non-interactive workspace shell "
-                    "inspection, and `read` before answering from file facts."
+                    "Use the available tools to accomplish the user's requested "
+                    "workspace outcome, choosing the sequence yourself. Start "
+                    "non-trivial work with `write_plan`, keep the plan current "
+                    "as phases complete, and mark the plan completed before "
+                    "your final answer. Prefer `write` for new files, `patch` "
+                    "for precise edits, `find` for file discovery, `grep` for "
+                    "text confirmation, `bash` for concise non-interactive "
+                    "workspace inspection, and `read` before answering from "
+                    "file facts."
                 ),
                 tools=Tools(
                     tools=[],
-                    tool_choice="required",
+                    tool_choice="auto",
                     parallel_tool_calls=False,
-                    tool_call_limits={
-                        "write": 2,
-                        "patch": 1,
-                        "find": 1,
-                        "grep": 1,
-                        "bash": 1,
-                        "read": 2,
-                    },
+                    max_tool_round_trips=12,
                 ),
                 shims=(
                     HarnessToolsShim(
                         (
+                            plan_tool(),
                             write_tool(cwd=workspace),
                             patch_tool(cwd=workspace),
                             find_tool(cwd=workspace),
@@ -228,7 +212,7 @@ async def run_demo() -> None:
                 if isinstance(raw_phase, str) and raw_phase != last_openai_phase:
                     last_openai_phase = raw_phase
                     print()
-                    print(f"[openai phase] {raw_phase}")
+                    print(f"[model result] {raw_phase}")
                 continue
 
             if event.kind == ModelStreamEventKind.TEXT_DELTA and event.text:
@@ -243,13 +227,14 @@ async def run_demo() -> None:
     print()
     print()
     print(f"Final output: {result.final_output}")
-    tool_path = " -> ".join(_tool_path(run_state.responses)) or "not found"
-    print(f"Tool path: {tool_path}")
     print(
         "Run summary:"
         f" {run_state.turn_count} turns,"
         f" {len(run_state.responses)} raw model responses."
     )
+    print()
+    print("Final plan state:")
+    print(json.dumps(dict(run_state.shim_state).get("harness-tools:plan"), indent=2))
 
 
 def main() -> None:
