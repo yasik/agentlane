@@ -11,10 +11,5 @@
   "reportUnusedFunction": true,
   "reportUnusedVariable": true,
   "reportDuplicateImport": true,
-  "exclude": [
-    "**/__pycache__",
-    "**/.pytest_cache",
-    ".venv",
-    "venv"
-  ]
+  "exclude": ["**/__pycache__", "**/.pytest_cache", ".venv", "venv"],
 }

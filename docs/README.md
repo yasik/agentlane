@@ -130,3 +130,7 @@ mental model:
 ### Tracing
 
 1. [Tracing Overview](./tracing/overview.md)
+
+### Project
+
+1. [Changelog](../CHANGELOG.md)

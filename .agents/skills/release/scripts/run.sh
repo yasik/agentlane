@@ -6,4 +6,4 @@ REPO_ROOT="$(git -C "${SCRIPT_DIR}" rev-parse --show-toplevel 2>/dev/null || tru
 REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/../../../.." && pwd)}"
 
 cd "${REPO_ROOT}"
-uv run python .agents/skills/release/scripts/release_context.py "$@"
+uv run python .agents/skills/release/scripts/publish.py "$@"
