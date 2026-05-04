@@ -10,10 +10,14 @@ from tools_test_utils import (
 )
 
 from agentlane.harness import AgentDescriptor, Runner
-from agentlane.harness._handoff import delegated_result_text
+from agentlane.harness._handoff import (
+    default_agent_tool_instructions,
+    delegated_result_text,
+)
 from agentlane.harness._lifecycle import DefaultAgentTool
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.tools import HarnessToolsShim, agent_tool
+from agentlane.harness.tools import HarnessToolsShim, agent_tool, base_harness_tools
+from agentlane.harness.tools._shim import render_harness_tools_prompt
 from agentlane.messaging import DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import MessageDict, ModelResponse, Tools
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
@@ -24,6 +28,13 @@ def _message(role: str, content: object) -> MessageDict:
         "role": role,
         "content": content,
     }
+
+
+def _expected_default_child_system_prompt() -> str:
+    prompt = render_harness_tools_prompt(definitions=base_harness_tools())
+    if prompt is None:
+        raise AssertionError("Base harness tools unexpectedly rendered no prompt.")
+    return f"{default_agent_tool_instructions()}\n\n{prompt}"
 
 
 def test_agent_tool_exposes_name_and_required_task_schema() -> None:
@@ -102,16 +113,7 @@ def test_agent_tool_executes_through_harness_tools_shim_without_parent_context()
             [
                 _message(
                     "system",
-                    (
-                        "You are a newly spawned agent in a team of agents "
-                        "collaborating to complete a task. You can spawn sub-agents "
-                        "to handle subtasks, and those sub-agents can spawn their own "
-                        "sub-agents. Return the response to your assigned task "
-                        "directly; that response will be delivered back to your parent "
-                        "agent. Treat the next user message as your assigned task, "
-                        "and use any available prior history only as background "
-                        "context."
-                    ),
+                    _expected_default_child_system_prompt(),
                 ),
                 _message("user", "Research the refund exception."),
             ]

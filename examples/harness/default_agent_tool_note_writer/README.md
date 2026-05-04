@@ -10,7 +10,9 @@ The model sees one normal tool named `agent` with this schema:
 
 When the model calls that tool, the runner validates those arguments into a
 Pydantic model, creates a fresh child agent descriptor from that payload, and
-sends the task to the child agent as its input.
+sends the task to the child agent as its input. The child receives the default
+base tools through `HarnessToolsShim`, so its tool guidance is appended through
+the same system-context path as the manager agent.
 
 ## Why This Example Exists
 

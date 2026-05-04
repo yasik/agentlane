@@ -198,8 +198,9 @@ pattern. It accepts a one-word logging/tracing `name` plus a complete `task`
 instruction, spawns a fresh helper, and returns that helper's result as tool
 text. Generic spawned helpers do not inherit the parent conversation, parent
 system prompt, or parent custom tools. They receive the standard base tools by
-default. The `Runner` carries process-local depth and live-agent limits to
-prevent runaway recursion.
+default through `HarnessToolsShim`, so tool guidance is appended through the
+same prepared-turn path used by parent agents. The `Runner` carries
+process-local depth and live-agent limits to prevent runaway recursion.
 
 ## Handoffs
 

@@ -74,8 +74,7 @@ from ._run import (
 )
 from ._stream import RunStream
 from ._task import Task
-from ._tooling import ToolConfig
-from .shims import PreparedTurn
+from .shims import PreparedTurn, Shim
 from .shims._manager import BoundShimManager
 
 _AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
@@ -991,7 +990,8 @@ class Runner:
                     else _model_args(runner_task)
                 ),
                 schema=tool_definition.output_schema,
-                tools=_default_agent_child_tools(tool_definition),
+                tools=tool_definition.tools,
+                shims=_default_agent_child_shims(tool_definition),
             )
             runtime.register_factory(
                 delegated_agent_type(agent.id, tool_name, kind="tool"),
@@ -1266,15 +1266,14 @@ def _default_agent_tool_run_input(
     return [parsed_input.task]
 
 
-def _default_agent_child_tools(tool_definition: DefaultAgentTool) -> ToolConfig:
-    """Return the tool policy for one generic spawned helper."""
+def _default_agent_child_shims(tool_definition: DefaultAgentTool) -> tuple[Shim, ...]:
+    """Return shim policy for one generic spawned helper."""
     if tool_definition.tools is not None:
-        return tool_definition.tools
+        return ()
 
-    from .tools import base_harness_tools
+    from .tools import HarnessToolsShim, base_harness_tools
 
-    definitions = base_harness_tools()
-    return Tools(tools=tuple(definition.tool for definition in definitions))
+    return (HarnessToolsShim(base_harness_tools()),)
 
 
 def _tool_result_message(

@@ -183,7 +183,10 @@ Example tool call:
 `agent` is agent-as-tool, not handoff. The caller waits for the helper result
 and then continues its own loop. The spawned helper treats the explicit `task`
 as its assigned work, not the generated `name`. Generic spawned helpers receive
-the standard base-tools set by default, not the parent's custom tools.
+the standard base-tools set by default, not the parent's custom tools. Those
+default tools are attached through `HarnessToolsShim`, so the child uses the
+same tool-schema and tool-guidance prompt path as any other agent configured
+with the base tools shim.
 
 `agent` supports parallel calls when the parent `Tools` configuration enables
 `parallel_tool_calls`. Recursive spawning is bounded by process-local

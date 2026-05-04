@@ -75,7 +75,9 @@ The base `agent` tool is the generic spawned-helper version of agent-as-tool.
 It lets the model create a fresh helper for a delegated task without inheriting
 the parent conversation, parent system prompt, or parent custom tools. The
 helper name is used for logging and tracing; the task text is the instruction
-the helper receives.
+the helper receives. Default spawned helpers get their base tools through
+`HarnessToolsShim`, so their tool guidance is appended through the normal
+prepared-turn system context path.
 
 ## Concurrency Per Agent
 
