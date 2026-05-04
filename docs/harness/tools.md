@@ -186,9 +186,10 @@ as its assigned work, not the generated `name`. Generic spawned helpers receive
 the standard base-tools set by default, not the parent's custom tools.
 
 `agent` supports parallel calls when the parent `Tools` configuration enables
-`parallel_tool_calls`. Recursive spawning is bounded by internal safety limits:
-`agent_max_depth` defaults to `4`, and `agent_max_threads` defaults to `16`.
-When the depth limit is reached, the tool result is:
+`parallel_tool_calls`. Recursive spawning is bounded by process-local
+`Runner` safety limits: `Runner(agent_max_depth=4, agent_max_threads=16)`.
+These limits are execution policy, not part of the tool schema. When the depth
+limit is reached, the tool result is:
 
 ```text
 Agent depth limit reached. Solve the task yourself.

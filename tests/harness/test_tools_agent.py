@@ -49,6 +49,13 @@ def test_default_agent_tool_custom_instructions_do_not_inject_name() -> None:
     assert tool.resolved_instructions() == "Use the delegated task exactly."
 
 
+def test_runner_rejects_invalid_agent_limits() -> None:
+    with pytest.raises(ValueError, match="agent_max_depth"):
+        Runner(agent_max_depth=0)
+    with pytest.raises(ValueError, match="agent_max_threads"):
+        Runner(agent_max_threads=0)
+
+
 def test_agent_tool_executes_through_harness_tools_shim_without_parent_context() -> (
     None
 ):
@@ -171,7 +178,7 @@ def test_agent_tool_supports_parallel_spawned_agents() -> None:
 def test_agent_tool_rejects_at_depth_limit() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
-        runner = Runner()
+        runner = Runner(agent_max_depth=1)
         child_model = SequenceModel([])
         parent_model = SequenceModel(
             [
@@ -194,11 +201,7 @@ def test_agent_tool_rejects_at_depth_limit() -> None:
             descriptor=AgentDescriptor(
                 name="Manager",
                 model=parent_model,
-                shims=(
-                    HarnessToolsShim(
-                        (agent_tool(model=child_model, agent_max_depth=1),)
-                    ),
-                ),
+                shims=(HarnessToolsShim((agent_tool(model=child_model),)),),
             ),
         )
 
@@ -213,10 +216,70 @@ def test_agent_tool_rejects_at_depth_limit() -> None:
     asyncio.run(scenario())
 
 
+def test_agent_tool_tracks_recursive_depth_in_runner() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner(agent_max_depth=2)
+        child_model = SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="call_child",
+                            name="agent",
+                            arguments='{"name":"Nested","task":"Handle nested."}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="Child handled locally."),
+            ]
+        )
+        parent_model = SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="call_parent",
+                            name="agent",
+                            arguments='{"name":"Worker","task":"Handle child."}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="Parent done."),
+            ]
+        )
+        agent = DefaultAgent(
+            runtime=runtime,
+            runner=runner,
+            descriptor=AgentDescriptor(
+                name="Manager",
+                model=parent_model,
+                shims=(HarnessToolsShim((agent_tool(model=child_model),)),),
+            ),
+        )
+
+        result = await agent.run("Start")
+
+        assert result.final_output == "Parent done."
+        assert len(child_model.calls) == 2
+        nested_tool_results = [
+            message["content"]
+            for message in child_model.calls[1]
+            if message.get("role") == "tool"
+        ]
+        assert nested_tool_results == [
+            "Agent depth limit reached. Solve the task yourself."
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_agent_tool_rejects_at_thread_limit() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
-        runner = Runner()
+        runner = Runner(agent_max_threads=1)
         release = asyncio.Event()
         child_model = _BlockingChildModel(expected_calls=1, release=release)
         parent_model = SequenceModel(
@@ -246,11 +309,7 @@ def test_agent_tool_rejects_at_thread_limit() -> None:
                 name="Manager",
                 model=parent_model,
                 tools=Tools(tools=[], parallel_tool_calls=True),
-                shims=(
-                    HarnessToolsShim(
-                        (agent_tool(model=child_model, agent_max_threads=1),)
-                    ),
-                ),
+                shims=(HarnessToolsShim((agent_tool(model=child_model),)),),
             ),
         )
 

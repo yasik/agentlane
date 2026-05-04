@@ -16,12 +16,10 @@ Key invariants maintained here:
 """
 
 import asyncio
-from _thread import LockType
 from asyncio import Future, get_running_loop
 from collections import deque
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
-from threading import Lock
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, Self
 
 from pydantic import BaseModel
@@ -184,31 +182,6 @@ class AgentTool(ToolSpec[Any]):
         self.descriptor = descriptor
 
 
-type AgentToolChildToolsFactory = Callable[[int], ToolConfig]
-
-
-@dataclass(slots=True)
-class AgentToolThreadState:
-    """Shared live-agent counter for recursive spawned-agent tools."""
-
-    live_agents: int = 0
-    _lock: LockType = field(default_factory=Lock)
-
-    def try_acquire(self, *, max_threads: int) -> bool:
-        """Reserve one live-agent slot when capacity remains."""
-        with self._lock:
-            if self.live_agents >= max_threads:
-                return False
-            self.live_agents += 1
-            return True
-
-    def release(self) -> None:
-        """Release one live-agent slot."""
-        with self._lock:
-            if self.live_agents > 0:
-                self.live_agents -= 1
-
-
 class DefaultAgentTool(ToolSpec[DefaultAgentToolInput]):
     """Declarative tool schema for one generic spawned helper agent.
 
@@ -230,19 +203,7 @@ class DefaultAgentTool(ToolSpec[DefaultAgentToolInput]):
         model_args: dict[str, Any] | None = None,
         output_schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: ToolConfig = None,
-        agent_depth: int = 0,
-        agent_max_depth: int = 4,
-        agent_max_threads: int = 16,
-        agent_thread_state: AgentToolThreadState | None = None,
-        child_tools_factory: AgentToolChildToolsFactory | None = None,
     ) -> None:
-        if agent_depth < 0:
-            raise ValueError("agent_depth must be non-negative.")
-        if agent_max_depth < 1:
-            raise ValueError("agent_max_depth must be at least 1.")
-        if agent_max_threads < 1:
-            raise ValueError("agent_max_threads must be at least 1.")
-
         super().__init__(
             name=name,
             description=description,
@@ -253,11 +214,6 @@ class DefaultAgentTool(ToolSpec[DefaultAgentToolInput]):
         self.model_args = model_args
         self.output_schema = output_schema
         self.tools = tools
-        self.agent_depth = agent_depth
-        self.agent_max_depth = agent_max_depth
-        self.agent_max_threads = agent_max_threads
-        self._agent_thread_state = agent_thread_state or AgentToolThreadState()
-        self._child_tools_factory = child_tools_factory
 
     def resolved_instructions(self) -> str:
         """Return instructions for one spawned helper invocation."""
@@ -265,30 +221,6 @@ class DefaultAgentTool(ToolSpec[DefaultAgentToolInput]):
             return self.instructions
 
         return default_agent_tool_instructions()
-
-    def child_depth(self) -> int:
-        """Return the depth assigned to the child spawned by this tool."""
-        return self.agent_depth + 1
-
-    def depth_limit_reached(self, *, child_depth: int) -> bool:
-        """Return whether spawning a child at this depth is disallowed."""
-        return child_depth >= self.agent_max_depth
-
-    def try_acquire_agent_thread(self) -> bool:
-        """Reserve one live-agent slot for a spawned helper."""
-        return self._agent_thread_state.try_acquire(
-            max_threads=self.agent_max_threads,
-        )
-
-    def release_agent_thread(self) -> None:
-        """Release one live-agent slot for a completed spawned helper."""
-        self._agent_thread_state.release()
-
-    def child_tools(self, *, child_depth: int) -> ToolConfig:
-        """Return the tool policy for the child spawned by this tool."""
-        if self._child_tools_factory is not None:
-            return self._child_tools_factory(child_depth)
-        return self.tools
 
 
 class HandoffTool(ToolSpec[DelegatedTaskInput]):

@@ -5,7 +5,6 @@ from typing import Any
 
 from agentlane.models.run import RunContext
 
-from .._lifecycle import AgentToolThreadState
 from .._run import RunState, ShimState
 from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
@@ -118,15 +117,8 @@ class HarnessToolsShim(Shim):
         )
 
 
-def base_harness_tools(
-    *,
-    agent_max_depth: int = 4,
-    agent_max_threads: int = 16,
-    _agent_depth: int = 0,
-    _agent_thread_state: AgentToolThreadState | None = None,
-) -> tuple[HarnessToolDefinition, ...]:
+def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
     """Return currently implemented first-party base harness tools."""
-    agent_thread_state = _agent_thread_state or AgentToolThreadState()
     return (
         read_tool(),
         find_tool(),
@@ -135,12 +127,7 @@ def base_harness_tools(
         write_tool(),
         plan_tool(),
         bash_tool(),
-        agent_tool(
-            agent_max_depth=agent_max_depth,
-            agent_max_threads=agent_max_threads,
-            _agent_depth=_agent_depth,
-            _agent_thread_state=agent_thread_state,
-        ),
+        agent_tool(),
     )
 
 
