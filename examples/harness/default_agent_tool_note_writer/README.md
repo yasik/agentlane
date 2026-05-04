@@ -22,7 +22,6 @@ This is the generic version of `agent-as-tool`:
 tools = Tools(
     tools=[],
     tool_choice="required",
-    tool_call_limits={"agent": 1},
 )
 shims = (HarnessToolsShim((agent_tool(model=model),)),)
 ```

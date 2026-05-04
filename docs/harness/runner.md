@@ -208,6 +208,10 @@ or clears parent tools, and `RESTRICT_TOOLS.only(...)` filters inherited parent
 tools by name before adding child-local tools. Bare `Tools(...)` and `None`
 preserve legacy override behavior.
 
+`agent_max_depth` is inclusive for generic spawned agents. A direct child has
+depth 1, so `Runner(agent_max_depth=4)` allows delegated agents through depth
+4 and rejects the next nested spawn attempt.
+
 ## Handoffs
 
 Handoffs also appear to the model as tool-like choices, but their semantics are

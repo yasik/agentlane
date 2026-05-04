@@ -220,11 +220,11 @@ def test_agent_tool_supports_parallel_spawned_agents() -> None:
     asyncio.run(scenario())
 
 
-def test_agent_tool_rejects_at_depth_limit() -> None:
+def test_agent_tool_allows_child_at_depth_limit() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner(agent_max_depth=1)
-        child_model = SequenceModel([])
+        child_model = SequenceModel([make_assistant_response(content="researched")])
         parent_model = SequenceModel(
             [
                 make_assistant_response(
@@ -253,18 +253,15 @@ def test_agent_tool_rejects_at_depth_limit() -> None:
         result = await agent.run("Research")
 
         assert result.final_output == "Solved locally."
-        assert child_model.calls == []
-        assert parent_model.calls[1][-1]["content"] == (
-            "Agent depth limit reached. Solve the task yourself."
-        )
+        assert len(child_model.calls) == 1
 
     asyncio.run(scenario())
 
 
-def test_agent_tool_tracks_recursive_depth_in_runner() -> None:
+def test_agent_tool_rejects_beyond_recursive_depth_limit() -> None:
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
-        runner = Runner(agent_max_depth=2)
+        runner = Runner(agent_max_depth=1)
         child_model = SequenceModel(
             [
                 make_assistant_response(

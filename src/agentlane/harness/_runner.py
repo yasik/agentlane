@@ -15,10 +15,8 @@ control within one run.
 
 import asyncio
 import json
-from _thread import LockType
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
-from threading import Lock
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
@@ -77,6 +75,7 @@ from ._task import Task
 from ._tooling import InheritTools, RestrictTools
 from .shims import PreparedTurn, Shim
 from .shims._manager import BoundShimManager
+from .tools import HarnessToolsShim, base_harness_tools
 
 _AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
 _AGENT_THREAD_LIMIT_REACHED = "Agent thread limit reached. Solve the task yourself."
@@ -135,19 +134,19 @@ class _AgentDelegationState:
     max_threads: int
     _live_agents: int = 0
     _depth_by_agent: dict[AgentId, int] = field(default_factory=_agent_depth_map)
-    _lock: LockType = field(default_factory=Lock)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    def reserve_child(
+    async def reserve_child(
         self,
         *,
         parent_id: AgentId,
         child_id: AgentId,
     ) -> _AgentDelegationLimit | None:
         """Reserve a live child slot and record its recursive depth."""
-        with self._lock:
+        async with self._lock:
             parent_depth = self._depth_by_agent.get(parent_id, 0)
             child_depth = parent_depth + 1
-            if child_depth >= self.max_depth:
+            if child_depth > self.max_depth:
                 return "depth"
             if self._live_agents >= self.max_threads:
                 return "thread"
@@ -156,9 +155,9 @@ class _AgentDelegationState:
             self._depth_by_agent[child_id] = child_depth
             return None
 
-    def release_child(self, *, child_id: AgentId) -> None:
+    async def release_child(self, *, child_id: AgentId) -> None:
         """Release a child slot after a delegated agent call finishes."""
-        with self._lock:
+        async with self._lock:
             if child_id in self._depth_by_agent:
                 del self._depth_by_agent[child_id]
                 if self._live_agents > 0:
@@ -187,8 +186,9 @@ class Runner:
         Args:
             max_attempts: Total attempts per model call (1 = no retry).
             max_turns: Safety cap on conversation turns per run.
-            agent_max_depth: Process-local recursive depth cap for generic
-                spawned ``agent`` tool calls.
+            agent_max_depth: Inclusive process-local recursive depth cap for
+                generic spawned ``agent`` tool calls. A direct child has depth
+                1.
             agent_max_threads: Process-local live-agent cap for generic
                 spawned ``agent`` tool calls.
             is_retryable: Optional predicate for retry eligibility. Defaults
@@ -969,7 +969,7 @@ class Runner:
     ) -> str:
         """Run one generic spawned helper agent as a subroutine."""
         child_id = delegated_agent_id(agent.id, tool_name, kind="tool")
-        limit = self._agent_delegation.reserve_child(
+        limit = await self._agent_delegation.reserve_child(
             parent_id=agent.id,
             child_id=child_id,
         )
@@ -982,7 +982,6 @@ class Runner:
             runtime = _require_runtime_engine(agent)
             child_descriptor = AgentDescriptor(
                 name=parsed_input.name,
-                description=None,
                 model=tool_definition.model or _require_model(runner_task),
                 instructions=tool_definition.resolved_instructions(),
                 model_args=(
@@ -1009,7 +1008,7 @@ class Runner:
             )
             return delegated_result_text(outcome)
         finally:
-            self._agent_delegation.release_child(child_id=child_id)
+            await self._agent_delegation.release_child(child_id=child_id)
 
     async def _deliver_handoff(
         self,
@@ -1271,8 +1270,6 @@ def _default_agent_child_shims(tool_definition: DefaultAgentTool) -> tuple[Shim,
     """Return shim policy for one generic spawned helper."""
     if not isinstance(tool_definition.tools, (InheritTools, RestrictTools)):
         return ()
-
-    from .tools import HarnessToolsShim, base_harness_tools
 
     return (HarnessToolsShim(base_harness_tools()),)
 
