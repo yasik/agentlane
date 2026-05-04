@@ -1663,8 +1663,7 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
                             tool_id="call_1",
                             name="agent",
                             arguments=(
-                                '{"name":"Refund Exception Research",'
-                                '"description":"Investigate the refund exception policy.",'
+                                '{"name":"Researcher",'
                                 '"task":"Research the refund exception."}'
                             ),
                         )
@@ -1702,11 +1701,20 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
             [
                 _message(
                     "system",
-                    "You are a delegated helper agent working on one focused task for another agent. Delegated helper name: Refund Exception Research. Delegated helper description: Investigate the refund exception policy. Delegated task: Research the refund exception. Complete only that task and return a concise useful result.",
+                    (
+                        "You are a newly spawned agent in a team of agents "
+                        "collaborating to complete a task. You can spawn sub-agents "
+                        "to handle subtasks, and those sub-agents can spawn their own "
+                        "sub-agents. Return the response to your assigned task "
+                        "directly; that response will be delivered back to your parent "
+                        "agent. Treat the next user message as your assigned task, "
+                        "and use any available prior history only as background "
+                        "context."
+                    ),
                 ),
                 _message(
                     "user",
-                    '{"name":"Refund Exception Research","description":"Investigate the refund exception policy.","task":"Research the refund exception."}',
+                    "Research the refund exception.",
                 ),
             ]
         ]

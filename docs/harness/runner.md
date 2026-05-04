@@ -187,6 +187,14 @@ result back into a tool result for the caller's loop.
 Use this pattern when the caller should continue after the delegated work
 returns.
 
+The first-party base `agent` tool is the generic spawned-helper form of this
+pattern. It accepts a one-word logging/tracing `name` plus a complete `task`
+instruction, spawns a fresh helper, and returns that helper's result as tool
+text. Generic spawned helpers do not inherit the parent conversation, parent
+system prompt, or parent custom tools. They receive the standard base tools by
+default and carry internal depth and live-agent limits to prevent runaway
+recursion.
+
 ## Handoffs
 
 Handoffs also appear to the model as tool-like choices, but their semantics are

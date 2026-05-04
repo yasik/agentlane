@@ -9,10 +9,10 @@ from agentlane_openai import ResponsesClient
 
 from agentlane.harness import (
     AgentDescriptor,
-    DefaultAgentTool,
     Runner,
 )
 from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.tools import HarnessToolsShim, agent_tool
 from agentlane.models import Config, Tools
 
 MODEL_NAME = "gpt-5.4-mini"
@@ -38,14 +38,15 @@ async def run_demo() -> None:
             instructions=(
                 "You help portfolio operations teams. "
                 "When the user asks for one focused artifact, call `agent` once. "
-                "Pass a short helper name, an optional description, and a specific task. "
+                "Pass a one-word helper name and a specific task. "
                 "After the helper returns, present the final result clearly."
             ),
             tools=Tools(
-                tools=[DefaultAgentTool(model=model, tools=None)],
+                tools=[],
                 tool_choice="required",
                 tool_call_limits={"agent": 1},
             ),
+            shims=(HarnessToolsShim((agent_tool(model=model),)),),
         ),
     )
 

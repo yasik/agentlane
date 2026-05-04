@@ -74,6 +74,9 @@ from ._task import Task
 from .shims import PreparedTurn
 from .shims._manager import BoundShimManager
 
+_AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
+_AGENT_THREAD_LIMIT_REACHED = "Agent thread limit reached. Solve the task yourself."
+
 
 @runtime_checkable
 class RunnerTask(Protocol):
@@ -903,34 +906,43 @@ class Runner:
         cancellation_token: CancellationToken | None,
     ) -> str:
         """Run one generic spawned helper agent as a subroutine."""
+        child_depth = tool_definition.child_depth()
+        if tool_definition.depth_limit_reached(child_depth=child_depth):
+            return _AGENT_DEPTH_LIMIT_REACHED
         runtime = _require_runtime_engine(agent)
-        child_descriptor = AgentDescriptor(
-            name=parsed_input.name,
-            description=parsed_input.description,
-            model=tool_definition.model or _require_model(runner_task),
-            instructions=tool_definition.resolved_instructions(parsed_input),
-            model_args=(
-                dict(tool_definition.model_args)
-                if tool_definition.model_args is not None
-                else _model_args(runner_task)
-            ),
-            schema=tool_definition.output_schema,
-            tools=tool_definition.tools,
-        )
-        runtime.register_factory(
-            delegated_agent_type(agent.id, tool_name, kind="tool"),
-            type(agent).create_factory(
-                runner=self,
-                descriptor=child_descriptor,
-                parent_tools=_base_tools(runner_task),
-            ),
-        )
-        outcome = await agent.send_message(
-            _agent_tool_run_input(parsed_input),
-            recipient=delegated_agent_id(agent.id, tool_name, kind="tool"),
-            cancellation_token=cancellation_token,
-        )
-        return delegated_result_text(outcome)
+        if not tool_definition.try_acquire_agent_thread():
+            return _AGENT_THREAD_LIMIT_REACHED
+
+        try:
+            child_descriptor = AgentDescriptor(
+                name=parsed_input.name,
+                description=None,
+                model=tool_definition.model or _require_model(runner_task),
+                instructions=tool_definition.resolved_instructions(),
+                model_args=(
+                    dict(tool_definition.model_args)
+                    if tool_definition.model_args is not None
+                    else _model_args(runner_task)
+                ),
+                schema=tool_definition.output_schema,
+                tools=tool_definition.child_tools(child_depth=child_depth),
+            )
+            runtime.register_factory(
+                delegated_agent_type(agent.id, tool_name, kind="tool"),
+                type(agent).create_factory(
+                    runner=self,
+                    descriptor=child_descriptor,
+                    parent_tools=None,
+                ),
+            )
+            outcome = await agent.send_message(
+                _default_agent_tool_run_input(parsed_input),
+                recipient=delegated_agent_id(agent.id, tool_name, kind="tool"),
+                cancellation_token=cancellation_token,
+            )
+            return delegated_result_text(outcome)
+        finally:
+            tool_definition.release_agent_thread()
 
     async def _deliver_handoff(
         self,
@@ -1157,9 +1169,8 @@ def _parse_default_agent_tool_input(
 ) -> DefaultAgentToolInput:
     """Validate one generic spawned-agent tool call.
 
-    This follows the same path as predefined agent tools: parse the model's
-    tool-call arguments into the declared Pydantic schema, then pass that
-    structured payload downstream.
+    This validates the model's generic spawned-agent arguments before the
+    runner turns the task into the child agent's input.
     """
     parsed_input = _parse_delegated_tool_args(
         tool_call=tool_call,
@@ -1180,6 +1191,13 @@ def _agent_tool_run_input(parsed_input: BaseModel) -> list[RunHistoryItem]:
     generic spawned helper agents aligned with normal tool-call mechanics.
     """
     return [parsed_input]
+
+
+def _default_agent_tool_run_input(
+    parsed_input: DefaultAgentToolInput,
+) -> list[RunHistoryItem]:
+    """Build the downstream run input for a generic spawned-agent call."""
+    return [parsed_input.task]
 
 
 def _tool_result_message(

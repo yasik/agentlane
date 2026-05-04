@@ -5,9 +5,11 @@ from typing import Any
 
 from agentlane.models.run import RunContext
 
+from .._lifecycle import AgentToolThreadState
 from .._run import RunState, ShimState
 from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
+from ._agent import agent_tool
 from ._bash import bash_tool
 from ._find import find_tool
 from ._grep import grep_tool
@@ -48,8 +50,8 @@ class _BoundHarnessToolsShim(BoundShim):
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         self._current_run_state = turn.run_state
-        executable_tools = tuple(definition.tool for definition in self._definitions)
-        turn.tools = merge_tools(turn.tools, executable_tools)
+        tool_specs = tuple(definition.tool for definition in self._definitions)
+        turn.tools = merge_tools(turn.tools, tool_specs)
 
         if self._prompt_block is None:
             return
@@ -116,8 +118,15 @@ class HarnessToolsShim(Shim):
         )
 
 
-def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
+def base_harness_tools(
+    *,
+    agent_max_depth: int = 4,
+    agent_max_threads: int = 16,
+    _agent_depth: int = 0,
+    _agent_thread_state: AgentToolThreadState | None = None,
+) -> tuple[HarnessToolDefinition, ...]:
     """Return currently implemented first-party base harness tools."""
+    agent_thread_state = _agent_thread_state or AgentToolThreadState()
     return (
         read_tool(),
         find_tool(),
@@ -126,6 +135,12 @@ def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
         write_tool(),
         plan_tool(),
         bash_tool(),
+        agent_tool(
+            agent_max_depth=agent_max_depth,
+            agent_max_threads=agent_max_threads,
+            _agent_depth=_agent_depth,
+            _agent_thread_state=agent_thread_state,
+        ),
     )
 
 

@@ -6,12 +6,11 @@ scenario.
 The model sees one normal tool named `agent` with this schema:
 
 1. `name`
-2. `description` optional
-3. `task` optional
+2. `task`
 
 When the model calls that tool, the runner validates those arguments into a
 Pydantic model, creates a fresh child agent descriptor from that payload, and
-sends the same structured payload to the child agent as its input.
+sends the task to the child agent as its input.
 
 ## Why This Example Exists
 
@@ -19,14 +18,15 @@ This is the generic version of `agent-as-tool`:
 
 ```python
 tools = Tools(
-    tools=[DefaultAgentTool(model=model)],
+    tools=[],
     tool_choice="required",
     tool_call_limits={"agent": 1},
 )
+shims = (HarnessToolsShim((agent_tool(model=model),)),)
 ```
 
 The manager does not predefine a specific child specialist. Instead, the model
-chooses the helper `name`, optional `description`, and the concrete `task`.
+chooses the helper `name` and the concrete `task`.
 
 ## Run
 
