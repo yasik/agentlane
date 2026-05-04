@@ -74,6 +74,7 @@ from ._run import (
 )
 from ._stream import RunStream
 from ._task import Task
+from ._tooling import InheritTools, RestrictTools
 from .shims import PreparedTurn, Shim
 from .shims._manager import BoundShimManager
 
@@ -998,7 +999,7 @@ class Runner:
                 type(agent).create_factory(
                     runner=self,
                     descriptor=child_descriptor,
-                    parent_tools=None,
+                    parent_tools=_base_tools(runner_task),
                 ),
             )
             outcome = await agent.send_message(
@@ -1268,7 +1269,7 @@ def _default_agent_tool_run_input(
 
 def _default_agent_child_shims(tool_definition: DefaultAgentTool) -> tuple[Shim, ...]:
     """Return shim policy for one generic spawned helper."""
-    if tool_definition.tools is not None:
+    if not isinstance(tool_definition.tools, (InheritTools, RestrictTools)):
         return ()
 
     from .tools import HarnessToolsShim, base_harness_tools

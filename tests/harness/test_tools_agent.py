@@ -67,7 +67,7 @@ def test_runner_rejects_invalid_agent_limits() -> None:
         Runner(agent_max_threads=0)
 
 
-def test_agent_tool_executes_through_harness_tools_shim_without_parent_context() -> (
+def test_agent_tool_executes_through_harness_tools_shim_with_inherited_parent_tools() -> (
     None
 ):
     async def scenario() -> None:
@@ -123,7 +123,50 @@ def test_agent_tool_executes_through_harness_tools_shim_without_parent_context()
         child_tool_names = [tool.name for tool in child_tools.normalized_tools]
         assert "agent" in child_tool_names
         assert "read" in child_tool_names
-        assert "custom" not in child_tool_names
+        assert "custom" in child_tool_names
+
+    asyncio.run(scenario())
+
+
+def test_agent_tool_can_override_child_tools_to_none() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        child_model = SequenceModel([make_assistant_response(content="child answer")])
+        parent_model = SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="call_1",
+                            name="agent",
+                            arguments='{"name":"Blank","task":"Work without tools."}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ]
+        )
+        agent = DefaultAgent(
+            runtime=runtime,
+            runner=runner,
+            descriptor=AgentDescriptor(
+                name="Manager",
+                model=parent_model,
+                tools=Tools(
+                    tools=[
+                        DefaultAgentTool(model=child_model, tools=None),
+                        echo_tool("custom"),
+                    ]
+                ),
+            ),
+        )
+
+        result = await agent.run("Delegate without child tools")
+
+        assert result.final_output == "done"
+        assert child_model.call_tools == [None]
 
     asyncio.run(scenario())
 

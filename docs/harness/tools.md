@@ -24,6 +24,7 @@ down to the lower-level harness agent or runtime APIs.
 ## Import Path
 
 ```python
+from agentlane.harness import INHERIT_TOOLS, OVERRIDE_TOOLS, RESTRICT_TOOLS
 from agentlane.harness.tools import (
     HarnessToolsShim,
     agent_tool,
@@ -182,11 +183,23 @@ Example tool call:
 
 `agent` is agent-as-tool, not handoff. The caller waits for the helper result
 and then continues its own loop. The spawned helper treats the explicit `task`
-as its assigned work, not the generated `name`. Generic spawned helpers receive
-the standard base-tools set by default, not the parent's custom tools. Those
-default tools are attached through `HarnessToolsShim`, so the child uses the
-same tool-schema and tool-guidance prompt path as any other agent configured
-with the base tools shim.
+as its assigned work, not the generated `name`. Generic spawned helpers do not
+inherit the parent's system prompt or conversation history. They do inherit the
+parent's direct tool configuration by default, and they also receive the
+standard base-tools set through `HarnessToolsShim`. The inherited tools and
+base tools are merged by tool name so duplicate definitions are exposed only
+once.
+
+Tool inheritance is controlled by the same `ToolConfig` policy used by
+`AgentDescriptor.tools`:
+
+1. `INHERIT_TOOLS` inherits parent tools and merges child-local additions.
+2. `OVERRIDE_TOOLS` ignores parent tools; with no explicit tools it exposes no
+   direct tools.
+3. `RESTRICT_TOOLS.only(...)` filters inherited parent tools by name and then
+   merges child-local additions.
+4. Bare `Tools(...)` and `None` are compatibility shorthands for override
+   behavior.
 
 `agent` supports parallel calls when the parent `Tools` configuration enables
 `parallel_tool_calls`. Recursive spawning is bounded by process-local

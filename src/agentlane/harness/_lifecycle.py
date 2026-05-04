@@ -123,8 +123,8 @@ class AgentDescriptor:
     tools: ToolConfig = INHERIT_TOOLS
     """Tool visibility policy for this agent.
 
-    When omitted, a future child agent may inherit tools from its parent.
-    ``None`` means "expose no tools explicitly".
+    When omitted, a child agent inherits tools from its parent. ``None`` is a
+    compatibility shorthand for exposing no direct tools.
     """
 
     shims: Sequence[Shim] | None = None
@@ -202,7 +202,7 @@ class DefaultAgentTool(ToolSpec[DefaultAgentToolInput]):
         model: Model[ModelResponse] | None = None,
         model_args: dict[str, Any] | None = None,
         output_schema: type[BaseModel] | OutputSchema[Any] | None = None,
-        tools: ToolConfig = None,
+        tools: ToolConfig = INHERIT_TOOLS,
     ) -> None:
         super().__init__(
             name=name,
