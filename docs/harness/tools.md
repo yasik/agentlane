@@ -204,8 +204,9 @@ Tool inheritance is controlled by the same `ToolConfig` policy used by
 `agent` supports parallel calls when the parent `Tools` configuration enables
 `parallel_tool_calls`. Recursive spawning is bounded by process-local
 `Runner` safety limits: `Runner(agent_max_depth=4, agent_max_threads=16)`.
-These limits are execution policy, not part of the tool schema. When the depth
-limit is reached, the tool result is:
+`agent_max_depth` is inclusive: a direct child is depth 1, and the default
+allows spawned agents through depth 4. These limits are execution policy, not
+part of the tool schema. When the depth limit is reached, the tool result is:
 
 ```text
 Agent depth limit reached. Solve the task yourself.

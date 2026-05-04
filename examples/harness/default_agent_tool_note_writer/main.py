@@ -44,7 +44,6 @@ async def run_demo() -> None:
             tools=Tools(
                 tools=[],
                 tool_choice="required",
-                tool_call_limits={"agent": 1},
             ),
             shims=(HarnessToolsShim((agent_tool(model=model),)),),
         ),
