@@ -4,15 +4,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from agentlane.models import Tool
+from agentlane.models import ToolSpec
 
 
 @dataclass(frozen=True, slots=True)
 class HarnessToolDefinition:
-    """Executable tool plus optional prompt metadata for harness integration."""
+    """Tool schema plus optional prompt metadata for harness integration."""
 
-    tool: Tool[Any, str]
-    """Executable native tool exposed to the model."""
+    tool: ToolSpec[Any]
+    """Tool schema exposed to the model.
+
+    Most first-party harness tools are executable native `Tool` values. Some,
+    such as `agent`, are declarative `ToolSpec` values executed by the harness
+    runner.
+    """
 
     prompt_snippet: str | None = None
     """Optional one-line summary rendered under `Available tools:`."""

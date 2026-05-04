@@ -1,6 +1,7 @@
 import asyncio
 import os
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -38,9 +39,13 @@ def run_state(*, turn_count: int = 1) -> RunState:
 
 
 def run_tool(definition: HarnessToolDefinition, **arguments: object) -> str:
-    args_model = definition.tool.args_type()
+    tool_spec = definition.tool
+    if not hasattr(tool_spec, "run"):
+        raise TypeError("Harness tool definition is not executable.")
+    tool = cast(Tool[BaseModel, str], tool_spec)
+    args_model = tool.args_type()
     return asyncio.run(
-        definition.tool.run(
+        tool.run(
             args_model(**arguments),
             CancellationToken(),
         )

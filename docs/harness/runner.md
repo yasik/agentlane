@@ -15,6 +15,12 @@ that lets delegation appear to the model as part of the same tool surface. If
 shims are configured, the runner also consumes the prepared turn they build for
 each model call.
 
+`Runner` does not persist conversation state. It does own process-local
+execution guards such as retry limits, max turns, and generic spawned-agent
+depth/thread limits. Those spawned-agent limits apply inside the current runner
+process; distributed runtimes need their own coordinator-level limits if work
+crosses a process boundary.
+
 The runner is used both by:
 
 1. the runtime-facing `agentlane.harness.Agent`
@@ -186,6 +192,21 @@ result back into a tool result for the caller's loop.
 
 Use this pattern when the caller should continue after the delegated work
 returns.
+
+The first-party base `agent` tool is the generic spawned-helper form of this
+pattern. It accepts a one-word logging/tracing `name` plus a complete `task`
+instruction, spawns a fresh helper, and returns that helper's result as tool
+text. Generic spawned helpers do not inherit the parent conversation or parent
+system prompt. They inherit parent direct tools by default, then receive the
+standard base tools through `HarnessToolsShim`, so tool guidance is appended
+through the same prepared-turn path used by parent agents. The `Runner` carries
+process-local depth and live-agent limits to prevent runaway recursion.
+
+The runner resolves child-visible direct tools with `ToolConfig`.
+`INHERIT_TOOLS` merges parent and child-local tools, `OVERRIDE_TOOLS` replaces
+or clears parent tools, and `RESTRICT_TOOLS.only(...)` filters inherited parent
+tools by name before adding child-local tools. Bare `Tools(...)` and `None`
+preserve legacy override behavior.
 
 ## Handoffs
 

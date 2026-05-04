@@ -71,6 +71,15 @@ through `Agent.as_tool(...)` or `AgentDescriptor.as_tool(...)`, the model sees a
 tool schema, but the framework still executes that tool call by routing work to
 another agent run.
 
+The base `agent` tool is the generic spawned-helper version of agent-as-tool.
+It lets the model create a fresh helper for a delegated task without inheriting
+the parent conversation or parent system prompt. The helper name is used for
+logging and tracing; the task text is the instruction the helper receives.
+Default spawned helpers inherit parent direct tools, then get the standard base
+tools through `HarnessToolsShim`, so their tool guidance is appended through
+the normal prepared-turn system context path. `ToolConfig` can override that
+default inheritance or restrict inherited parent tools by name.
+
 ## Concurrency Per Agent
 
 The harness preserves the runtime rule that a single concrete `AgentId` is not

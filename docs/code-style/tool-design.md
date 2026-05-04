@@ -5,9 +5,11 @@ Use this page when adding or changing first-party tools, especially tools under
 
 ## Tool surfaces
 
-- Build tools on the existing `agentlane.models.Tool` primitive.
-- Harness base tools should expose a `HarnessToolDefinition`, which wraps the
-  executable `Tool` plus prompt metadata for `HarnessToolsShim`.
+- Build executable tools on the existing `agentlane.models.Tool` primitive.
+- Harness base tools should expose a `HarnessToolDefinition`, which wraps a
+  `ToolSpec` plus prompt metadata for `HarnessToolsShim`. Use executable
+  `Tool` values for local function tools, and declarative `ToolSpec` values
+  only when the harness runner owns execution.
 - Export public helpers from `agentlane.harness.tools`. Keep implementation
   modules internal and underscore-prefixed.
 - Keep construction-time configuration on the helper function. Example:

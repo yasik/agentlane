@@ -28,6 +28,7 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
         "write",
         "write_plan",
         "bash",
+        "agent",
     ]
 
 

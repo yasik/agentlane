@@ -2,8 +2,10 @@
 
 `agentlane.harness.tools` provides first-party harness tool definitions for
 common local workspace actions. Each helper returns a `HarnessToolDefinition`,
-which wraps an executable `agentlane.models.Tool` plus optional prompt metadata
-for `HarnessToolsShim`.
+which wraps an `agentlane.models.ToolSpec` plus optional prompt metadata for
+`HarnessToolsShim`. Most definitions are executable `agentlane.models.Tool`
+values. The `agent` definition is declarative and is executed by the harness
+runner.
 
 These tools are opinionated defaults for agent loops. They use stable argument
 names, deterministic text results, visible truncation messages, `.gitignore`
@@ -22,8 +24,10 @@ down to the lower-level harness agent or runtime APIs.
 ## Import Path
 
 ```python
+from agentlane.harness import INHERIT_TOOLS, OVERRIDE_TOOLS, RESTRICT_TOOLS
 from agentlane.harness.tools import (
     HarnessToolsShim,
+    agent_tool,
     base_harness_tools,
     bash_tool,
     find_tool,
@@ -45,12 +49,12 @@ tool = definition.tool
 ```
 
 Use the definition when you want prompt snippets and guidelines to be rendered
-by `HarnessToolsShim`. Use `definition.tool` when you only need the executable
-`Tool` value.
+by `HarnessToolsShim`. Use `definition.tool` when you need the underlying model
+tool schema.
 
 The current standard set is `read`, `find`, `grep`, `patch`, `write`,
-`write_plan`, and `bash`. The public base-tools set currently does not include
-`ls`.
+`write_plan`, `bash`, and `agent`. The public base-tools set currently does not
+include `ls`.
 
 `base_harness_tools()` returns the standard set with each filesystem tool
 capturing `Path.cwd()` at construction time. Prefer explicit per-tool
@@ -65,18 +69,20 @@ workspace_tools = (
     write_tool(cwd=WORKSPACE),
     plan_tool(),
     bash_tool(cwd=WORKSPACE),
+    agent_tool(),
 )
 ```
 
 ## HarnessToolsShim
 
-`HarnessToolsShim` merges executable tools into each prepared turn and appends
-the definitions' prompt metadata to the first turn's system instructions:
+`HarnessToolsShim` merges tool schemas into each prepared turn and appends the
+definitions' prompt metadata to the first turn's system instructions:
 
 ```python
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.tools import (
     HarnessToolsShim,
+    agent_tool,
     find_tool,
     grep_tool,
     patch_tool,
@@ -110,6 +116,7 @@ descriptor = AgentDescriptor(
                 patch_tool(cwd=WORKSPACE),
                 write_tool(cwd=WORKSPACE),
                 bash_tool(cwd=WORKSPACE),
+                agent_tool(),
             )
         ),
     ),
@@ -151,6 +158,64 @@ most recent 2000 combined stdout/stderr lines or 51200 bytes.
 Caller-provided limits are applied before the global caps. For large files, call
 `read` repeatedly with `offset` and `limit`. For large search results, narrow
 the `find` pattern or search path.
+
+## agent
+
+`agent_tool()` exposes an `agent` tool for generic spawned helpers.
+
+Parameters:
+
+1. `name: str`
+2. `task: str`
+
+`name` must be one word. It can be task-relevant or random, and is used only
+for logging and tracing. `task` is the full instruction for the helper,
+including the context it needs and the expected output.
+
+Example tool call:
+
+```json
+{
+  "name": "Researcher",
+  "task": "Review the refund exception policy and return the two most relevant constraints."
+}
+```
+
+`agent` is agent-as-tool, not handoff. The caller waits for the helper result
+and then continues its own loop. The spawned helper treats the explicit `task`
+as its assigned work, not the generated `name`. Generic spawned helpers do not
+inherit the parent's system prompt or conversation history. They do inherit the
+parent's direct tool configuration by default, and they also receive the
+standard base-tools set through `HarnessToolsShim`. The inherited tools and
+base tools are merged by tool name so duplicate definitions are exposed only
+once.
+
+Tool inheritance is controlled by the same `ToolConfig` policy used by
+`AgentDescriptor.tools`:
+
+1. `INHERIT_TOOLS` inherits parent tools and merges child-local additions.
+2. `OVERRIDE_TOOLS` ignores parent tools; with no explicit tools it exposes no
+   direct tools.
+3. `RESTRICT_TOOLS.only(...)` filters inherited parent tools by name and then
+   merges child-local additions.
+4. Bare `Tools(...)` and `None` are compatibility shorthands for override
+   behavior.
+
+`agent` supports parallel calls when the parent `Tools` configuration enables
+`parallel_tool_calls`. Recursive spawning is bounded by process-local
+`Runner` safety limits: `Runner(agent_max_depth=4, agent_max_threads=16)`.
+These limits are execution policy, not part of the tool schema. When the depth
+limit is reached, the tool result is:
+
+```text
+Agent depth limit reached. Solve the task yourself.
+```
+
+When the live-agent thread limit is reached, the tool result is:
+
+```text
+Agent thread limit reached. Solve the task yourself.
+```
 
 ## read
 

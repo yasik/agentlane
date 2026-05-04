@@ -5,10 +5,15 @@ import pytest
 from pydantic import BaseModel
 
 from agentlane.harness import (
+    INHERIT_TOOLS,
+    OVERRIDE_TOOLS,
+    RESTRICT_TOOLS,
     Agent,
     AgentDescriptor,
     DefaultAgentTool,
     DefaultHandoff,
+    OverrideTools,
+    RestrictTools,
     Runner,
     RunnerHooks,
     RunResult,
@@ -17,9 +22,12 @@ from agentlane.harness import (
     Task,
 )
 from agentlane.harness._handoff import (
+    default_agent_tool_instructions,
     delegated_result_text,
     normalize_delegation_tool_name,
 )
+from agentlane.harness.tools import base_harness_tools
+from agentlane.harness.tools._shim import render_harness_tools_prompt
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import (
     MessageDict,
@@ -34,6 +42,7 @@ from agentlane.models import (
     Tool,
     ToolCall,
     Tools,
+    ToolSpec,
     get_content_or_none,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
@@ -45,6 +54,13 @@ def _message(role: str, content: object) -> MessageDict:
         "role": role,
         "content": content,
     }
+
+
+def _expected_default_child_system_prompt() -> str:
+    prompt = render_harness_tools_prompt(definitions=base_harness_tools())
+    if prompt is None:
+        raise AssertionError("Base harness tools unexpectedly rendered no prompt.")
+    return f"{default_agent_tool_instructions()}\n\n{prompt}"
 
 
 def _copy_messages(messages: list[MessageDict]) -> list[MessageDict]:
@@ -361,6 +377,26 @@ def _make_tool_call(
             },
         }
     )
+
+
+class _EmptyToolArgs(BaseModel):
+    """Arguments model for declarative test-only tools."""
+
+
+def _named_tool(name: str) -> ToolSpec[Any]:
+    """Return a test-only tool schema with the provided name."""
+    return ToolSpec(
+        name=name,
+        description=f"{name} test tool.",
+        args_model=_EmptyToolArgs,
+    )
+
+
+def _tool_names(tools: Tools | None) -> list[str]:
+    """Return the names of one resolved test tool set."""
+    if tools is None:
+        return []
+    return [tool.name for tool in tools.normalized_tools]
 
 
 def test_runner_returns_run_result_and_updates_run_state() -> None:
@@ -1145,7 +1181,7 @@ def test_runner_disables_tools_after_max_round_trips() -> None:
 def test_agent_tool_resolution_supports_inherit_override_and_disable() -> None:
     runtime = SingleThreadedRuntimeEngine()
     runner = Runner()
-    parent_tools = Tools(tools=[])
+    parent_tools = Tools(tools=[_named_tool("parent")])
 
     inherited = Agent(
         runtime,
@@ -1153,13 +1189,31 @@ def test_agent_tool_resolution_supports_inherit_override_and_disable() -> None:
         descriptor=AgentDescriptor(name="Inherited"),
         parent_tools=parent_tools,
     )
-    overridden_tools = Tools(tools=[])
+    inherited_with_additions = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(
+            name="InheritedWithAdditions",
+            tools=INHERIT_TOOLS.with_tools(Tools(tools=[_named_tool("child")])),
+        ),
+        parent_tools=parent_tools,
+    )
+    overridden_tools = Tools(tools=[_named_tool("override")])
     overridden = Agent(
         runtime,
         runner,
         descriptor=AgentDescriptor(
             name="Overridden",
             tools=overridden_tools,
+        ),
+        parent_tools=parent_tools,
+    )
+    override_policy = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(
+            name="OverridePolicy",
+            tools=OVERRIDE_TOOLS.with_tools(overridden_tools),
         ),
         parent_tools=parent_tools,
     )
@@ -1172,10 +1226,66 @@ def test_agent_tool_resolution_supports_inherit_override_and_disable() -> None:
         ),
         parent_tools=parent_tools,
     )
+    override_disabled = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(
+            name="OverrideDisabled",
+            tools=OverrideTools(),
+        ),
+        parent_tools=parent_tools,
+    )
 
     assert inherited.tools is parent_tools
+    assert _tool_names(inherited_with_additions.tools) == ["parent", "child"]
     assert overridden.tools is overridden_tools
+    assert override_policy.tools is overridden_tools
     assert disabled.tools is None
+    assert override_disabled.tools is None
+
+
+def test_agent_tool_resolution_supports_restrict_and_add() -> None:
+    runtime = SingleThreadedRuntimeEngine()
+    runner = Runner()
+    parent_tools = Tools(
+        tools=[
+            _named_tool("first"),
+            _named_tool("second"),
+            _named_tool("third"),
+        ],
+        parallel_tool_calls=True,
+    )
+
+    restricted = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(
+            name="Restricted",
+            tools=RESTRICT_TOOLS.only("second", "missing").with_tools(
+                Tools(tools=[_named_tool("child")])
+            ),
+        ),
+        parent_tools=parent_tools,
+    )
+    restricted_class = Agent(
+        runtime,
+        runner,
+        descriptor=AgentDescriptor(
+            name="RestrictedClass",
+            tools=RestrictTools(
+                frozenset({"third"}),
+                tools=Tools(tools=[_named_tool("child")]),
+            ),
+        ),
+        parent_tools=parent_tools,
+    )
+
+    restricted_tools = cast(Tools, restricted.tools)
+    restricted_class_tools = cast(Tools, restricted_class.tools)
+
+    assert _tool_names(restricted_tools) == ["second", "child"]
+    assert restricted_tools.parallel_tool_calls is True
+    assert _tool_names(restricted_class_tools) == ["third", "child"]
 
 
 def test_agent_exposes_predefined_handoffs_as_declarative_tools() -> None:
@@ -1663,8 +1773,7 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
                             tool_id="call_1",
                             name="agent",
                             arguments=(
-                                '{"name":"Refund Exception Research",'
-                                '"description":"Investigate the refund exception policy.",'
+                                '{"name":"Researcher",'
                                 '"task":"Research the refund exception."}'
                             ),
                         )
@@ -1702,11 +1811,11 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
             [
                 _message(
                     "system",
-                    "You are a delegated helper agent working on one focused task for another agent. Delegated helper name: Refund Exception Research. Delegated helper description: Investigate the refund exception policy. Delegated task: Research the refund exception. Complete only that task and return a concise useful result.",
+                    _expected_default_child_system_prompt(),
                 ),
                 _message(
                     "user",
-                    '{"name":"Refund Exception Research","description":"Investigate the refund exception policy.","task":"Research the refund exception."}',
+                    "Research the refund exception.",
                 ),
             ]
         ]

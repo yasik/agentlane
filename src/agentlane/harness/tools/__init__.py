@@ -1,5 +1,6 @@
 """First-party harness tool definitions and integration helpers."""
 
+from ._agent import agent_tool
 from ._bash import BashPolicy, BashPolicyDecision, bash_tool
 from ._bash_executor import (
     BashExecutionRequest,
@@ -53,6 +54,7 @@ __all__ = [
     "TEXT_MAX_LINES",
     "ToolPathResolver",
     "TruncatedOutput",
+    "agent_tool",
     "base_harness_tools",
     "bash_tool",
     "find_tool",

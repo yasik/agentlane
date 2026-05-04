@@ -16,7 +16,7 @@ harness directly.
 9. [patient_care_conversation](./patient_care_conversation/): real OpenAI-backed multi-turn patient-care conversation with templated instructions and `RunState` resume.
 10. [tool_calling_search_answer](./tool_calling_search_answer/): real OpenAI-backed clinical protocol demo showing the runner-owned tool loop with one mocked search result.
 11. [agent_as_tool_risk_specialist](./agent_as_tool_risk_specialist/): predefined agent-as-tool demo where a manager delegates a portfolio risk question to a child risk specialist and then resumes.
-12. [default_agent_tool_note_writer](./default_agent_tool_note_writer/): generic `agent` tool demo where the model chooses a finance helper name, optional description, and a focused task.
+12. [default_agent_tool_note_writer](./default_agent_tool_note_writer/): generic `agent` tool demo where the model chooses a finance helper name and focused task.
 13. [handoff_to_clinical_escalation](./handoff_to_clinical_escalation/): predefined first-class handoff demo where patient triage transfers the conversation to a nurse triage specialist.
 14. [default_handoff_takeover](./default_handoff_takeover/): generic `handoff` demo where patient triage transfers the conversation to a fresh specialist created from `DefaultHandoff(...)`.
 

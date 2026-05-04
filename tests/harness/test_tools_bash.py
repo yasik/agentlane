@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
@@ -18,6 +19,7 @@ from agentlane.harness.tools import (
     BashExecutionRequest,
     BashExecutionResult,
     BashPolicyDecision,
+    HarnessToolDefinition,
     HarnessToolsShim,
     bash_tool,
 )
@@ -26,6 +28,7 @@ from agentlane.models import (
     MessageDict,
     Model,
     ModelResponse,
+    Tool,
     ToolCall,
     ToolExecutor,
     Tools,
@@ -54,13 +57,21 @@ def _run_bash(
 ) -> str:
     async def scenario() -> str:
         definition = bash_tool(cwd=cwd)
-        args_model = definition.tool.args_type()
+        tool = _executable_tool(definition)
+        args_model = tool.args_type()
         kwargs: dict[str, Any] = {"command": command}
         if timeout is not None:
             kwargs["timeout"] = timeout
-        return await definition.tool.run(args_model(**kwargs), CancellationToken())
+        return await tool.run(args_model(**kwargs), CancellationToken())
 
     return asyncio.run(scenario())
+
+
+def _executable_tool(definition: HarnessToolDefinition) -> Tool[BaseModel, str]:
+    tool_spec = definition.tool
+    if not hasattr(tool_spec, "run"):
+        raise TypeError("Harness tool definition is not executable.")
+    return cast(Tool[BaseModel, str], tool_spec)
 
 
 def _make_tool_call(*, tool_id: str, name: str, arguments: str) -> ToolCall:
@@ -177,18 +188,15 @@ def test_bash_tool_rejects_invalid_default_timeout() -> None:
 
 def test_bash_tool_rejects_invalid_command_arguments(tmp_path: Path) -> None:
     definition = bash_tool(cwd=tmp_path)
-    args_model = definition.tool.args_type()
+    tool = _executable_tool(definition)
+    args_model = tool.args_type()
 
     assert (
-        asyncio.run(definition.tool.run(args_model(command=""), CancellationToken()))
+        asyncio.run(tool.run(args_model(command=""), CancellationToken()))
         == "command must not be empty"
     )
     assert (
-        asyncio.run(
-            definition.tool.run(
-                args_model(command="pwd", timeout=0), CancellationToken()
-            )
-        )
+        asyncio.run(tool.run(args_model(command="pwd", timeout=0), CancellationToken()))
         == "timeout must be greater than zero"
     )
 
@@ -197,8 +205,9 @@ def test_bash_tool_adapter_passes_request_to_executor(tmp_path: Path) -> None:
     async def scenario() -> tuple[str, list[BashExecutionRequest]]:
         executor = _FakeBashExecutor()
         definition = bash_tool(cwd=tmp_path, executor=executor)
-        args_model = definition.tool.args_type()
-        output = await definition.tool.run(
+        tool = _executable_tool(definition)
+        args_model = tool.args_type()
+        output = await tool.run(
             args_model(command="pwd", timeout=3),
             CancellationToken(),
         )
@@ -223,8 +232,9 @@ def test_bash_tool_policy_can_deny_before_executor_runs(tmp_path: Path) -> None:
             executor=executor,
             policy=_DenyBashPolicy(),
         )
-        args_model = definition.tool.args_type()
-        output = await definition.tool.run(
+        tool = _executable_tool(definition)
+        args_model = tool.args_type()
+        output = await tool.run(
             args_model(command="pwd"),
             CancellationToken(),
         )
@@ -289,11 +299,10 @@ def test_bash_tool_honors_per_call_timeout(tmp_path: Path) -> None:
 def test_bash_tool_honors_cancellation_token(tmp_path: Path) -> None:
     async def scenario() -> str:
         definition = bash_tool(cwd=tmp_path)
-        args_model = definition.tool.args_type()
+        tool = _executable_tool(definition)
+        args_model = tool.args_type()
         token = CancellationToken()
-        task = asyncio.create_task(
-            definition.tool.run(args_model(command="sleep 5"), token)
-        )
+        task = asyncio.create_task(tool.run(args_model(command="sleep 5"), token))
 
         await asyncio.sleep(0.1)
         token.cancel()
@@ -331,10 +340,11 @@ def test_bash_tool_does_not_execute_when_token_already_cancelled(
     async def scenario() -> str:
         marker = tmp_path / "should-not-exist"
         definition = bash_tool(cwd=tmp_path)
-        args_model = definition.tool.args_type()
+        tool = _executable_tool(definition)
+        args_model = tool.args_type()
         token = CancellationToken()
         token.cancel()
-        output = await definition.tool.run(
+        output = await tool.run(
             args_model(command=f"touch {marker}"),
             token,
         )

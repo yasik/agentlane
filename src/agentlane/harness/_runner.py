@@ -1,4 +1,4 @@
-"""Default stateless runner for the harness agent loop.
+"""Default runner for the harness agent loop.
 
 The runner owns the generic loop for one agent run:
 
@@ -15,12 +15,15 @@ control within one run.
 
 import asyncio
 import json
+from _thread import LockType
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, is_dataclass, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
+from threading import Lock
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
 
+from agentlane.messaging import AgentId
 from agentlane.models import (
     MessageDict,
     Model,
@@ -71,8 +74,13 @@ from ._run import (
 )
 from ._stream import RunStream
 from ._task import Task
-from .shims import PreparedTurn
+from ._tooling import InheritTools, RestrictTools
+from .shims import PreparedTurn, Shim
 from .shims._manager import BoundShimManager
+
+_AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
+_AGENT_THREAD_LIMIT_REACHED = "Agent thread limit reached. Solve the task yourself."
+type _AgentDelegationLimit = Literal["depth", "thread"]
 
 
 @runtime_checkable
@@ -114,12 +122,55 @@ class _StreamRunnableAgent(Protocol):
     ) -> RunStream: ...
 
 
+def _agent_depth_map() -> dict[AgentId, int]:
+    """Return a fresh spawned-agent depth map."""
+    return {}
+
+
+@dataclass(slots=True)
+class _AgentDelegationState:
+    """Process-local guard state for generic spawned agent calls."""
+
+    max_depth: int
+    max_threads: int
+    _live_agents: int = 0
+    _depth_by_agent: dict[AgentId, int] = field(default_factory=_agent_depth_map)
+    _lock: LockType = field(default_factory=Lock)
+
+    def reserve_child(
+        self,
+        *,
+        parent_id: AgentId,
+        child_id: AgentId,
+    ) -> _AgentDelegationLimit | None:
+        """Reserve a live child slot and record its recursive depth."""
+        with self._lock:
+            parent_depth = self._depth_by_agent.get(parent_id, 0)
+            child_depth = parent_depth + 1
+            if child_depth >= self.max_depth:
+                return "depth"
+            if self._live_agents >= self.max_threads:
+                return "thread"
+
+            self._live_agents += 1
+            self._depth_by_agent[child_id] = child_depth
+            return None
+
+    def release_child(self, *, child_id: AgentId) -> None:
+        """Release a child slot after a delegated agent call finishes."""
+        with self._lock:
+            if child_id in self._depth_by_agent:
+                del self._depth_by_agent[child_id]
+                if self._live_agents > 0:
+                    self._live_agents -= 1
+
+
 class Runner:
-    """Stateless default runner for harness agents.
+    """Default runner for harness agents.
 
     A single ``Runner`` instance can be shared across multiple agents
-    safely — it holds only configuration (limits, retry policy), never
-    per-conversation state.
+    safely. It holds configuration plus process-local execution guards, but
+    never persists conversation state.
     """
 
     def __init__(
@@ -127,6 +178,8 @@ class Runner:
         *,
         max_attempts: int = 1,
         max_turns: int = 128,
+        agent_max_depth: int = 4,
+        agent_max_threads: int = 16,
         is_retryable: Callable[[BaseException], bool] | None = None,
     ) -> None:
         """Initialize retry and loop limits for one reusable runner.
@@ -134,6 +187,10 @@ class Runner:
         Args:
             max_attempts: Total attempts per model call (1 = no retry).
             max_turns: Safety cap on conversation turns per run.
+            agent_max_depth: Process-local recursive depth cap for generic
+                spawned ``agent`` tool calls.
+            agent_max_threads: Process-local live-agent cap for generic
+                spawned ``agent`` tool calls.
             is_retryable: Optional predicate for retry eligibility. Defaults
                 to the standard HTTP-status-code check in ``retry_on_errors``.
         """
@@ -141,11 +198,19 @@ class Runner:
             raise ValueError("Runner.max_attempts must be at least 1.")
         if max_turns < 1:
             raise ValueError("Runner.max_turns must be at least 1.")
+        if agent_max_depth < 1:
+            raise ValueError("Runner.agent_max_depth must be at least 1.")
+        if agent_max_threads < 1:
+            raise ValueError("Runner.agent_max_threads must be at least 1.")
 
         self._max_attempts = max_attempts
         self._max_turns = max_turns
         self._is_retryable = is_retryable
         self._tool_executor = ToolExecutor()
+        self._agent_delegation = _AgentDelegationState(
+            max_depth=agent_max_depth,
+            max_threads=agent_max_threads,
+        )
 
         # Cache the retry-wrapped model call once at init so we don't
         # recreate the decorator closure on every turn.
@@ -903,34 +968,48 @@ class Runner:
         cancellation_token: CancellationToken | None,
     ) -> str:
         """Run one generic spawned helper agent as a subroutine."""
-        runtime = _require_runtime_engine(agent)
-        child_descriptor = AgentDescriptor(
-            name=parsed_input.name,
-            description=parsed_input.description,
-            model=tool_definition.model or _require_model(runner_task),
-            instructions=tool_definition.resolved_instructions(parsed_input),
-            model_args=(
-                dict(tool_definition.model_args)
-                if tool_definition.model_args is not None
-                else _model_args(runner_task)
-            ),
-            schema=tool_definition.output_schema,
-            tools=tool_definition.tools,
+        child_id = delegated_agent_id(agent.id, tool_name, kind="tool")
+        limit = self._agent_delegation.reserve_child(
+            parent_id=agent.id,
+            child_id=child_id,
         )
-        runtime.register_factory(
-            delegated_agent_type(agent.id, tool_name, kind="tool"),
-            type(agent).create_factory(
-                runner=self,
-                descriptor=child_descriptor,
-                parent_tools=_base_tools(runner_task),
-            ),
-        )
-        outcome = await agent.send_message(
-            _agent_tool_run_input(parsed_input),
-            recipient=delegated_agent_id(agent.id, tool_name, kind="tool"),
-            cancellation_token=cancellation_token,
-        )
-        return delegated_result_text(outcome)
+        if limit == "depth":
+            return _AGENT_DEPTH_LIMIT_REACHED
+        if limit == "thread":
+            return _AGENT_THREAD_LIMIT_REACHED
+
+        try:
+            runtime = _require_runtime_engine(agent)
+            child_descriptor = AgentDescriptor(
+                name=parsed_input.name,
+                description=None,
+                model=tool_definition.model or _require_model(runner_task),
+                instructions=tool_definition.resolved_instructions(),
+                model_args=(
+                    dict(tool_definition.model_args)
+                    if tool_definition.model_args is not None
+                    else _model_args(runner_task)
+                ),
+                schema=tool_definition.output_schema,
+                tools=tool_definition.tools,
+                shims=_default_agent_child_shims(tool_definition),
+            )
+            runtime.register_factory(
+                delegated_agent_type(agent.id, tool_name, kind="tool"),
+                type(agent).create_factory(
+                    runner=self,
+                    descriptor=child_descriptor,
+                    parent_tools=_base_tools(runner_task),
+                ),
+            )
+            outcome = await agent.send_message(
+                _default_agent_tool_run_input(parsed_input),
+                recipient=child_id,
+                cancellation_token=cancellation_token,
+            )
+            return delegated_result_text(outcome)
+        finally:
+            self._agent_delegation.release_child(child_id=child_id)
 
     async def _deliver_handoff(
         self,
@@ -1157,9 +1236,8 @@ def _parse_default_agent_tool_input(
 ) -> DefaultAgentToolInput:
     """Validate one generic spawned-agent tool call.
 
-    This follows the same path as predefined agent tools: parse the model's
-    tool-call arguments into the declared Pydantic schema, then pass that
-    structured payload downstream.
+    This validates the model's generic spawned-agent arguments before the
+    runner turns the task into the child agent's input.
     """
     parsed_input = _parse_delegated_tool_args(
         tool_call=tool_call,
@@ -1180,6 +1258,23 @@ def _agent_tool_run_input(parsed_input: BaseModel) -> list[RunHistoryItem]:
     generic spawned helper agents aligned with normal tool-call mechanics.
     """
     return [parsed_input]
+
+
+def _default_agent_tool_run_input(
+    parsed_input: DefaultAgentToolInput,
+) -> list[RunHistoryItem]:
+    """Build the downstream run input for a generic spawned-agent call."""
+    return [parsed_input.task]
+
+
+def _default_agent_child_shims(tool_definition: DefaultAgentTool) -> tuple[Shim, ...]:
+    """Return shim policy for one generic spawned helper."""
+    if not isinstance(tool_definition.tools, (InheritTools, RestrictTools)):
+        return ()
+
+    from .tools import HarnessToolsShim, base_harness_tools
+
+    return (HarnessToolsShim(base_harness_tools()),)
 
 
 def _tool_result_message(

@@ -26,15 +26,18 @@ class DefaultAgentToolInput(BaseModel):
 
     name: str = Field(
         min_length=1,
-        description="Short role-like name for the delegated helper agent.",
+        pattern=r"^\S+$",
+        description=(
+            "Single-word name for logging and tracing the delegated helper "
+            "agent. The name may be task-relevant or random."
+        ),
     )
-    description: str | None = Field(
-        default=None,
-        description="Optional short description of what this delegated helper should focus on.",
-    )
-    task: str | None = Field(
-        default=None,
-        description="Optional focused task for the delegated helper agent.",
+    task: str = Field(
+        min_length=1,
+        description=(
+            "Complete delegated task instruction, including necessary context "
+            "and expected output."
+        ),
     )
 
 
@@ -79,39 +82,15 @@ def default_handoff_tool_result(tool_name: str) -> str:
     return f"Handoff accepted by {tool_name}. Control transfers now."
 
 
-def default_agent_tool_details(
-    *,
-    name: str,
-    description: str | None,
-    task: str | None,
-) -> str:
-    """Return the dynamic details injected into one generic helper agent."""
-    details: list[str] = [f"Delegated helper name: {_terminal_sentence(name)}"]
-    if description:
-        details.append(
-            f"Delegated helper description: {_terminal_sentence(description)}"
-        )
-    if task:
-        details.append(f"Delegated task: {_terminal_sentence(task)}")
-    return " ".join(details)
-
-
-def default_agent_tool_instructions(
-    *,
-    name: str,
-    description: str | None,
-    task: str | None,
-) -> str:
+def default_agent_tool_instructions() -> str:
     """Return the default prompt for one generic spawned agent-as-tool call."""
     return (
-        "You are a delegated helper agent working on one focused task for "
-        "another agent. "
-        + default_agent_tool_details(
-            name=name,
-            description=description,
-            task=task,
-        )
-        + " Complete only that task and return a concise useful result."
+        "You are a newly spawned agent in a team of agents collaborating to "
+        "complete a task. You can spawn sub-agents to handle subtasks, and "
+        "those sub-agents can spawn their own sub-agents. Return the response "
+        "to your assigned task directly; that response will be delivered back "
+        "to your parent agent. Treat the next user message as your assigned "
+        "task, and use any available prior history only as background context."
     )
 
 
@@ -150,11 +129,7 @@ def delegated_result_text(outcome: DeliveryOutcome) -> str:
     strategy on the next turn.
     """
     if outcome.status != DeliveryStatus.DELIVERED:
-        message = outcome.error.message if outcome.error else "unknown delivery failure"
-        return (
-            "Error: delegated agent call failed with "
-            f"status={outcome.status.value}: {message}"
-        )
+        return "Error: delegated agent call failed."
 
     payload = outcome.response_payload
     if isinstance(payload, RunResult):
@@ -196,11 +171,3 @@ def _delegated_value_as_text(value: object) -> str:
         return json.dumps(value)
     except TypeError:
         return str(value)
-
-
-def _terminal_sentence(value: str) -> str:
-    """Return one string guaranteed to end like a sentence."""
-    stripped = value.strip()
-    if stripped.endswith((".", "!", "?")):
-        return stripped
-    return f"{stripped}."
