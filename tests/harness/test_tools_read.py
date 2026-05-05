@@ -29,9 +29,7 @@ def test_read_tool_reads_basic_text_file(tmp_path: Path) -> None:
 
     output = run_tool(read_tool(cwd=tmp_path), path="notes.txt")
 
-    assert output == (
-        f"Absolute path: {tmp_path / 'notes.txt'}\n" "L1: alpha\n" "L2: bravo"
-    )
+    assert output == "alpha\nbravo"
 
 
 def test_read_tool_resolves_relative_paths_from_configured_cwd(
@@ -43,7 +41,7 @@ def test_read_tool_resolves_relative_paths_from_configured_cwd(
 
     output = run_tool(read_tool(cwd=workspace), path="notes.txt")
 
-    assert output == f"Absolute path: {workspace / 'notes.txt'}\nL1: relative"
+    assert output == "relative"
 
 
 def test_read_tool_accepts_absolute_paths(tmp_path: Path) -> None:
@@ -52,7 +50,7 @@ def test_read_tool_accepts_absolute_paths(tmp_path: Path) -> None:
 
     output = run_tool(read_tool(cwd=tmp_path / "elsewhere"), path=str(target))
 
-    assert output == f"Absolute path: {target}\nL1: absolute"
+    assert output == "absolute"
 
 
 def test_read_tool_starts_at_offset(tmp_path: Path) -> None:
@@ -60,7 +58,7 @@ def test_read_tool_starts_at_offset(tmp_path: Path) -> None:
 
     output = run_tool(read_tool(cwd=tmp_path), path="notes.txt", offset=2)
 
-    assert output == f"Absolute path: {tmp_path / 'notes.txt'}\nL2: two\nL3: three"
+    assert output == "two\nthree"
 
 
 def test_read_tool_applies_caller_limit_before_global_truncation(
@@ -71,10 +69,7 @@ def test_read_tool_applies_caller_limit_before_global_truncation(
     output = run_tool(read_tool(cwd=tmp_path), path="notes.txt", limit=2)
 
     assert output == (
-        f"Absolute path: {tmp_path / 'notes.txt'}\n"
-        "L1: one\n"
-        "L2: two\n"
-        "More than 2 lines found"
+        "one\n" "two\n" "\n" "[Showing lines 1-2. Use offset=3 to continue.]"
     )
 
 
@@ -87,22 +82,38 @@ def test_read_tool_truncates_by_global_line_limit(tmp_path: Path) -> None:
     output = run_tool(read_tool(cwd=tmp_path), path="long.txt")
     lines = output.splitlines()
 
-    assert lines[0] == f"Absolute path: {tmp_path / 'long.txt'}"
-    assert lines[1] == "L1: x"
-    assert lines[TEXT_MAX_LINES] == f"L{TEXT_MAX_LINES}: x"
-    assert lines[-1] == f"More than {TEXT_MAX_LINES} lines found"
+    assert lines[0] == "x"
+    assert lines[TEXT_MAX_LINES - 1] == "x"
+    assert lines[-1] == (
+        f"[Showing lines 1-{TEXT_MAX_LINES}. "
+        f"Use offset={TEXT_MAX_LINES + 1} to continue.]"
+    )
 
 
 def test_read_tool_truncates_by_global_byte_limit(tmp_path: Path) -> None:
+    (tmp_path / "wide.txt").write_text(
+        "ok\n" + ("a" * TEXT_MAX_BYTES), encoding="utf-8"
+    )
+
+    output = run_tool(read_tool(cwd=tmp_path), path="wide.txt")
+
+    assert output == (
+        "ok\n"
+        "\n"
+        f"[Showing lines 1-1 ({TEXT_MAX_BYTES} byte limit). "
+        "Use offset=2 to continue.]"
+    )
+
+
+def test_read_tool_reports_oversized_requested_line(tmp_path: Path) -> None:
     (tmp_path / "wide.txt").write_text("a" * (TEXT_MAX_BYTES + 1), encoding="utf-8")
 
     output = run_tool(read_tool(cwd=tmp_path), path="wide.txt")
-    lines = output.splitlines()
 
-    assert lines[0] == f"Absolute path: {tmp_path / 'wide.txt'}"
-    assert lines[-1] == f"Output truncated after {TEXT_MAX_BYTES} bytes"
-    assert lines[1].startswith("L1: ")
-    assert len(lines[1].encode("utf-8")) == TEXT_MAX_BYTES
+    assert output == (
+        f"[Line 1 is {TEXT_MAX_BYTES + 1} bytes, exceeds "
+        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
+    )
 
 
 def test_read_tool_reports_missing_file(tmp_path: Path) -> None:
@@ -133,7 +144,7 @@ def test_read_tool_decodes_invalid_utf8_with_replacement(tmp_path: Path) -> None
 
     output = run_tool(read_tool(cwd=tmp_path), path="latin1.txt")
 
-    assert output == f"Absolute path: {tmp_path / 'latin1.txt'}\nL1: \ufffd"
+    assert output == "\ufffd"
 
 
 def test_read_tool_rejects_invalid_offset_and_limit(tmp_path: Path) -> None:
@@ -194,12 +205,12 @@ def test_read_tool_reports_offset_beyond_file_length(tmp_path: Path) -> None:
     assert output == "offset exceeds file length"
 
 
-def test_read_tool_returns_header_only_for_empty_file(tmp_path: Path) -> None:
+def test_read_tool_returns_empty_output_for_empty_file(tmp_path: Path) -> None:
     (tmp_path / "empty.txt").write_text("", encoding="utf-8")
 
     output = run_tool(read_tool(cwd=tmp_path), path="empty.txt")
 
-    assert output == f"Absolute path: {tmp_path / 'empty.txt'}"
+    assert output == ""
 
 
 def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
@@ -250,7 +261,7 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
         tool_message = cast(dict[str, object], state.history[2])
         assert tool_message["role"] == "tool"
         assert tool_message["name"] == "read"
-        assert "L1: runner content" in cast(str, tool_message["content"])
+        assert tool_message["content"] == "runner content"
 
     asyncio.run(scenario())
 

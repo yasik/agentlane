@@ -16,9 +16,9 @@ from ._types import HarnessToolDefinition
 _BINARY_SAMPLE_BYTES = 4096
 _TOOL_NAME = "read"
 _TOOL_DESCRIPTION = (
-    "Reads a local text file with 1-indexed line numbers. Supports offset and "
-    "limit for large files. Output is truncated to 2000 lines or 51200 bytes, "
-    "whichever is hit first."
+    "Reads raw local text file contents. Supports offset and limit for large "
+    f"files. Output is truncated to {TEXT_MAX_LINES} lines or "
+    f"{TEXT_MAX_BYTES} bytes, whichever is hit first."
 )
 _TOOL_PROMPT_SNIPPET = "Read file contents"
 _TOOL_PROMPT_GUIDELINE = "Use read to examine files instead of cat or sed."
@@ -44,7 +44,7 @@ class _ToolArgs(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class _ReadContent:
-    """Formatted file slice and any continuation note."""
+    """Raw file slice and any continuation note."""
 
     lines: tuple[str, ...]
     continuation_message: str | None = None
@@ -107,7 +107,7 @@ def _read_file(args: _ToolArgs, *, resolver: ToolPathResolver) -> str:
     if content.error is not None:
         return content.error
 
-    return _format_read_output(resolved_path, content)
+    return _format_read_output(content)
 
 
 def _read_text_slice(
@@ -158,30 +158,45 @@ def _collect_text_slice(
         total_lines = line_number
         if line_number < offset:
             continue
+
         if len(output_lines) >= max_returned_lines:
-            continuation_message = f"More than {len(output_lines)} lines found"
+            continuation_message = _line_continuation_message(
+                offset=offset,
+                returned_line_count=len(output_lines),
+            )
             break
 
-        formatted_line = f"L{line_number}: {_decode_line(raw_line)}"
+        decoded_line = _decode_line(raw_line)
         is_continuation = bool(output_lines)
-        line_result = _fit_line(
-            formatted_line,
-            has_previous=is_continuation,
-            remaining_bytes=TEXT_MAX_BYTES - output_bytes,
+        line_byte_count = _joined_line_byte_count(
+            decoded_line, has_previous=is_continuation
         )
-        if line_result is None:
-            continuation_message = f"Output truncated after {TEXT_MAX_BYTES} bytes"
+
+        if output_bytes + line_byte_count > TEXT_MAX_BYTES:
+            if output_lines:
+                continuation_message = _byte_continuation_message(
+                    offset=offset,
+                    returned_line_count=len(output_lines),
+                    next_offset=line_number,
+                )
+            else:
+                continuation_message = _oversized_line_message(
+                    line_number=line_number,
+                    line_bytes=line_byte_count,
+                )
             break
 
-        output_lines.append(line_result)
-        output_bytes += _joined_line_byte_count(
-            line_result, has_previous=is_continuation
-        )
-        if line_result != formatted_line:
-            continuation_message = f"Output truncated after {TEXT_MAX_BYTES} bytes"
-            break
+        output_lines.append(decoded_line)
+        output_bytes += line_byte_count
 
-    if not output_lines and total_lines > 0 and offset > total_lines:
+    if (
+        not output_lines
+        and continuation_message is None
+        and (
+            (total_lines == 0 and offset > 1)
+            or (total_lines > 0 and offset > total_lines)
+        )
+    ):
         return _read_error("offset exceeds file length")
 
     return _ReadContent(
@@ -195,39 +210,50 @@ def _decode_line(line: bytes) -> str:
     return line.decode("utf-8", errors="replace").removesuffix("\n").removesuffix("\r")
 
 
-def _fit_line(
-    line: str,
-    *,
-    has_previous: bool,
-    remaining_bytes: int,
-) -> str | None:
-    """Return a line that fits the remaining byte budget."""
-    separator_bytes = 1 if has_previous else 0
-    line_budget = remaining_bytes - separator_bytes
-    if line_budget <= 0:
-        return None
-
-    if len(line.encode("utf-8")) <= line_budget:
-        return line
-
-    return _trim_to_utf8_byte_limit(line, max_bytes=line_budget)
-
-
 def _joined_line_byte_count(line: str, *, has_previous: bool) -> int:
     """Return byte count for one line in a newline-joined output."""
     separator_bytes = 1 if has_previous else 0
     return separator_bytes + len(line.encode("utf-8"))
 
 
-def _trim_to_utf8_byte_limit(text: str, *, max_bytes: int) -> str:
-    """Trim text to a byte limit without returning invalid UTF-8."""
-    return text.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+def _line_continuation_message(
+    *,
+    offset: int,
+    returned_line_count: int,
+) -> str:
+    """Build the model-facing continuation note for line-bounded output."""
+    end_line = offset + returned_line_count - 1
+    next_offset = end_line + 1
+    return f"[Showing lines {offset}-{end_line}. Use offset={next_offset} to continue.]"
 
 
-def _format_read_output(path: Path, content: _ReadContent) -> str:
+def _byte_continuation_message(
+    *,
+    offset: int,
+    returned_line_count: int,
+    next_offset: int,
+) -> str:
+    """Build the model-facing continuation note for byte-bounded output."""
+    end_line = offset + returned_line_count - 1
+    return (
+        f"[Showing lines {offset}-{end_line} ({TEXT_MAX_BYTES} byte limit). "
+        f"Use offset={next_offset} to continue.]"
+    )
+
+
+def _oversized_line_message(*, line_number: int, line_bytes: int) -> str:
+    """Build the model-facing note for a single line beyond the byte limit."""
+    return (
+        f"[Line {line_number} is {line_bytes} bytes, exceeds "
+        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
+    )
+
+
+def _format_read_output(content: _ReadContent) -> str:
     """Render the final model-facing tool result."""
-    output = [f"Absolute path: {path}"]
-    output.extend(content.lines)
+    output = list(content.lines)
     if content.continuation_message is not None:
+        if output:
+            output.append("")
         output.append(content.continuation_message)
     return "\n".join(output)

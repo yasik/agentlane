@@ -230,23 +230,31 @@ Parameters:
 Example tool result:
 
 ```text
-Absolute path: /workspace/notes.txt
-L1: alpha
-L2: bravo
-L3: charlie
+alpha
+bravo
+charlie
 ```
 
 When more lines remain after a caller limit or global line cap, the result adds
 a continuation note:
 
 ```text
-More than 2000 lines found
+alpha
+bravo
+
+[Showing lines 1-2. Use offset=3 to continue.]
 ```
 
 When the byte cap is reached, the result reports:
 
 ```text
-Output truncated after 51200 bytes
+[Showing lines 1-128 (51200 byte limit). Use offset=129 to continue.]
+```
+
+If the first requested line exceeds the byte cap by itself, the result reports:
+
+```text
+[Line 1 is 51201 bytes, exceeds 51200 byte limit. Use bash to inspect it.]
 ```
 
 The tool returns clear text errors for directories, missing files, likely binary
