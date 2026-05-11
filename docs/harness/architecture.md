@@ -153,4 +153,6 @@ developer surface. Read [Harness Shims](./shims.md) if you need to extend run
 behavior without changing the core harness types. Read [Harness Tools](./tools.md)
 for first-party tool definitions and shim integration. Read [Harness Agents](./agents.md)
 to understand the lower-level addressed agent type. Read
-[Harness Runner](./runner.md) when you want the actual loop behavior.
+[Harness Runner](./runner.md) when you want the actual loop behavior. Read
+[Harness Distributed Agents](./distributed-agents.md) when a harness agent needs
+to coordinate explicit worker runtimes.

@@ -29,7 +29,9 @@ A practical high-level agent usually starts with:
 
 This path keeps early application code compact. If the agent later needs direct
 runtime addressing, distributed workers, or custom orchestration, move the same
-descriptor and tool definitions to the lower-level harness APIs.
+descriptor and tool definitions to the lower-level harness APIs. Read
+[Harness Distributed Agents](./distributed-agents.md) for the pattern that keeps
+`DefaultAgent` at the top while worker agents move behind explicit runtimes.
 
 ## Import Path
 
@@ -237,3 +239,5 @@ Use:
    level orchestration control
 3. [Harness Shims](./shims.md) when you need to extend instructions, tools, or
    turn context without changing the core harness types
+4. [Harness Distributed Agents](./distributed-agents.md) when a top-level
+   harness agent coordinates worker runtimes

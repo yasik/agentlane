@@ -93,7 +93,10 @@ mental model:
    [Models: Prompt Templating](./models/prompt-templating.md).
 9. If you specifically want streaming, read [Models Overview](./models/overview.md)
    first, then [Harness Default Agents](./harness/default-agents.md).
-10. Run one of the examples under [examples/](../examples/README.md).
+10. If you want high-level harness agents coordinating distributed workers, read
+    [Harness Distributed Agents](./harness/distributed-agents.md) after the
+    runtime distributed docs.
+11. Run one of the examples under [examples/](../examples/README.md).
 
 ## Contents
 
@@ -126,6 +129,7 @@ mental model:
 6. [Tools](./harness/tools.md)
 7. [Skills](./harness/skills.md)
 8. [Runner](./harness/runner.md)
+9. [Distributed Agents](./harness/distributed-agents.md)
 
 ### Tracing
 
