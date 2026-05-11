@@ -1,327 +1,88 @@
-"""Distributed streamed clinical copilot demo with parallel specialist review."""
+"""Distributed streamed clinical copilot demo with optional worker processes."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
 import textwrap
-from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from pathlib import Path
+from typing import cast
+from uuid import uuid4
+
+os.environ.setdefault("ABSL_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("GLOG_minloglevel", "2")
+os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 
 import structlog
 from agentlane_openai import ResponsesClient
-from rich.console import Console, Group
-from rich.layout import Layout
 from rich.live import Live
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 
-from agentlane.harness import (
-    AgentDescriptor,
-    RunnerHooks,
-    RunResult,
-    RunState,
-    RunStream,
-    Task,
-)
-from agentlane.harness.agents import DefaultAgent
-from agentlane.messaging import (
-    DeliveryMode,
-    MessageContext,
-    TopicId,
-)
-from agentlane.models import (
-    Config,
-    MessageDict,
-    ModelResponse,
-    ModelStreamEvent,
-    ModelStreamEventKind,
-    ToolCall,
-    Tools,
-    as_tool,
-)
-from agentlane.runtime import (
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from agentlane.harness import AgentDescriptor, RunResult  # noqa: E402
+from agentlane.harness.agents import DefaultAgent  # noqa: E402
+from agentlane.messaging import DeliveryMode, MessageContext, TopicId  # noqa: E402
+from agentlane.models import Config, Tools, as_tool  # noqa: E402
+from agentlane.runtime import (  # noqa: E402
     BaseAgent,
     Engine,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     on_message,
 )
-
-MODEL_NAME = "gpt-5.4-mini"
-
-MED_SAFETY_AGENT_TYPE = "demo.clinical.med_safety"
-GUIDELINE_AGENT_TYPE = "demo.clinical.guideline"
-CHART_HISTORY_AGENT_TYPE = "demo.clinical.chart_history"
-PATIENT_COMMS_AGENT_TYPE = "demo.clinical.patient_comms"
-AGGREGATOR_AGENT_TYPE = "demo.clinical.aggregator"
-
-REVIEW_TOPIC_TYPE = "demo.clinical.review_requested"
-RESULT_TOPIC_TYPE = "demo.clinical.review_result"
-
-SPECIALIST_NAMES = (
-    "med-safety-agent",
-    "guideline-agent",
-    "chart-history-agent",
-    "patient-comms-agent",
+from examples.harness.distributed_clinical_inbox_copilot.agents import (  # noqa: E402
+    register_worker_role,
 )
-SPECIALIST_WORKER_LABELS = {
-    "med-safety-agent": "med-safety-worker",
-    "guideline-agent": "guideline-worker",
-    "chart-history-agent": "chart-history-worker",
-    "patient-comms-agent": "patient-comms-worker",
-}
-TOPOLOGY_NODE_ORDER = (
-    "host",
-    "copilot-worker",
-    "med-safety-worker",
-    "guideline-worker",
-    "chart-history-worker",
-    "patient-comms-worker",
-    "aggregator-worker",
+from examples.harness.distributed_clinical_inbox_copilot.messages import (  # noqa: E402
+    MODEL_NAME,
+    REVIEW_COMPLETED_TOPIC_TYPE,
+    REVIEW_RESULT_AGENT_TYPE,
+    REVIEW_TOPIC_TYPE,
+    SPECIALIST_NAMES,
+    SPECIALIST_WORKER_LABELS,
+    TELEMETRY_AGENT_TYPE,
+    TELEMETRY_TOPIC_TYPE,
+    WORKER_ROLE_ORDER,
+    WORKER_ROLE_TO_LABEL,
+    AggregatedClinicalReview,
+    ClinicalReviewTask,
+    DemoEvent,
+    DemoInputs,
+    register_demo_message_types,
 )
-TOPOLOGY_NODE_SPECS = {
-    "host": ("control plane", ("routing", "ownership", "subscriptions")),
-    "copilot-worker": ("streamed harness run", ("Clinical Inbox Copilot",)),
-    "med-safety-worker": ("specialist worker", (MED_SAFETY_AGENT_TYPE,)),
-    "guideline-worker": ("specialist worker", (GUIDELINE_AGENT_TYPE,)),
-    "chart-history-worker": ("specialist worker", (CHART_HISTORY_AGENT_TYPE,)),
-    "patient-comms-worker": ("specialist worker", (PATIENT_COMMS_AGENT_TYPE,)),
-    "aggregator-worker": ("stateful fan-in", (AGGREGATOR_AGENT_TYPE,)),
-}
+from examples.harness.distributed_clinical_inbox_copilot.ui import (  # noqa: E402
+    CONSOLE,
+    DemoTelemetry,
+    DemoUIState,
+    InboxCopilotHooks,
+    build_dashboard,
+    consume_stream,
+    drain_telemetry,
+    print_final_summary,
+    refresh_dashboard,
+    update_runtime_node,
+)
 
-ACTOR_STYLES = {
-    "host": "bold cyan",
-    "system": "bold cyan",
-    "tool": "bold magenta",
-    "stream": "bold blue",
-    "topology": "bold cyan",
-    "copilot-worker": "bold green",
-    "aggregator": "bold white",
-    "med-safety-agent": "bold yellow",
-    "guideline-agent": "bold green",
-    "chart-history-agent": "bold blue",
-    "patient-comms-agent": "bold magenta",
-}
-
-STATUS_STYLES = {
-    "idle": "dim",
-    "starting": "yellow",
-    "queued": "yellow",
-    "running": "cyan",
-    "ready": "green",
-    "done": "green",
-    "stopped": "dim",
-}
-
-CONSOLE = Console()
-
-
-@dataclass(slots=True, frozen=True)
-class DemoInputs:
-    """Interactive inputs gathered from the clinician."""
-
-    clinician_name: str
-    patient_label: str
-    patient_message: str
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(slots=True)
 class SessionState:
-    """Mutable session state shared between tools."""
+    """Mutable session state shared between top-level tools."""
 
+    session_id: str
     chart_snapshot: str | None = None
     review_counter: int = 0
 
 
-@dataclass(slots=True)
-class ClinicalReviewTask:
-    """Publish payload delivered to each specialist reviewer."""
-
-    review_id: str
-    clinician_name: str
-    patient_label: str
-    patient_message: str
-    chart_snapshot: str
-
-
-@dataclass(slots=True)
-class SpecialistFinding:
-    """One specialist output published back to the aggregator."""
-
-    review_id: str
-    agent_name: str
-    headline: str
-    detail: str
-    patient_reply_guidance: str
-    urgent_flag: bool
-
-
-@dataclass(slots=True)
-class AggregatedClinicalReview:
-    """Merged specialist review for one inbox message."""
-
-    review_id: str
-    findings: dict[str, SpecialistFinding]
-    urgent_flag: bool
-
-
-@dataclass(slots=True)
-class RuntimeNode:
-    """One distributed runtime node shown in the live topology panel."""
-
-    label: str
-    role: str
-    agent_types: tuple[str, ...]
-    address: str = "pending"
-    worker_id: str = "pending"
-    state: str = "starting"
-
-
-def build_topology_nodes() -> dict[str, RuntimeNode]:
-    """Build the initial topology metadata before sockets are bound."""
-    return {
-        label: RuntimeNode(
-            label=label,
-            role=TOPOLOGY_NODE_SPECS[label][0],
-            agent_types=TOPOLOGY_NODE_SPECS[label][1],
-        )
-        for label in TOPOLOGY_NODE_ORDER
-    }
-
-
-@dataclass(slots=True, frozen=True)
-class DemoEvent:
-    """One structured UI event emitted by hooks or runtime agents."""
-
-    timestamp: str
-    actor: str
-    message: str
-    status_target: str | None = None
-    status_state: str | None = None
-    status_detail: str | None = None
-
-
-@dataclass(slots=True)
-class DemoUIState:
-    """Live render state for the demo dashboard."""
-
-    inputs: DemoInputs
-    stream_text: str = ""
-    reasoning_text: str = ""
-    last_reasoning_text: str = ""
-    tool_arguments_text: str = ""
-    phases: deque[str] = field(default_factory=lambda: deque(maxlen=6))
-    timeline: deque[str] = field(default_factory=lambda: deque(maxlen=16))
-    specialist_statuses: dict[str, tuple[str, str]] = field(
-        default_factory=lambda: {
-            name: ("idle", "Waiting for delegation") for name in SPECIALIST_NAMES
-        }
-    )
-    topology_nodes: dict[str, RuntimeNode] = field(default_factory=build_topology_nodes)
-    final_output: str | None = None
-
-    def append_timeline(
-        self, actor: str, message: str, *, style: str | None = None
-    ) -> None:
-        """Append one formatted timeline line."""
-        actor_style = style or ACTOR_STYLES.get(actor, "white")
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.timeline.append(
-            f"[dim][{timestamp}][/dim] [{actor_style}]{actor:<20}[/{actor_style}] "
-            f"[dim]|[/dim] {message}"
-        )
-
-
-class DemoTelemetry:
-    """Queue-backed event emitter for the live dashboard."""
-
-    def __init__(self) -> None:
-        """Initialize the async event queue."""
-        self._queue: asyncio.Queue[DemoEvent] = asyncio.Queue()
-
-    @property
-    def queue(self) -> asyncio.Queue[DemoEvent]:
-        """Return the underlying event queue."""
-        return self._queue
-
-    def emit(
-        self,
-        actor: str,
-        message: str,
-        *,
-        status_target: str | None = None,
-        status_state: str | None = None,
-        status_detail: str | None = None,
-    ) -> None:
-        """Emit one event immediately without blocking the caller."""
-        self._queue.put_nowait(
-            DemoEvent(
-                timestamp=datetime.now().strftime("%H:%M:%S"),
-                actor=actor,
-                message=message,
-                status_target=status_target,
-                status_state=status_state,
-                status_detail=status_detail,
-            )
-        )
-
-
-class InboxCopilotHooks(RunnerHooks):
-    """Surface top-level harness lifecycle events in the dashboard."""
-
-    def __init__(self, telemetry: DemoTelemetry) -> None:
-        """Initialize hooks with one shared telemetry sink."""
-        self._telemetry = telemetry
-
-    async def on_agent_start(self, task: Task, state: RunState) -> None:
-        """Record the start of the top-level run."""
-        _ = task
-        _ = state
-        self._telemetry.emit("system", "→ top-level agent accepted the inbox message")
-
-    async def on_llm_start(
-        self,
-        task: Task,
-        messages: list[MessageDict],
-    ) -> None:
-        """Record the start of one model turn."""
-        _ = task
-        _ = messages
-        self._telemetry.emit("system", "→ preparing the next top-level model turn")
-
-    async def on_llm_end(self, task: Task, response: ModelResponse) -> None:
-        """Record the end of one model turn."""
-        _ = task
-        _ = response
-        self._telemetry.emit("system", "→ top-level model turn completed")
-
-    async def on_tool_call_start(self, task: Task, tool_call: ToolCall) -> None:
-        """Record one tool invocation start."""
-        _ = task
-        tool_name = _tool_name(tool_call)
-        self._telemetry.emit("tool", f"→ calling tool `{tool_name}`")
-
-    async def on_tool_call_end(
-        self,
-        task: Task,
-        tool_call: ToolCall,
-        result: object,
-    ) -> None:
-        """Record one tool invocation finish."""
-        _ = task
-        _ = result
-        tool_name = _tool_name(tool_call)
-        self._telemetry.emit("tool", f"→ tool `{tool_name}` completed")
-
-
 class ReviewCompletionTracker:
-    """Waits for the stateful aggregator to finish a review id."""
+    """Waits for controller-local result receiver to finish a review id."""
 
     def __init__(self) -> None:
         """Initialize tracker storage."""
@@ -352,285 +113,84 @@ class ReviewCompletionTracker:
         return await asyncio.wait_for(self._futures[review_id], timeout=timeout_seconds)
 
 
-class MedSafetyAgent(BaseAgent):
-    """Specialist that reviews likely medication-safety signals."""
+class TelemetryReceiverAgent(BaseAgent):
+    """Controller-local sink for distributed telemetry messages."""
 
     def __init__(self, engine: Engine, telemetry: DemoTelemetry) -> None:
-        """Initialize agent dependencies."""
+        """Initialize the receiver with a local UI queue."""
         super().__init__(engine)
         self._telemetry = telemetry
 
     @on_message
-    async def handle(
-        self,
-        payload: ClinicalReviewTask,
-        context: MessageContext,
-    ) -> object:
-        """Review medication-safety concerns and publish one finding."""
-        self._telemetry.emit(
-            "med-safety-agent",
-            "│ med-safety-agent      checking for medication-related hypoglycemia",
-            status_target="med-safety-agent",
-            status_state="running",
-            status_detail="Reviewing medication safety signals",
-        )
-        await asyncio.sleep(0.35)
-        finding = SpecialistFinding(
-            review_id=payload.review_id,
-            agent_name="med-safety-agent",
-            headline="Medication safety",
-            detail=(
-                "The reported dizziness plus glucose values under 70 raise concern "
-                "for symptomatic hypoglycemia. The chart pattern makes glipizide the "
-                "most likely immediate contributor to low readings after the recent "
-                "regimen change."
-            ),
-            patient_reply_guidance=(
-                "Tell the patient not to make unsupervised medication changes, but to "
-                "treat any low sugar per their plan and wait for a same-day clinician "
-                "reply."
-            ),
-            urgent_flag=True,
-        )
-        await self.publish_message(
-            finding,
-            topic=TopicId.from_values(
-                type_value=RESULT_TOPIC_TYPE,
-                route_key=payload.review_id,
-            ),
-            correlation_id=context.correlation_id,
-        )
-        self._telemetry.emit(
-            "med-safety-agent",
-            "└ med-safety-agent      flagged hypoglycemia risk and likely culprit",
-            status_target="med-safety-agent",
-            status_state="done",
-            status_detail="Flagged symptomatic hypoglycemia risk",
-        )
-        return finding
+    async def handle(self, payload: DemoEvent, context: MessageContext) -> object:
+        """Forward distributed telemetry into the controller-local UI queue."""
+        _ = context
+        self._telemetry.queue.put_nowait(payload)
+        return None
 
 
-class GuidelineAgent(BaseAgent):
-    """Specialist that summarizes the relevant care-path guidance."""
-
-    def __init__(self, engine: Engine, telemetry: DemoTelemetry) -> None:
-        """Initialize agent dependencies."""
-        super().__init__(engine)
-        self._telemetry = telemetry
-
-    @on_message
-    async def handle(
-        self,
-        payload: ClinicalReviewTask,
-        context: MessageContext,
-    ) -> object:
-        """Review the message against guideline-like escalation logic."""
-        self._telemetry.emit(
-            "guideline-agent",
-            "│ guideline-agent       reviewing escalation guidance for low glucose",
-            status_target="guideline-agent",
-            status_state="running",
-            status_detail="Matching guideline-style escalation signals",
-        )
-        await asyncio.sleep(0.2)
-        finding = SpecialistFinding(
-            review_id=payload.review_id,
-            agent_name="guideline-agent",
-            headline="Guideline alignment",
-            detail=(
-                "Recurrent symptomatic glucose values below 70 should trigger "
-                "same-day clinical review and clear escalation instructions if "
-                "symptoms worsen, the patient cannot keep glucose above target, "
-                "or new confusion, syncope, or chest pain appears."
-            ),
-            patient_reply_guidance=(
-                "Include explicit red-flag instructions for severe symptoms or "
-                "persistent lows that do not improve quickly."
-            ),
-            urgent_flag=True,
-        )
-        await self.publish_message(
-            finding,
-            topic=TopicId.from_values(
-                type_value=RESULT_TOPIC_TYPE,
-                route_key=payload.review_id,
-            ),
-            correlation_id=context.correlation_id,
-        )
-        self._telemetry.emit(
-            "guideline-agent",
-            "└ guideline-agent       recommended same-day clinician review",
-            status_target="guideline-agent",
-            status_state="done",
-            status_detail="Recommended same-day clinical review",
-        )
-        return finding
-
-
-class ChartHistoryAgent(BaseAgent):
-    """Specialist that extracts relevant chart context."""
-
-    def __init__(self, engine: Engine, telemetry: DemoTelemetry) -> None:
-        """Initialize agent dependencies."""
-        super().__init__(engine)
-        self._telemetry = telemetry
-
-    @on_message
-    async def handle(
-        self,
-        payload: ClinicalReviewTask,
-        context: MessageContext,
-    ) -> object:
-        """Summarize the most relevant chart history for the inbox message."""
-        self._telemetry.emit(
-            "chart-history-agent",
-            "│ chart-history-agent   extracting recent labs, meds, and symptoms",
-            status_target="chart-history-agent",
-            status_state="running",
-            status_detail="Pulling chart context",
-        )
-        await asyncio.sleep(0.28)
-        finding = SpecialistFinding(
-            review_id=payload.review_id,
-            agent_name="chart-history-agent",
-            headline="Chart context",
-            detail=(
-                f"The chart snapshot for {payload.patient_label} shows type 2 diabetes, "
-                "glipizide plus metformin, and semaglutide started two weeks ago. Recent "
-                "home readings in the low 60s line up with the patient message and there "
-                "is no ED visit or severe-event documentation in the mock chart."
-            ),
-            patient_reply_guidance=(
-                "Ask the patient to confirm their latest glucose reading and whether the "
-                "dizziness is improving after eating or treating the low."
-            ),
-            urgent_flag=False,
-        )
-        await self.publish_message(
-            finding,
-            topic=TopicId.from_values(
-                type_value=RESULT_TOPIC_TYPE,
-                route_key=payload.review_id,
-            ),
-            correlation_id=context.correlation_id,
-        )
-        self._telemetry.emit(
-            "chart-history-agent",
-            "└ chart-history-agent   summarized the mock chart and recent glucose trend",
-            status_target="chart-history-agent",
-            status_state="done",
-            status_detail="Summarized chart context",
-        )
-        return finding
-
-
-class PatientCommsAgent(BaseAgent):
-    """Specialist that suggests patient-friendly messaging."""
-
-    def __init__(self, engine: Engine, telemetry: DemoTelemetry) -> None:
-        """Initialize agent dependencies."""
-        super().__init__(engine)
-        self._telemetry = telemetry
-
-    @on_message
-    async def handle(
-        self,
-        payload: ClinicalReviewTask,
-        context: MessageContext,
-    ) -> object:
-        """Draft plain-language patient communication guidance."""
-        self._telemetry.emit(
-            "patient-comms-agent",
-            "│ patient-comms-agent   drafting a plain-language patient response",
-            status_target="patient-comms-agent",
-            status_state="running",
-            status_detail="Drafting patient-friendly guidance",
-        )
-        await asyncio.sleep(0.32)
-        finding = SpecialistFinding(
-            review_id=payload.review_id,
-            agent_name="patient-comms-agent",
-            headline="Patient communication",
-            detail=(
-                "The response should acknowledge the symptoms, advise the patient to "
-                "treat any low sugar per their plan, and set expectations that the care "
-                "team will review medication safety the same day."
-            ),
-            patient_reply_guidance=(
-                "Use calm plain language, ask about the current glucose value, and tell "
-                "the patient to seek urgent help for severe weakness, confusion, fainting, "
-                "or symptoms that do not improve."
-            ),
-            urgent_flag=False,
-        )
-        await self.publish_message(
-            finding,
-            topic=TopicId.from_values(
-                type_value=RESULT_TOPIC_TYPE,
-                route_key=payload.review_id,
-            ),
-            correlation_id=context.correlation_id,
-        )
-        self._telemetry.emit(
-            "patient-comms-agent",
-            "└ patient-comms-agent   prepared patient-friendly response guidance",
-            status_target="patient-comms-agent",
-            status_state="done",
-            status_detail="Prepared patient response guidance",
-        )
-        return finding
-
-
-class ReviewAggregatorAgent(BaseAgent):
-    """Stateful aggregator keyed by review id."""
+class ReviewResultAgent(BaseAgent):
+    """Controller-local sink for completed aggregate reviews."""
 
     def __init__(
         self,
         engine: Engine,
-        telemetry: DemoTelemetry,
         tracker: ReviewCompletionTracker,
-        expected_finding_count: int,
+        telemetry: DemoTelemetry,
     ) -> None:
-        """Initialize the aggregator dependencies."""
+        """Initialize the receiver with the local completion tracker."""
         super().__init__(engine)
-        self._telemetry = telemetry
         self._tracker = tracker
-        self._expected_finding_count = expected_finding_count
-        self._findings: dict[str, SpecialistFinding] = {}
+        self._telemetry = telemetry
 
     @on_message
     async def handle(
         self,
-        payload: SpecialistFinding,
+        payload: AggregatedClinicalReview,
         context: MessageContext,
     ) -> object:
-        """Collect specialist findings and resolve the tracker when complete."""
+        """Complete the local waiter for one distributed review result."""
         _ = context
-        self._findings[payload.agent_name] = payload
+        self._tracker.complete(payload)
         self._telemetry.emit(
             "aggregator",
-            (
-                "→ aggregator collected "
-                f"{len(self._findings)}/{self._expected_finding_count} findings"
-            ),
+            f"→ aggregated review ready for {payload.review_id} from distributed fan-in",
         )
-        if len(self._findings) < self._expected_finding_count:
-            return None
-
-        ordered_findings = {
-            name: self._findings[name] for name in sorted(self._findings)
-        }
-        review = AggregatedClinicalReview(
-            review_id=self.id.key.value,
-            findings=ordered_findings,
-            urgent_flag=any(item.urgent_flag for item in ordered_findings.values()),
-        )
-        self._telemetry.emit(
-            "aggregator",
-            f"→ review {review.review_id} merged into one summary",
-        )
-        self._tracker.complete(review)
         return None
+
+
+@dataclass(slots=True)
+class WorkerProcessHandle:
+    """Controller-owned subprocess metadata."""
+
+    role: str
+    label: str
+    process: asyncio.subprocess.Process
+    stderr_task: asyncio.Task[None] | None = None
+
+
+def _new_local_workers() -> list[tuple[str, WorkerAgentRuntime]]:
+    """Return an empty local worker list with a concrete type."""
+    return []
+
+
+def _new_worker_processes() -> list[WorkerProcessHandle]:
+    """Return an empty worker process list with a concrete type."""
+    return []
+
+
+@dataclass(slots=True)
+class RuntimeCluster:
+    """Runtime objects owned by the controller process."""
+
+    host: WorkerAgentRuntimeHost
+    copilot_worker: WorkerAgentRuntime
+    local_workers: list[tuple[str, WorkerAgentRuntime]] = field(
+        default_factory=_new_local_workers
+    )
+    worker_processes: list[WorkerProcessHandle] = field(
+        default_factory=_new_worker_processes
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -663,10 +223,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="OpenAI model name for the streamed top-level agent.",
     )
     parser.add_argument(
+        "--mode",
+        choices=("in-process", "multiprocess"),
+        default="in-process",
+        help="Run specialist workers in this process or as subprocesses.",
+    )
+    parser.add_argument(
+        "--multiprocess",
+        action="store_true",
+        help="Shortcut for --mode multiprocess.",
+    )
+    parser.add_argument(
+        "--smoke-review",
+        action="store_true",
+        help="Run a model-free distributed review smoke test and exit.",
+    )
+    parser.add_argument(
         "--worker-count",
         type=int,
         default=4,
         help="Scheduler worker count for each distributed runtime node.",
+    )
+    parser.add_argument(
+        "--worker-bind-address",
+        type=str,
+        default="127.0.0.1:0",
+        help="Bind address used by worker runtime nodes.",
+    )
+    parser.add_argument(
+        "--worker-start-timeout-seconds",
+        type=float,
+        default=10.0,
+        help="Timeout when waiting for worker subprocess readiness.",
     )
     parser.add_argument(
         "--timeout-seconds",
@@ -675,13 +263,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeout when waiting for the specialist aggregator.",
     )
     return parser
-
-
-def _tool_name(tool_call: object) -> str:
-    """Extract the function name from one canonical tool call."""
-    function = getattr(tool_call, "function", None)
-    name = getattr(function, "name", None)
-    return name if isinstance(name, str) and name else "unknown_tool"
 
 
 def prompt_with_default(label: str, default: str) -> str:
@@ -760,287 +341,561 @@ def format_review_for_model(review: AggregatedClinicalReview) -> str:
     ]
     for finding in review.findings.values():
         sections.append(
-            f"- {finding.agent_name} | {finding.headline}: {finding.detail}"
+            "- "
+            f"{expect_finding_str(finding, 'agent_name')} | "
+            f"{expect_finding_str(finding, 'headline')}: "
+            f"{expect_finding_str(finding, 'detail')}"
         )
     sections.append("patient_reply_guidance:")
     for finding in review.findings.values():
-        sections.append(f"- {finding.agent_name}: {finding.patient_reply_guidance}")
+        sections.append(
+            f"- {expect_finding_str(finding, 'agent_name')}: "
+            f"{expect_finding_str(finding, 'patient_reply_guidance')}"
+        )
     return "\n".join(sections)
 
 
-def build_dashboard(state: DemoUIState) -> Layout:
-    """Render the current live dashboard layout."""
-    layout = Layout()
-    layout.split_column(
-        Layout(name="header", size=7),
-        Layout(name="stream", ratio=3),
-        Layout(name="bottom", ratio=2),
-    )
-    layout["bottom"].split_row(
-        Layout(name="topology", ratio=3),
-        Layout(name="specialists", ratio=3),
-        Layout(name="timeline", ratio=4),
-    )
-    layout["header"].update(build_header_panel(state.inputs))
-    layout["stream"].update(build_stream_panel(state))
-    layout["topology"].update(build_topology_panel(state))
-    layout["specialists"].update(build_specialist_panel(state))
-    layout["timeline"].update(build_timeline_panel(state))
-    return layout
+def expect_finding_str(finding: dict[str, object], field_name: str) -> str:
+    """Return one string field from a serialized aggregate finding."""
+    value = finding.get(field_name)
+    if not isinstance(value, str):
+        raise TypeError(f"Expected aggregate finding field '{field_name}' as string.")
+    return value
 
 
-def build_header_panel(inputs: DemoInputs) -> Panel:
-    """Render the top banner with scenario context."""
-    header_table = Table.grid(padding=(0, 2))
-    header_table.add_row("[bold]Clinician[/bold]", inputs.clinician_name)
-    header_table.add_row("[bold]Patient[/bold]", inputs.patient_label)
-    header_table.add_row("[bold]Message[/bold]", inputs.patient_message)
-    return Panel(
-        header_table,
-        title="[bold cyan]Distributed Clinical Inbox Copilot[/bold cyan]",
-        subtitle="Distributed host/workers + streamed harness run + fan-out/fan-in",
-        border_style="cyan",
-    )
-
-
-def build_stream_panel(state: DemoUIState) -> Panel:
-    """Render the top-level streamed agent panel."""
-    phases_text = (
-        " → ".join(state.phases) if state.phases else "awaiting first model phase"
-    )
-    if state.reasoning_text:
-        reasoning_body: object = Text(
-            state.reasoning_text,
-            style="white",
-            overflow="fold",
-            no_wrap=False,
+async def start_cluster(
+    *,
+    args: argparse.Namespace,
+    state: DemoUIState,
+    telemetry: DemoTelemetry,
+    tracker: ReviewCompletionTracker,
+    session_id: str,
+) -> RuntimeCluster:
+    """Start the host, controller worker, and role workers."""
+    host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
+    copilot_worker: WorkerAgentRuntime | None = None
+    cluster: RuntimeCluster | None = None
+    try:
+        await host.start()
+        host_node = update_runtime_node(
+            state,
+            label="host",
+            address=host.address,
+            worker_id="control-plane",
+            pid=str(os.getpid()),
+            node_state="ready",
         )
-    else:
-        reasoning_body = Text("Reasoning will appear here as it streams.", style="dim")
-    tool_args_text = (
-        _tail_text(state.tool_arguments_text, 500) or "No tool arguments emitted yet."
-    )
-    stream_text = state.stream_text or "Awaiting top-level stream..."
-    body = Group(
-        Text(f"Model phases: {phases_text}", style="dim"),
-        Text(""),
-        Text("Reasoning Stream", style="bold yellow"),
-        reasoning_body,
-        Text(""),
-        Text("Tool Arguments", style="bold magenta"),
-        Text(tool_args_text, style="white"),
-        Text(""),
-        Text("Assistant Stream", style="bold green"),
-        Text(stream_text, style="white"),
-    )
-    return Panel(
-        body, title="[bold green]Top-Level Agent[/bold green]", border_style="green"
-    )
+        telemetry.emit("host", f"→ distributed host listening at {host_node.address}")
 
-
-def build_topology_panel(state: DemoUIState) -> Panel:
-    """Render the distributed host and worker topology."""
-    table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
-    table.add_column("Node")
-    table.add_column("State")
-    table.add_column("Host:Port")
-    table.add_column("Worker ID")
-    for label in TOPOLOGY_NODE_ORDER:
-        node = state.topology_nodes[label]
-        state_style = STATUS_STYLES.get(node.state, "white")
-        table.add_row(
-            node.label,
-            f"[{state_style}]{node.state}[/{state_style}]",
-            node.address,
-            _short_worker_id(node.worker_id),
+        copilot_worker = WorkerAgentRuntime(
+            host_address=host.address,
+            address=args.worker_bind_address,
+            worker_count=args.worker_count,
         )
-    return Panel(
-        table,
-        title="[bold cyan]Distributed Runtime[/bold cyan]",
-        subtitle="host:port and worker id",
-        border_style="cyan",
-    )
-
-
-def build_specialist_panel(state: DemoUIState) -> Panel:
-    """Render the parallel specialist status board."""
-    table = Table(show_header=True, header_style="bold cyan", box=None, pad_edge=False)
-    table.add_column("Agent")
-    table.add_column("State")
-    table.add_column("Worker")
-    table.add_column("Detail")
-    for agent_name in SPECIALIST_NAMES:
-        status, detail = state.specialist_statuses[agent_name]
-        state_style = STATUS_STYLES.get(status, "white")
-        worker_label = SPECIALIST_WORKER_LABELS[agent_name]
-        node = state.topology_nodes[worker_label]
-        table.add_row(
-            agent_name,
-            f"[{state_style}]{status}[/{state_style}]",
-            f"{worker_label}\n{node.address}\n{_short_worker_id(node.worker_id)}",
-            detail,
+        register_demo_message_types(copilot_worker)
+        copilot_worker.register_factory(
+            TELEMETRY_AGENT_TYPE,
+            lambda engine: TelemetryReceiverAgent(engine, telemetry),
         )
-    return Panel(
-        table,
-        title="[bold blue]Parallel Specialist Review[/bold blue]",
-        border_style="blue",
-    )
+        copilot_worker.subscribe_exact(
+            topic_type=TELEMETRY_TOPIC_TYPE,
+            agent_type=TELEMETRY_AGENT_TYPE,
+            delivery_mode=DeliveryMode.STATEFUL,
+        )
+        copilot_worker.register_factory(
+            REVIEW_RESULT_AGENT_TYPE,
+            lambda engine: ReviewResultAgent(engine, tracker, telemetry),
+        )
+        copilot_worker.subscribe_exact(
+            topic_type=REVIEW_COMPLETED_TOPIC_TYPE,
+            agent_type=REVIEW_RESULT_AGENT_TYPE,
+            delivery_mode=DeliveryMode.STATEFUL,
+        )
+        await copilot_worker.start()
+        copilot_node = update_runtime_node(
+            state,
+            label="copilot-worker",
+            address=copilot_worker.address,
+            worker_id=copilot_worker.worker_id or "unknown",
+            pid=str(os.getpid()),
+            node_state="ready",
+        )
+        telemetry.emit(
+            "topology",
+            (
+                f"→ copilot-worker ready at {copilot_node.address} "
+                f"worker_id={_short_worker_id(copilot_node.worker_id)} "
+                f"pid={os.getpid()}"
+            ),
+        )
 
-
-def build_timeline_panel(state: DemoUIState) -> Panel:
-    """Render the rolling timeline panel."""
-    if not state.timeline:
-        body: object = Text("Awaiting activity...", style="dim")
-    else:
-        body = Group(*[Text.from_markup(line) for line in state.timeline])
-    return Panel(
-        body, title="[bold white]Event Timeline[/bold white]", border_style="white"
-    )
-
-
-def _tail_text(value: str, max_chars: int) -> str:
-    """Return the last `max_chars` characters from a string."""
-    if len(value) <= max_chars:
-        return value
-    return value[-max_chars:]
-
-
-def _short_worker_id(worker_id: str) -> str:
-    """Return a compact worker id for dense terminal tables."""
-    if worker_id in {"pending", "control-plane"}:
-        return worker_id
-    return worker_id[:8]
-
-
-def append_reasoning_chunk(state: DemoUIState, reasoning_chunk: str) -> None:
-    """Append one reasoning event without rewriting the earlier stream."""
-    if not reasoning_chunk:
-        return
-
-    if reasoning_chunk == state.last_reasoning_text:
-        return
-
-    if state.last_reasoning_text and reasoning_chunk.startswith(
-        state.last_reasoning_text
-    ):
-        state.reasoning_text = reasoning_chunk
-    else:
-        state.reasoning_text += reasoning_chunk
-
-    state.last_reasoning_text = reasoning_chunk
-
-
-async def consume_stream(stream: RunStream, state: DemoUIState) -> None:
-    """Consume top-level model stream events into the dashboard state."""
-    last_openai_phase: str | None = None
-    async for event in stream:
-        model_event = _coerce_stream_event(event)
-        if (
-            model_event.kind == ModelStreamEventKind.REASONING
-            and model_event.reasoning is not None
-        ):
-            reasoning_chunk = (
-                model_event.reasoning
-                if isinstance(model_event.reasoning, str)
-                else str(model_event.reasoning)
+        cluster = RuntimeCluster(host=host, copilot_worker=copilot_worker)
+        if args.mode == "multiprocess":
+            for role in WORKER_ROLE_ORDER:
+                handle = await launch_worker_process(
+                    args=args,
+                    host_address=host.address,
+                    role=role,
+                    session_id=session_id,
+                    state=state,
+                    telemetry=telemetry,
+                )
+                cluster.worker_processes.append(handle)
+        else:
+            cluster.local_workers = await start_in_process_workers(
+                args=args,
+                host_address=host.address,
+                state=state,
+                telemetry=telemetry,
             )
-            append_reasoning_chunk(state, reasoning_chunk)
-            continue
-        if model_event.kind == ModelStreamEventKind.TEXT_DELTA and model_event.text:
-            state.stream_text += model_event.text
-            continue
-        if (
-            model_event.kind == ModelStreamEventKind.TOOL_CALL_ARGUMENTS_DELTA
-            and model_event.arguments_delta
-        ):
-            state.tool_arguments_text += model_event.arguments_delta
-            continue
-        if (
-            model_event.kind == ModelStreamEventKind.PROVIDER
-            and model_event.provider_event_type is not None
-        ):
-            raw_item = getattr(model_event.raw, "item", None)
-            raw_phase = getattr(raw_item, "phase", None)
-            if isinstance(raw_phase, str) and raw_phase != last_openai_phase:
-                last_openai_phase = raw_phase
-                state.phases.append(raw_phase)
-                state.append_timeline("stream", f"→ model phase `{raw_phase}`")
+        return cluster
+    except Exception:
+        if cluster is not None:
+            await stop_cluster(cluster, state)
+        else:
+            if copilot_worker is not None and copilot_worker.is_running:
+                await copilot_worker.stop_when_idle()
+            if host.is_running:
+                await host.stop_when_idle()
+        raise
 
 
-async def drain_telemetry(
+async def start_in_process_workers(
+    *,
+    args: argparse.Namespace,
+    host_address: str,
+    state: DemoUIState,
+    telemetry: DemoTelemetry,
+) -> list[tuple[str, WorkerAgentRuntime]]:
+    """Start specialist and aggregator workers inside the controller process."""
+    workers: list[tuple[str, WorkerAgentRuntime]] = []
+    for role in WORKER_ROLE_ORDER:
+        worker = WorkerAgentRuntime(
+            host_address=host_address,
+            address=args.worker_bind_address,
+            worker_count=args.worker_count,
+        )
+        register_demo_message_types(worker)
+        register_worker_role(worker, role)
+        workers.append((WORKER_ROLE_TO_LABEL[role], worker))
+
+    await asyncio.gather(*(worker.start() for _, worker in workers))
+    for label, worker in workers:
+        node = update_runtime_node(
+            state,
+            label=label,
+            address=worker.address,
+            worker_id=worker.worker_id or "unknown",
+            pid=str(os.getpid()),
+            node_state="ready",
+        )
+        telemetry.emit(
+            "topology",
+            (
+                f"→ {label} ready at {node.address} "
+                f"worker_id={_short_worker_id(node.worker_id)} pid={os.getpid()}"
+            ),
+        )
+    return workers
+
+
+async def launch_worker_process(
+    *,
+    args: argparse.Namespace,
+    host_address: str,
+    role: str,
+    session_id: str,
+    state: DemoUIState,
+    telemetry: DemoTelemetry,
+) -> WorkerProcessHandle:
+    """Launch one role worker as a subprocess and wait for readiness."""
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    existing_python_path = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = (
+        str(REPO_ROOT)
+        if not existing_python_path
+        else f"{REPO_ROOT}{os.pathsep}{existing_python_path}"
+    )
+    command = [
+        sys.executable,
+        "-m",
+        "examples.harness.distributed_clinical_inbox_copilot.worker",
+        "--role",
+        role,
+        "--host-address",
+        host_address,
+        "--bind-address",
+        args.worker_bind_address,
+        "--worker-count",
+        str(args.worker_count),
+        "--session-id",
+        session_id,
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+    try:
+        ready = await read_worker_ready(
+            process,
+            role=role,
+            timeout_seconds=args.worker_start_timeout_seconds,
+        )
+    except Exception:
+        await stop_worker_process(
+            WorkerProcessHandle(
+                role=role,
+                label=WORKER_ROLE_TO_LABEL[role],
+                process=process,
+            )
+        )
+        raise
+    label = str(ready["label"])
+    node = update_runtime_node(
+        state,
+        label=label,
+        address=str(ready["address"]),
+        worker_id=str(ready["worker_id"]),
+        pid=str(ready["pid"]),
+        node_state="ready",
+    )
+    telemetry.emit(
+        "topology",
+        (
+            f"→ {label} subprocess ready at {node.address} "
+            f"worker_id={_short_worker_id(node.worker_id)} pid={node.pid}"
+        ),
+    )
+    handle = WorkerProcessHandle(
+        role=role,
+        label=label,
+        process=process,
+    )
+    handle.stderr_task = asyncio.create_task(drain_process_stderr(handle, telemetry))
+    return handle
+
+
+async def read_worker_ready(
+    process: asyncio.subprocess.Process,
+    *,
+    role: str,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    """Read and validate one subprocess readiness record."""
+    if process.stdout is None:
+        raise RuntimeError(f"Worker process for role '{role}' has no stdout pipe.")
+    try:
+        raw_line = await asyncio.wait_for(
+            process.stdout.readline(),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Timed out waiting for worker process role '{role}' to become ready."
+        ) from exc
+    if not raw_line:
+        return_code = await process.wait()
+        raise RuntimeError(
+            f"Worker process role '{role}' exited before readiness "
+            f"with code {return_code}."
+        )
+
+    decoded: object = json.loads(raw_line.decode("utf-8"))
+    if not isinstance(decoded, dict):
+        raise RuntimeError(f"Worker process role '{role}' returned invalid readiness.")
+    payload = cast(dict[str, object], decoded)
+    event_type = payload.get("type")
+    if not isinstance(event_type, str):
+        raise RuntimeError(
+            f"Worker process role '{role}' returned readiness without an event type."
+        )
+    if event_type == "worker_error":
+        error = payload.get("error", "unknown error")
+        raise RuntimeError(
+            f"Worker process role '{role}' failed before readiness: {error}"
+        )
+    if event_type != "worker_ready":
+        raise RuntimeError(
+            f"Worker process role '{role}' returned unexpected event: {payload!r}"
+        )
+    return payload
+
+
+async def drain_process_stderr(
+    handle: WorkerProcessHandle,
+    telemetry: DemoTelemetry,
+) -> None:
+    """Forward subprocess stderr lines into the UI timeline."""
+    if handle.process.stderr is None:
+        return
+    while True:
+        raw_line = await handle.process.stderr.readline()
+        if not raw_line:
+            return
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if line:
+            telemetry.emit("topology", f"{handle.label} stderr: {line}")
+
+
+async def stop_cluster(cluster: RuntimeCluster, state: DemoUIState) -> None:
+    """Stop child processes, local workers, controller worker, and host."""
+    for handle in reversed(cluster.worker_processes):
+        await stop_worker_process(handle)
+        update_runtime_node(state, label=handle.label, node_state="stopped")
+
+    for label, worker in reversed(cluster.local_workers):
+        if worker.is_running:
+            await worker.stop_when_idle()
+        update_runtime_node(state, label=label, node_state="stopped")
+
+    if cluster.copilot_worker.is_running:
+        await cluster.copilot_worker.stop_when_idle()
+    update_runtime_node(state, label="copilot-worker", node_state="stopped")
+
+    if cluster.host.is_running:
+        await cluster.host.stop_when_idle()
+    update_runtime_node(state, label="host", node_state="stopped")
+
+
+async def stop_worker_process(handle: WorkerProcessHandle) -> None:
+    """Terminate one subprocess worker and clean up drain tasks."""
+    if handle.process.returncode is None:
+        handle.process.terminate()
+        try:
+            await asyncio.wait_for(handle.process.wait(), timeout=5.0)
+        except TimeoutError:
+            handle.process.kill()
+            await handle.process.wait()
+
+    if handle.stderr_task is not None:
+        handle.stderr_task.cancel()
+        await asyncio.gather(handle.stderr_task, return_exceptions=True)
+
+
+async def publish_review_and_wait(
+    *,
+    args: argparse.Namespace,
+    inputs: DemoInputs,
+    session: SessionState,
     telemetry: DemoTelemetry,
     state: DemoUIState,
-    *,
-    stop_when_idle: asyncio.Event,
-) -> None:
-    """Drain queued telemetry into the live dashboard state."""
-    while True:
-        if stop_when_idle.is_set() and telemetry.queue.empty():
-            return
-        try:
-            event = await asyncio.wait_for(telemetry.queue.get(), timeout=0.1)
-        except TimeoutError:
-            continue
+    tracker: ReviewCompletionTracker,
+    copilot_worker: WorkerAgentRuntime,
+    patient_message: str,
+) -> AggregatedClinicalReview:
+    """Publish one clinical review request and wait for distributed fan-in."""
+    if session.chart_snapshot is None:
+        raise RuntimeError("Chart snapshot must be loaded before parallel review.")
 
-        actor_style = ACTOR_STYLES.get(event.actor, "white")
-        state.timeline.append(
-            f"[dim][{event.timestamp}][/dim] "
-            f"[{actor_style}]{event.actor:<20}[/{actor_style}] "
-            f"[dim]|[/dim] {event.message}"
+    session.review_counter += 1
+    review_id = f"review-{session.review_counter:02d}"
+    tracker.register(review_id)
+    telemetry.emit(
+        "system",
+        f"→ publishing {review_id} through distributed host session={session.session_id}",
+    )
+    for specialist_name in SPECIALIST_NAMES:
+        worker_label = SPECIALIST_WORKER_LABELS[specialist_name]
+        worker_node = state.topology_nodes[worker_label]
+        telemetry.emit(
+            "system",
+            f"• Queued {specialist_name} on {worker_label}",
+            status_target=specialist_name,
+            status_state="queued",
+            status_detail=f"Queued on {worker_node.address} pid={worker_node.pid}",
         )
-        if event.status_target is not None:
-            current_state, current_detail = state.specialist_statuses[
-                event.status_target
-            ]
-            state.specialist_statuses[event.status_target] = (
-                event.status_state or current_state,
-                event.status_detail or current_detail,
-            )
+
+    request = ClinicalReviewTask(
+        session_id=session.session_id,
+        review_id=review_id,
+        clinician_name=inputs.clinician_name,
+        patient_label=inputs.patient_label,
+        patient_message=patient_message,
+        chart_snapshot=session.chart_snapshot,
+    )
+    ack = await copilot_worker.publish_message(
+        request,
+        topic=TopicId.from_values(
+            type_value=REVIEW_TOPIC_TYPE,
+            route_key=review_id,
+        ),
+    )
+    telemetry.emit(
+        "system",
+        f"→ distributed fan-out enqueued {ack.enqueued_recipient_count} deliveries",
+    )
+    if ack.enqueued_recipient_count != len(SPECIALIST_NAMES):
+        raise RuntimeError(
+            "Distributed review fan-out expected "
+            f"{len(SPECIALIST_NAMES)} deliveries, got "
+            f"{ack.enqueued_recipient_count}."
+        )
+
+    return await tracker.wait_for_result(
+        review_id,
+        timeout_seconds=args.timeout_seconds,
+    )
 
 
-async def refresh_dashboard(
-    live: Live,
-    state: DemoUIState,
+async def run_smoke_review(
     *,
-    stop_when_done: asyncio.Event,
+    args: argparse.Namespace,
+    inputs: DemoInputs,
+    state: DemoUIState,
+    telemetry: DemoTelemetry,
+    tracker: ReviewCompletionTracker,
+    session: SessionState,
+    cluster: RuntimeCluster,
 ) -> None:
-    """Refresh the live dashboard at a steady cadence."""
-    while not stop_when_done.is_set():
-        live.update(build_dashboard(state), refresh=True)
-        await asyncio.sleep(0.1)
-    live.update(build_dashboard(state), refresh=True)
+    """Run a model-free distributed review through the same worker topology."""
+    session.chart_snapshot = build_chart_snapshot(inputs)
+    review = await publish_review_and_wait(
+        args=args,
+        inputs=inputs,
+        session=session,
+        telemetry=telemetry,
+        state=state,
+        tracker=tracker,
+        copilot_worker=cluster.copilot_worker,
+        patient_message=inputs.patient_message,
+    )
+    state.final_output = format_review_for_model(review)
+    CONSOLE.print(
+        f"smoke_review={review.review_id} findings={len(review.findings)} "
+        f"urgent={review.urgent_flag} mode={state.process_mode}"
+    )
 
 
-def _coerce_stream_event(event: object) -> ModelStreamEvent:
-    """Assert that one streamed item is a `ModelStreamEvent`."""
-    if not isinstance(event, ModelStreamEvent):
-        raise TypeError(f"Expected ModelStreamEvent, got {type(event)!r}.")
-    return event
-
-
-def update_runtime_node(
-    state: DemoUIState,
+async def run_model_demo(
     *,
-    label: str,
-    address: str | None = None,
-    worker_id: str | None = None,
-    node_state: str | None = None,
-) -> RuntimeNode:
-    """Update one topology node shown in the live dashboard."""
-    node = state.topology_nodes[label]
-    if address is not None:
-        node.address = address
-    if worker_id is not None:
-        node.worker_id = worker_id
-    if node_state is not None:
-        node.state = node_state
-    return node
+    args: argparse.Namespace,
+    inputs: DemoInputs,
+    state: DemoUIState,
+    telemetry: DemoTelemetry,
+    tracker: ReviewCompletionTracker,
+    session: SessionState,
+    cluster: RuntimeCluster,
+) -> None:
+    """Run the streamed OpenAI-backed clinical copilot demo."""
+    api_key = os.environ["OPENAI_API_KEY"]
+    model = ResponsesClient(
+        config=Config(
+            api_key=api_key,
+            model=args.model,
+        )
+    )
 
+    @as_tool
+    async def load_patient_snapshot(patient_label: str) -> str:
+        """Load the concise chart snapshot for the current patient."""
+        snapshot = build_chart_snapshot(inputs)
+        session.chart_snapshot = snapshot
+        telemetry.emit(
+            "tool",
+            f"→ loaded chart snapshot for {patient_label}",
+        )
+        return snapshot
 
-def register_demo_message_types(worker: WorkerAgentRuntime) -> None:
-    """Register typed payloads that cross distributed worker boundaries."""
-    worker.register_message_type(ClinicalReviewTask)
-    worker.register_message_type(SpecialistFinding)
+    @as_tool
+    async def launch_parallel_review(patient_message: str) -> str:
+        """Launch the parallel clinical specialist review for the inbox message."""
+        review = await publish_review_and_wait(
+            args=args,
+            inputs=inputs,
+            session=session,
+            telemetry=telemetry,
+            state=state,
+            tracker=tracker,
+            copilot_worker=cluster.copilot_worker,
+            patient_message=patient_message,
+        )
+        return format_review_for_model(review)
+
+    descriptor = AgentDescriptor(
+        name="Clinical Inbox Copilot",
+        description=(
+            "Streams clinician-facing reasoning, tools, and synthesis for one "
+            "mock patient inbox review."
+        ),
+        model=model,
+        model_args={"reasoning": {"effort": "medium", "summary": "detailed"}},
+        instructions=textwrap.dedent(f"""
+            You are Clinical Inbox Copilot assisting {inputs.clinician_name}.
+            This is a mock clinical workflow demo, not autonomous diagnosis.
+
+            Follow this exact sequence:
+            1. Start with a short two-step preamble about what you will check.
+            2. Call `load_patient_snapshot` exactly once using the patient label.
+            3. Call `launch_parallel_review` exactly once using the patient inbox message.
+            4. After both tools return, produce:
+               - `Clinician View` with exactly 3 bullets
+               - `Suggested Next Step` with one sentence
+               - `Draft Reply To Patient` with one concise paragraph under 90 words
+
+            Constraints:
+            - Use only the facts returned by the tools.
+            - If the review shows urgent risk, say same-day escalation is needed.
+            - Keep the tone concise, clinical, and operational.
+            """).strip(),
+        tools=Tools(
+            tools=[load_patient_snapshot, launch_parallel_review],
+            parallel_tool_calls=False,
+            tool_call_timeout=max(args.timeout_seconds + 10.0, 30.0),
+            tool_call_max_retries=0,
+            tool_call_limits={
+                "load_patient_snapshot": 1,
+                "launch_parallel_review": 1,
+            },
+        ),
+    )
+    agent = DefaultAgent(
+        descriptor=descriptor,
+        runtime=cluster.copilot_worker,
+        hooks=InboxCopilotHooks(telemetry),
+    )
+
+    stream = await agent.run_stream(build_user_prompt(inputs))
+    telemetry_done = asyncio.Event()
+    refresh_done = asyncio.Event()
+
+    with Live(
+        build_dashboard(state),
+        console=CONSOLE,
+        refresh_per_second=10,
+        screen=False,
+    ) as live:
+        telemetry_task = asyncio.create_task(
+            drain_telemetry(
+                telemetry,
+                state,
+                stop_when_idle=telemetry_done,
+            )
+        )
+        refresh_task = asyncio.create_task(
+            refresh_dashboard(
+                live,
+                state,
+                stop_when_done=refresh_done,
+            )
+        )
+        try:
+            await consume_stream(stream, state)
+            result: RunResult = await stream.result()
+            final_output = (
+                result.final_output
+                if isinstance(result.final_output, str)
+                else str(result.final_output)
+            )
+            state.final_output = final_output
+        finally:
+            telemetry_done.set()
+            await telemetry_task
+            refresh_done.set()
+            await refresh_task
 
 
 async def run_demo(args: argparse.Namespace) -> None:
@@ -1049,319 +904,55 @@ async def run_demo(args: argparse.Namespace) -> None:
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
-    api_key = os.environ["OPENAI_API_KEY"]
+    if args.multiprocess:
+        args.mode = "multiprocess"
+
     inputs = resolve_inputs(args)
     telemetry = DemoTelemetry()
-    state = DemoUIState(inputs=inputs)
-    session = SessionState()
-
-    model = ResponsesClient(
-        config=Config(
-            api_key=api_key,
-            model=args.model,
-        )
-    )
-
-    host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
+    state = DemoUIState(inputs=inputs, process_mode=args.mode)
     tracker = ReviewCompletionTracker()
-    workers: list[tuple[str, WorkerAgentRuntime]] = []
+    session = SessionState(session_id=f"clinical-{uuid4().hex[:10]}")
+    cluster: RuntimeCluster | None = None
     try:
-        await host.start()
-        host_node = update_runtime_node(
-            state,
-            label="host",
-            address=host.address,
-            worker_id="control-plane",
-            node_state="ready",
+        cluster = await start_cluster(
+            args=args,
+            state=state,
+            telemetry=telemetry,
+            tracker=tracker,
+            session_id=session.session_id,
         )
-        telemetry.emit("host", f"→ distributed host listening at {host_node.address}")
-
-        copilot_worker = WorkerAgentRuntime(
-            host_address=host.address,
-            worker_count=args.worker_count,
-        )
-        med_safety_worker = WorkerAgentRuntime(
-            host_address=host.address,
-            worker_count=args.worker_count,
-        )
-        guideline_worker = WorkerAgentRuntime(
-            host_address=host.address,
-            worker_count=args.worker_count,
-        )
-        chart_history_worker = WorkerAgentRuntime(
-            host_address=host.address,
-            worker_count=args.worker_count,
-        )
-        patient_comms_worker = WorkerAgentRuntime(
-            host_address=host.address,
-            worker_count=args.worker_count,
-        )
-        aggregator_worker = WorkerAgentRuntime(
-            host_address=host.address,
-            worker_count=args.worker_count,
-        )
-        workers = [
-            ("copilot-worker", copilot_worker),
-            ("med-safety-worker", med_safety_worker),
-            ("guideline-worker", guideline_worker),
-            ("chart-history-worker", chart_history_worker),
-            ("patient-comms-worker", patient_comms_worker),
-            ("aggregator-worker", aggregator_worker),
-        ]
-        for _, worker in workers:
-            register_demo_message_types(worker)
-
-        med_safety_worker.register_factory(
-            MED_SAFETY_AGENT_TYPE,
-            lambda engine: MedSafetyAgent(engine, telemetry),
-        )
-        med_safety_worker.subscribe_exact(
-            topic_type=REVIEW_TOPIC_TYPE,
-            agent_type=MED_SAFETY_AGENT_TYPE,
-            delivery_mode=DeliveryMode.STATELESS,
-        )
-
-        guideline_worker.register_factory(
-            GUIDELINE_AGENT_TYPE,
-            lambda engine: GuidelineAgent(engine, telemetry),
-        )
-        guideline_worker.subscribe_exact(
-            topic_type=REVIEW_TOPIC_TYPE,
-            agent_type=GUIDELINE_AGENT_TYPE,
-            delivery_mode=DeliveryMode.STATELESS,
-        )
-
-        chart_history_worker.register_factory(
-            CHART_HISTORY_AGENT_TYPE,
-            lambda engine: ChartHistoryAgent(engine, telemetry),
-        )
-        chart_history_worker.subscribe_exact(
-            topic_type=REVIEW_TOPIC_TYPE,
-            agent_type=CHART_HISTORY_AGENT_TYPE,
-            delivery_mode=DeliveryMode.STATELESS,
-        )
-
-        patient_comms_worker.register_factory(
-            PATIENT_COMMS_AGENT_TYPE,
-            lambda engine: PatientCommsAgent(engine, telemetry),
-        )
-        patient_comms_worker.subscribe_exact(
-            topic_type=REVIEW_TOPIC_TYPE,
-            agent_type=PATIENT_COMMS_AGENT_TYPE,
-            delivery_mode=DeliveryMode.STATELESS,
-        )
-
-        aggregator_worker.register_factory(
-            AGGREGATOR_AGENT_TYPE,
-            lambda engine: ReviewAggregatorAgent(
-                engine,
-                telemetry,
-                tracker,
-                expected_finding_count=len(SPECIALIST_NAMES),
-            ),
-        )
-        aggregator_worker.subscribe_exact(
-            topic_type=RESULT_TOPIC_TYPE,
-            agent_type=AGGREGATOR_AGENT_TYPE,
-            delivery_mode=DeliveryMode.STATEFUL,
-        )
-
-        await asyncio.gather(*(worker.start() for _, worker in workers))
-        for label, worker in workers:
-            node = update_runtime_node(
-                state,
-                label=label,
-                address=worker.address,
-                worker_id=worker.worker_id or "unknown",
-                node_state="ready",
+        if args.smoke_review:
+            await run_smoke_review(
+                args=args,
+                inputs=inputs,
+                state=state,
+                telemetry=telemetry,
+                tracker=tracker,
+                session=session,
+                cluster=cluster,
             )
-            telemetry.emit(
-                "topology",
-                (
-                    f"→ {label} ready at {node.address} "
-                    f"worker_id={_short_worker_id(node.worker_id)}"
-                ),
+        else:
+            await run_model_demo(
+                args=args,
+                inputs=inputs,
+                state=state,
+                telemetry=telemetry,
+                tracker=tracker,
+                session=session,
+                cluster=cluster,
             )
-
-        @as_tool
-        async def load_patient_snapshot(patient_label: str) -> str:
-            """Load the concise chart snapshot for the current patient."""
-            snapshot = build_chart_snapshot(inputs)
-            session.chart_snapshot = snapshot
-            telemetry.emit(
-                "tool",
-                f"→ loaded chart snapshot for {patient_label}",
-            )
-            return snapshot
-
-        @as_tool
-        async def launch_parallel_review(patient_message: str) -> str:
-            """Launch the parallel clinical specialist review for the inbox message."""
-            if session.chart_snapshot is None:
-                raise RuntimeError(
-                    "Chart snapshot must be loaded before parallel review."
-                )
-
-            session.review_counter += 1
-            review_id = f"review-{session.review_counter:02d}"
-            tracker.register(review_id)
-            telemetry.emit(
-                "system",
-                (
-                    f"→ publishing {review_id} through distributed host "
-                    f"{host.address}"
-                ),
-            )
-            for specialist_name in SPECIALIST_NAMES:
-                worker_label = SPECIALIST_WORKER_LABELS[specialist_name]
-                worker_node = state.topology_nodes[worker_label]
-                telemetry.emit(
-                    "system",
-                    f"• Queued {specialist_name} on {worker_label}",
-                    status_target=specialist_name,
-                    status_state="queued",
-                    status_detail=f"Queued on {worker_node.address}",
-                )
-
-            request = ClinicalReviewTask(
-                review_id=review_id,
-                clinician_name=inputs.clinician_name,
-                patient_label=inputs.patient_label,
-                patient_message=patient_message,
-                chart_snapshot=session.chart_snapshot,
-            )
-            ack = await copilot_worker.publish_message(
-                request,
-                topic=TopicId.from_values(
-                    type_value=REVIEW_TOPIC_TYPE,
-                    route_key=review_id,
-                ),
-            )
-            telemetry.emit(
-                "system",
-                f"→ distributed fan-out enqueued {ack.enqueued_recipient_count} deliveries",
-            )
-            if ack.enqueued_recipient_count != len(SPECIALIST_NAMES):
-                raise RuntimeError(
-                    "Distributed review fan-out expected "
-                    f"{len(SPECIALIST_NAMES)} deliveries, got "
-                    f"{ack.enqueued_recipient_count}."
-                )
-
-            review = await tracker.wait_for_result(
-                review_id,
-                timeout_seconds=args.timeout_seconds,
-            )
-            telemetry.emit(
-                "aggregator",
-                f"→ aggregated review ready for {review.review_id} from distributed fan-in",
-            )
-            return format_review_for_model(review)
-
-        descriptor = AgentDescriptor(
-            name="Clinical Inbox Copilot",
-            description=(
-                "Streams clinician-facing reasoning, tools, and synthesis for one "
-                "mock patient inbox review."
-            ),
-            model=model,
-            model_args={"reasoning": {"effort": "medium", "summary": "detailed"}},
-            instructions=textwrap.dedent(f"""
-                You are Clinical Inbox Copilot assisting {inputs.clinician_name}.
-                This is a mock clinical workflow demo, not autonomous diagnosis.
-
-                Follow this exact sequence:
-                1. Start with a short two-step preamble about what you will check.
-                2. Call `load_patient_snapshot` exactly once using the patient label.
-                3. Call `launch_parallel_review` exactly once using the patient inbox message.
-                4. After both tools return, produce:
-                   - `Clinician View` with exactly 3 bullets
-                   - `Suggested Next Step` with one sentence
-                   - `Draft Reply To Patient` with one concise paragraph under 90 words
-
-                Constraints:
-                - Use only the facts returned by the tools.
-                - If the review shows urgent risk, say same-day escalation is needed.
-                - Keep the tone concise, clinical, and operational.
-                """).strip(),
-            tools=Tools(
-                tools=[load_patient_snapshot, launch_parallel_review],
-                parallel_tool_calls=False,
-                tool_call_timeout=max(args.timeout_seconds + 10.0, 30.0),
-                tool_call_max_retries=0,
-                tool_call_limits={
-                    "load_patient_snapshot": 1,
-                    "launch_parallel_review": 1,
-                },
-            ),
-        )
-        agent = DefaultAgent(
-            descriptor=descriptor,
-            runtime=copilot_worker,
-            hooks=InboxCopilotHooks(telemetry),
-        )
-
-        user_prompt = build_user_prompt(inputs)
-        stream = await agent.run_stream(user_prompt)
-        telemetry_done = asyncio.Event()
-        refresh_done = asyncio.Event()
-
-        with Live(
-            build_dashboard(state),
-            console=CONSOLE,
-            refresh_per_second=10,
-            screen=False,
-        ) as live:
-            telemetry_task = asyncio.create_task(
-                drain_telemetry(
-                    telemetry,
-                    state,
-                    stop_when_idle=telemetry_done,
-                )
-            )
-            refresh_task = asyncio.create_task(
-                refresh_dashboard(
-                    live,
-                    state,
-                    stop_when_done=refresh_done,
-                )
-            )
-            try:
-                await consume_stream(stream, state)
-                result: RunResult = await stream.result()
-                final_output = (
-                    result.final_output
-                    if isinstance(result.final_output, str)
-                    else str(result.final_output)
-                )
-                state.final_output = final_output
-            finally:
-                telemetry_done.set()
-                await telemetry_task
-                refresh_done.set()
-                await refresh_task
     finally:
-        for label, worker in reversed(workers):
-            if worker.is_running:
-                await worker.stop_when_idle()
-            update_runtime_node(state, label=label, node_state="stopped")
-        if host.is_running:
-            await host.stop_when_idle()
-        update_runtime_node(state, label="host", node_state="stopped")
+        if cluster is not None:
+            await stop_cluster(cluster, state)
 
     print_final_summary(state)
 
 
-def print_final_summary(state: DemoUIState) -> None:
-    """Print the final persisted result after the live dashboard exits."""
-    CONSOLE.print()
-    CONSOLE.print(
-        Panel(
-            Text(state.final_output or "No final output captured.", style="white"),
-            title="[bold green]Final Response[/bold green]",
-            border_style="green",
-        )
-    )
+def _short_worker_id(worker_id: str) -> str:
+    """Return a compact worker id for dense terminal tables."""
+    if worker_id in {"pending", "control-plane"}:
+        return worker_id
+    return worker_id[:8]
 
 
 def main() -> None:
