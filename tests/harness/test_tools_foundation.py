@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from tools_test_utils import echo_tool, run_state
 
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
@@ -15,6 +14,8 @@ from agentlane.harness.tools import (
     truncate_output,
 )
 from agentlane.models import Tools
+
+from .tools_test_utils import echo_tool, run_state
 
 
 def test_base_harness_tools_includes_current_tool_set() -> None:

@@ -32,7 +32,7 @@ lint-static:
 
 .PHONY: mypy
 mypy:
-	uv run mypy .
+	uv run mypy src packages tests
 
 .PHONY: pyright
 pyright:

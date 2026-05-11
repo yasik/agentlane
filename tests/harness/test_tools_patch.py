@@ -4,19 +4,20 @@ from typing import cast
 
 import patch_tool as patch_engine
 import pytest
-from tools_test_utils import (
-    SequenceModel,
-    make_assistant_response,
-    make_tool_call,
-    run_state,
-    run_tool,
-)
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import HarnessToolsShim, ToolPathResolver, patch_tool
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
+
+from .tools_test_utils import (
+    SequenceModel,
+    make_assistant_response,
+    make_tool_call,
+    run_state,
+    run_tool,
+)
 
 
 def test_patch_tool_applies_search_replace_block(tmp_path: Path) -> None:

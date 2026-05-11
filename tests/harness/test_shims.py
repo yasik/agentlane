@@ -171,7 +171,7 @@ async def _echo_from_shim(
 
 class _AddEchoToolShim(Shim):
     def __init__(self) -> None:
-        self._tool = Tool(
+        self._tool: Tool[_EchoArgs, str] = Tool(
             name="echo_from_shim",
             description="Echo the provided text.",
             args_model=_EchoArgs,

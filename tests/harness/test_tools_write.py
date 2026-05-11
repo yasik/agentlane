@@ -3,19 +3,20 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from tools_test_utils import (
-    SequenceModel,
-    make_assistant_response,
-    make_tool_call,
-    run_state,
-    run_tool,
-)
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import HarnessToolsShim, ToolPathResolver, write_tool
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
+
+from .tools_test_utils import (
+    SequenceModel,
+    make_assistant_response,
+    make_tool_call,
+    run_state,
+    run_tool,
+)
 
 
 def test_write_tool_creates_new_file_and_reports_byte_count(tmp_path: Path) -> None:

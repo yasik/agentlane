@@ -101,7 +101,7 @@ def test_prompt_spec_pairs_template_with_values(mock_output_schema: Any) -> None
         output_schema=mock_output_schema,
     )
 
-    prompt_spec = PromptSpec(
+    prompt_spec = PromptSpec[dict[str, object]](
         template=prompt_template,
         values={"team": "ops"},
     )

@@ -121,7 +121,7 @@ def bash_tool(
             return _GENERIC_BASH_ERROR
 
     return HarnessToolDefinition(
-        tool=Tool(
+        tool=Tool[_ToolArgs, str](
             name=_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
