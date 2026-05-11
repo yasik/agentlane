@@ -2,12 +2,6 @@ import asyncio
 
 import pytest
 from pydantic import ValidationError
-from tools_test_utils import (
-    SequenceModel,
-    echo_tool,
-    make_assistant_response,
-    make_tool_call,
-)
 
 from agentlane.harness import AgentDescriptor, Runner
 from agentlane.harness._handoff import (
@@ -21,6 +15,13 @@ from agentlane.harness.tools._shim import render_harness_tools_prompt
 from agentlane.messaging import DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import MessageDict, ModelResponse, Tools
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+
+from .tools_test_utils import (
+    SequenceModel,
+    echo_tool,
+    make_assistant_response,
+    make_tool_call,
+)
 
 
 def _message(role: str, content: object) -> MessageDict:

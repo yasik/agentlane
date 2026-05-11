@@ -980,7 +980,7 @@ def test_runner_executes_parallel_tool_calls_and_invokes_hooks() -> None:
             await release.wait()
             return f"done:{args.text}"
 
-        tool = Tool(
+        tool: Tool[_EchoArgs, str] = Tool(
             name="echo",
             description="Echo text",
             args_model=_EchoArgs,
@@ -1063,13 +1063,13 @@ def test_runner_filters_exhausted_tools_on_later_turns() -> None:
             del cancellation_token
             return f"lookup:{args.text}"
 
-        echo_tool = Tool(
+        echo_tool: Tool[_EchoArgs, str] = Tool(
             name="echo",
             description="Echo text",
             args_model=_EchoArgs,
             handler=echo_handler,
         )
-        lookup_tool = Tool(
+        lookup_tool: Tool[_EchoArgs, str] = Tool(
             name="lookup",
             description="Lookup text",
             args_model=_EchoArgs,
@@ -1130,7 +1130,7 @@ def test_runner_disables_tools_after_max_round_trips() -> None:
             del cancellation_token
             return f"echo:{args.text}"
 
-        tool = Tool(
+        tool: Tool[_EchoArgs, str] = Tool(
             name="echo",
             description="Echo text",
             args_model=_EchoArgs,

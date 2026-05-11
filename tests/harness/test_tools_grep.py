@@ -5,14 +5,6 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 from ripgrepy import RipGrepNotFound, Ripgrepy
-from tools_test_utils import (
-    FakeRipgrepResult,
-    SequenceModel,
-    make_assistant_response,
-    make_tool_call,
-    run_state,
-    run_tool,
-)
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
@@ -24,6 +16,15 @@ from agentlane.harness.tools import (
 )
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
+
+from .tools_test_utils import (
+    FakeRipgrepResult,
+    SequenceModel,
+    make_assistant_response,
+    make_tool_call,
+    run_state,
+    run_tool,
+)
 
 
 def test_grep_tool_searches_directory_with_regex(tmp_path: Path) -> None:

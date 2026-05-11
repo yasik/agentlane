@@ -57,7 +57,7 @@ def _make_tool_call(arguments: str) -> ToolCall:
 
 def test_tool_runs_and_formats_pydantic_result() -> None:
     """Tool.run should execute the handler and stringify Pydantic output."""
-    tool = Tool(
+    tool: Tool[EchoArgs, EchoResult] = Tool(
         name="echo",
         description="Echo text",
         args_model=EchoArgs,
@@ -215,7 +215,7 @@ def test_tools_keep_declarative_tool_specs_while_filtering_executable_tools() ->
         description="Delegate one policy lookup.",
         args_model=EchoArgs,
     )
-    executable_tool = Tool(
+    executable_tool: Tool[EchoArgs, EchoResult] = Tool(
         name="echo",
         description="Echo text",
         args_model=EchoArgs,
@@ -233,7 +233,7 @@ def test_tools_keep_declarative_tool_specs_while_filtering_executable_tools() ->
 
 def test_tool_executor_returns_chat_completion_tool_message() -> None:
     """The default tool adapter should emit a chat-completions tool message."""
-    tool = Tool(
+    tool: Tool[EchoArgs, EchoResult] = Tool(
         name="echo",
         description="Echo text",
         args_model=EchoArgs,

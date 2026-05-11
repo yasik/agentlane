@@ -3,13 +3,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from tools_test_utils import (
-    SequenceModel,
-    make_assistant_response,
-    make_tool_call,
-    run_state,
-    run_tool,
-)
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
@@ -22,6 +15,14 @@ from agentlane.harness.tools import (
 )
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
+
+from .tools_test_utils import (
+    SequenceModel,
+    make_assistant_response,
+    make_tool_call,
+    run_state,
+    run_tool,
+)
 
 
 def test_read_tool_reads_basic_text_file(tmp_path: Path) -> None:

@@ -104,7 +104,7 @@ def find_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
             return _GENERIC_FIND_ERROR
 
     return HarnessToolDefinition(
-        tool=Tool(
+        tool=Tool[_ToolArgs, str](
             name=_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,

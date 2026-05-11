@@ -3,15 +3,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from tools_test_utils import (
-    SequenceModel,
-    make_assistant_response,
-    make_tool_call,
-    run_state,
-    run_tool,
-    set_mtime,
-    touch,
-)
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
@@ -24,6 +15,16 @@ from agentlane.harness.tools import (
 )
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
+
+from .tools_test_utils import (
+    SequenceModel,
+    make_assistant_response,
+    make_tool_call,
+    run_state,
+    run_tool,
+    set_mtime,
+    touch,
+)
 
 
 def test_find_tool_matches_simple_glob(tmp_path: Path) -> None:

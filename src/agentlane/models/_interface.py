@@ -150,7 +150,7 @@ work with one canonical schema surface.
 def _normalize_tool(tool: ToolSource) -> ToolSpec[Any]:
     """Return one canonical tool schema from the accepted developer input."""
     if isinstance(tool, ToolSpec):
-        return cast(ToolSpec[Any], tool)
+        return cast(ToolSpec[Any], tool)  # type: ignore[redundant-cast]
     return Tool.from_function(tool)
 
 
@@ -217,7 +217,9 @@ class Tools:
         executable_tools: list[Tool[Any, Any]] = []
         for tool in self.normalized_tools:
             if isinstance(tool, Tool):
-                executable_tools.append(cast(Tool[Any, Any], tool))
+                executable_tools.append(
+                    cast(Tool[Any, Any], tool)  # type: ignore[redundant-cast]
+                )
         return tuple(executable_tools)
 
     def as_args(self) -> dict[str, Any]:
