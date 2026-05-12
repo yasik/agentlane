@@ -31,6 +31,8 @@ build/
 
 # tmp
 docs/plans/*
+src/agentlane/harness/context
+src/agentlane/harness/memory
 
 # AI
 .superset
