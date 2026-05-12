@@ -1,6 +1,6 @@
 # AgentLane
 
-**AgentLane is a runtime-first orchestration layer for building reliable, inspectable, production AI agents and workflows workflows.**
+**AgentLane is a runtime-first orchestration layer for building reliable, inspectable, production AI agents and workflows.**
 
 It is designed for systems where agent behavior needs to be explicit, structured, testable, and operable — especially in serious domains like healthcare where opaque prompt chains and autonomous demo loops are not enough.
 
@@ -138,28 +138,77 @@ uv sync --all-extras
 
 The harness gives you a simple agent interface when you want one, while still letting you drop down into explicit runtime and messaging primitives as your system grows.
 
-After installing the package, define an agent against your model client:
+After installing the package, define an agent descriptor against your model client:
 
 ```python
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
 
 
-class CareNavigationAgent(DefaultAgent):
-    descriptor = AgentDescriptor(
-        name="Care Navigation",
-        model=model,
-        instructions="You are a concise patient care navigation agent.",
-    )
+descriptor = AgentDescriptor(
+    name="Care Navigation",
+    model=model,
+    instructions="You are a concise patient care navigation agent.",
+)
 
+# The descriptor is the static model, prompt, and tool contract for this agent.
+agent = DefaultAgent(descriptor=descriptor)
 
-agent = CareNavigationAgent()
+# Each run executes one user turn and stores resumable run state on the agent.
 result = await agent.run("I feel dizzy after starting a new medication. What should I do first?")
 ```
 
 This is the simplest entry point.
 
-For workflows that need explicit routing, background specialists, pub/sub, or distributed execution, use the runtime layer directly.
+For distributed execution, keep the user-facing `DefaultAgent` at the top and
+send focused work to another addressed agent:
+
+```python
+from agentlane.harness import AgentDescriptor
+from agentlane.harness.agents import DefaultAgent
+from agentlane.messaging import AgentId, MessageContext
+from agentlane.models import Tools
+from agentlane.runtime import BaseAgent, distributed_runtime, on_message
+
+
+class SafetyReviewAgent(BaseAgent):
+    @on_message
+    async def handle(self, case: str, context: MessageContext) -> object:
+        # Worker agent: receives addressed work through the runtime.
+        _ = context
+        return {"recommendation": "same-day clinician review"}
+
+
+async with distributed_runtime() as runtime:
+    # 1. Register the worker agent type with the distributed runtime.
+    runtime.register_factory("safety_review", SafetyReviewAgent)
+
+    async def request_safety_review(case: str) -> object:
+        """Ask the addressed worker agent for a focused safety review."""
+        # 2. Bridge the model-facing tool call into runtime message routing.
+        outcome = await runtime.send_message(
+            case,
+            recipient=AgentId.from_values("safety_review", "case-1"),
+        )
+        return outcome.response_payload
+
+    descriptor = AgentDescriptor(
+        name="Care Navigation",
+        model=model,
+        instructions="Call `request_safety_review` for safety-sensitive cases.",
+        tools=Tools(tools=[request_safety_review]),
+    )
+
+    # 3. Run the user-facing agent on the same distributed runtime.
+    agent = DefaultAgent(
+        descriptor=descriptor,
+        runtime=runtime,
+    )
+    result = await agent.run("Review this case and identify the next step.")
+```
+
+For explicit worker placement, pub/sub, or multi-process execution, use the
+runtime layer directly.
 
 ## Repository examples
 
@@ -175,7 +224,17 @@ Run one high-level harness example with a real model:
 OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
 ```
 
-The runtime example shows explicit message passing.
+Run the distributed harness agent smoke test:
+
+```bash
+uv run python examples/harness/distributed_clinical_inbox_copilot/main.py \
+  --multiprocess \
+  --smoke-review
+```
+
+The runtime example shows explicit message passing. The distributed harness
+example shows a top-level agent coordinating worker runtimes through
+publish-based fan-out and fan-in.
 
 ## Choose the layer you need
 
@@ -185,8 +244,9 @@ Use the runtime when agent identity, message routing, pub/sub, scheduling, or di
 
 Start here:
 
-1. [Runtime: Engine and Execution](docs/runtime/engine.md)
-2. [Messaging: Routing and Delivery](docs/runtime/messaging.md)
+1. [Runtime: Engine and Execution](docs/runtime/engine-and-execution.md)
+2. [Runtime: Distributed Runtime Usage](docs/runtime/distributed-runtime-usage.md)
+3. [Messaging: Routing and Delivery](docs/messaging/routing-and-delivery.md)
 
 ### Models
 
@@ -206,6 +266,7 @@ Start here:
 1. [Default Agents](docs/harness/default-agents.md)
 2. [Architecture](docs/harness/architecture.md)
 3. [Tools](docs/harness/tools.md)
+4. [Distributed Agents](docs/harness/distributed-agents.md)
 
 ## Documentation
 
@@ -213,7 +274,10 @@ Use the documentation index for the full docs tree:
 
 1. [Documentation Index](docs/README.md)
 2. [Examples Index](examples/README.md)
-3. [Changelog](CHANGELOG.md)
+3. [Runtime: Distributed Runtime Usage](docs/runtime/distributed-runtime-usage.md)
+4. [Harness Distributed Agents](docs/harness/distributed-agents.md)
+5. [Tracing Overview](docs/tracing/overview.md)
+6. [Changelog](CHANGELOG.md)
 
 ## Origins
 
