@@ -69,8 +69,27 @@ Use this page when adding or changing first-party tools, especially tools under
 - Use `ToolPathResolver` for path resolution.
 - Capture `cwd` at tool construction time. Relative paths resolve from that
   captured directory.
-- Document whether absolute paths are allowed. The current Phase 11 path policy
-  allows absolute paths and does not enforce a sandbox boundary.
+- Document whether absolute paths are allowed. The current framework default
+  allows absolute paths and remains permissive until a developer passes an
+  explicit permission policy.
+- Tools that touch local files or processes should use the shared permission
+  primitives from `agentlane.harness.tools` instead of inventing tool-specific
+  policy types. Evaluate the policy after simple argument validation and path
+  resolution, before filesystem writes, file opens, process startup, or other
+  side effects.
+- Denied and approval-required decisions are normal model-facing tool results,
+  not exceptions. Keep the wording stable, for example:
+  ```text
+  permission denied: read is not allowed for `/path/to/file`
+  approval required: bash command requires application approval before execution
+  ```
+- `require_approval` is a framework seam. Core tools may call an optional
+  approval callback supplied by the host application, but the harness library
+  should not implement CLI, desktop, web, or service-specific approval UX.
+- Be precise about `bash`: command execution can be denied or approval-gated
+  before startup, but the default local executor is not filesystem-confined
+  after startup. Real process isolation belongs in a host-provided executor,
+  container, remote worker, or equivalent sandbox.
 - Prefer incremental reads and walks for large files or large directories.
 - Treat binary or unsupported content as a clear tool result. For text tools,
   decode invalid UTF-8 with replacement characters when preserving surrounding

@@ -11,6 +11,9 @@ from agentlane.harness.tools import (
     TEXT_MAX_LINES,
     HarnessToolsShim,
     ToolPathResolver,
+    ToolPermissionDecision,
+    ToolPermissionRequest,
+    WorkspaceToolPermissionPolicy,
     read_tool,
 )
 from agentlane.models import Tools
@@ -52,6 +55,77 @@ def test_read_tool_accepts_absolute_paths(tmp_path: Path) -> None:
     output = run_tool(read_tool(cwd=tmp_path / "elsewhere"), path=str(target))
 
     assert output == "absolute"
+
+
+def test_read_tool_denies_paths_outside_workspace_policy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+
+    output = run_tool(
+        read_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+        ),
+        path=str(outside),
+    )
+
+    assert output == f"permission denied: read is not allowed for `{outside}`"
+
+
+def test_read_tool_approval_callback_can_allow_request(tmp_path: Path) -> None:
+    class RequireApprovalPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            del request
+            return ToolPermissionDecision.require_approval()
+
+    approved_requests: list[ToolPermissionRequest] = []
+
+    async def approve(request: ToolPermissionRequest) -> ToolPermissionDecision:
+        approved_requests.append(request)
+        return ToolPermissionDecision.allow()
+
+    target = tmp_path / "notes.txt"
+    target.write_text("approved\n", encoding="utf-8")
+
+    output = run_tool(
+        read_tool(
+            cwd=tmp_path,
+            permissions=RequireApprovalPolicy(),
+            approval_callback=approve,
+        ),
+        path="notes.txt",
+    )
+
+    assert output == "approved"
+    assert [request.path for request in approved_requests] == [target]
+
+
+def test_read_tool_reports_approval_required_without_callback(tmp_path: Path) -> None:
+    class RequireApprovalPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            del request
+            return ToolPermissionDecision.require_approval()
+
+    target = tmp_path / "notes.txt"
+    target.write_text("approval\n", encoding="utf-8")
+
+    output = run_tool(
+        read_tool(cwd=tmp_path, permissions=RequireApprovalPolicy()),
+        path="notes.txt",
+    )
+
+    assert output == (
+        f"approval required: read requires application approval for `{target}` "
+        "before execution"
+    )
 
 
 def test_read_tool_starts_at_offset(tmp_path: Path) -> None:

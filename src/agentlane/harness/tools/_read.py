@@ -11,6 +11,13 @@ from agentlane.runtime import CancellationToken
 
 from ._output import TEXT_MAX_BYTES, TEXT_MAX_LINES
 from ._paths import ToolPathResolver
+from ._permissions import (
+    ToolApprovalCallback,
+    ToolOperation,
+    ToolPermissionPolicy,
+    ToolPermissionRequest,
+    evaluate_tool_permission,
+)
 from ._types import HarnessToolDefinition
 
 _BINARY_SAMPLE_BYTES = 4096
@@ -51,13 +58,20 @@ class _ReadContent:
     error: str | None = None
 
 
-def read_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
+def read_tool(
+    *,
+    cwd: str | Path | None = None,
+    permissions: ToolPermissionPolicy | None = None,
+    approval_callback: ToolApprovalCallback | None = None,
+) -> HarnessToolDefinition:
     """Build the first-party text-file read harness tool.
 
     Args:
         cwd: Optional working directory used to resolve relative paths. When
             omitted, the current working directory is captured at construction
             time.
+        permissions: Optional policy for read-file permission decisions.
+        approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable read tool with prompt metadata.
@@ -70,7 +84,12 @@ def read_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     ) -> str:
         del cancellation_token
         try:
-            return _read_file(args, resolver=resolver)
+            return await _read_file(
+                args,
+                resolver=resolver,
+                permissions=permissions,
+                approval_callback=approval_callback,
+            )
         except Exception:
             return _GENERIC_READ_ERROR
 
@@ -86,7 +105,13 @@ def read_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     )
 
 
-def _read_file(args: _ToolArgs, *, resolver: ToolPathResolver) -> str:
+async def _read_file(
+    args: _ToolArgs,
+    *,
+    resolver: ToolPathResolver,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
+) -> str:
     """Read one file and render a plain-text tool result."""
     if args.offset is not None and args.offset < 1:
         return "offset must be a 1-indexed line number"
@@ -96,6 +121,19 @@ def _read_file(args: _ToolArgs, *, resolver: ToolPathResolver) -> str:
         return "path must not be empty"
 
     resolved_path = resolver.resolve(args.path)
+    permission_error = await evaluate_tool_permission(
+        ToolPermissionRequest(
+            tool_name=_TOOL_NAME,
+            operation=ToolOperation.READ_FILE,
+            cwd=resolver.cwd,
+            path=resolved_path,
+        ),
+        policy=permissions,
+        approval_callback=approval_callback,
+    )
+    if permission_error is not None:
+        return permission_error
+
     if resolved_path.is_dir():
         return f"path is a directory: `{resolved_path}`"
 

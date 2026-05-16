@@ -10,6 +10,13 @@ from agentlane.models import Tool
 from agentlane.runtime import CancellationToken
 
 from ._paths import ToolPathResolver
+from ._permissions import (
+    ToolApprovalCallback,
+    ToolOperation,
+    ToolPermissionPolicy,
+    ToolPermissionRequest,
+    evaluate_tool_permission,
+)
 from ._types import HarnessToolDefinition
 
 _TOOL_NAME = "write"
@@ -29,11 +36,18 @@ class _ToolArgs(BaseModel):
     content: str = Field(description="Complete UTF-8 text content to write.")
 
 
-def write_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
+def write_tool(
+    *,
+    cwd: str | Path | None = None,
+    permissions: ToolPermissionPolicy | None = None,
+    approval_callback: ToolApprovalCallback | None = None,
+) -> HarnessToolDefinition:
     """Return the first-party harness write tool definition.
 
     Args:
         cwd: Optional working directory for resolving relative tool paths.
+        permissions: Optional policy for create/overwrite permission decisions.
+        approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable tool plus prompt metadata.
@@ -46,7 +60,12 @@ def write_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     ) -> str:
         del cancellation_token
         try:
-            return _write_file(args, resolver=resolver)
+            return await _write_file(
+                args,
+                resolver=resolver,
+                permissions=permissions,
+                approval_callback=approval_callback,
+            )
         except Exception:
             return _GENERIC_WRITE_ERROR
 
@@ -62,10 +81,12 @@ def write_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     )
 
 
-def _write_file(
+async def _write_file(
     args: _ToolArgs,
     *,
     resolver: ToolPathResolver,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
 ) -> str:
     """Write text content and return a model-facing status message."""
     if args.path.strip() == "":
@@ -79,6 +100,15 @@ def _write_file(
         return "content is not valid UTF-8"
 
     resolved_path = resolver.resolve(args.path)
+    permission_error = await _check_write_permissions(
+        resolved_path,
+        resolver=resolver,
+        permissions=permissions,
+        approval_callback=approval_callback,
+    )
+    if permission_error is not None:
+        return permission_error
+
     if resolved_path.is_dir():
         return f"path is a directory: `{resolved_path}`"
 
@@ -103,6 +133,48 @@ def _write_file(
         return write_result
 
     return f"Wrote {len(encoded_content)} bytes to {resolved_path}."
+
+
+async def _check_write_permissions(
+    path: Path,
+    *,
+    resolver: ToolPathResolver,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
+) -> str | None:
+    """Return a model-facing permission result before any write side effect."""
+    requests: list[ToolPermissionRequest] = []
+    if not path.parent.exists():
+        requests.append(
+            ToolPermissionRequest(
+                tool_name=_TOOL_NAME,
+                operation=ToolOperation.CREATE_DIRECTORY,
+                cwd=resolver.cwd,
+                path=path.parent,
+            )
+        )
+
+    operation = (
+        ToolOperation.OVERWRITE_FILE if path.exists() else ToolOperation.CREATE_FILE
+    )
+    requests.append(
+        ToolPermissionRequest(
+            tool_name=_TOOL_NAME,
+            operation=operation,
+            cwd=resolver.cwd,
+            path=path,
+        )
+    )
+
+    for request in requests:
+        permission_error = await evaluate_tool_permission(
+            request,
+            policy=permissions,
+            approval_callback=approval_callback,
+        )
+        if permission_error is not None:
+            return permission_error
+    return None
 
 
 def _write_new_file(*, target: Path, content: str) -> str | None:

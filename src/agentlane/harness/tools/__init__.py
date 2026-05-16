@@ -27,6 +27,20 @@ from ._output import (
 )
 from ._patch import patch_tool
 from ._paths import ToolPathResolver
+from ._permissions import (
+    AllOfToolPermissionPolicy,
+    AllowAllToolPermissionPolicy,
+    ToolApprovalCallback,
+    ToolOperation,
+    ToolPermissionDecision,
+    ToolPermissionGrant,
+    ToolPermissionGrantPolicy,
+    ToolPermissionOutcome,
+    ToolPermissionPolicy,
+    ToolPermissionRequest,
+    WorkspaceToolPermissionPolicy,
+    parse_tool_permission_grants,
+)
 from ._plan import plan_tool
 from ._read import read_tool
 from ._shim import HarnessToolsShim, base_harness_tools
@@ -52,8 +66,19 @@ __all__ = [
     "LocalBashExecutor",
     "TEXT_MAX_BYTES",
     "TEXT_MAX_LINES",
+    "AllOfToolPermissionPolicy",
+    "AllowAllToolPermissionPolicy",
     "ToolPathResolver",
+    "ToolApprovalCallback",
+    "ToolOperation",
+    "ToolPermissionDecision",
+    "ToolPermissionGrant",
+    "ToolPermissionGrantPolicy",
+    "ToolPermissionOutcome",
+    "ToolPermissionPolicy",
+    "ToolPermissionRequest",
     "TruncatedOutput",
+    "WorkspaceToolPermissionPolicy",
     "agent_tool",
     "base_harness_tools",
     "bash_tool",
@@ -61,6 +86,7 @@ __all__ = [
     "grep_tool",
     "patch_tool",
     "plan_tool",
+    "parse_tool_permission_grants",
     "read_tool",
     "resolve_bash_shell",
     "truncate_output",

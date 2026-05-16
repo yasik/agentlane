@@ -9,6 +9,13 @@ from agentlane.models import Tool
 from agentlane.runtime import CancellationToken
 
 from ._paths import ToolPathResolver
+from ._permissions import (
+    ToolApprovalCallback,
+    ToolOperation,
+    ToolPermissionPolicy,
+    ToolPermissionRequest,
+    evaluate_tool_permission,
+)
 from ._types import HarnessToolDefinition
 
 _TOOL_NAME = "patch"
@@ -38,13 +45,20 @@ class _ToolArgs(BaseModel):
     )
 
 
-def patch_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
+def patch_tool(
+    *,
+    cwd: str | Path | None = None,
+    permissions: ToolPermissionPolicy | None = None,
+    approval_callback: ToolApprovalCallback | None = None,
+) -> HarnessToolDefinition:
     """Build the first-party patch harness tool.
 
     Args:
         cwd: Optional working directory used to resolve relative paths. When
             omitted, the current working directory is captured at construction
             time.
+        permissions: Optional policy for modify permission decisions.
+        approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable patch tool with prompt metadata.
@@ -57,7 +71,12 @@ def patch_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     ) -> str:
         del cancellation_token
         try:
-            return _patch_file(args, resolver=resolver)
+            return await _patch_file(
+                args,
+                resolver=resolver,
+                permissions=permissions,
+                approval_callback=approval_callback,
+            )
         except Exception:
             return _GENERIC_PATCH_ERROR
 
@@ -73,7 +92,13 @@ def patch_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     )
 
 
-def _patch_file(args: _ToolArgs, *, resolver: ToolPathResolver) -> str:
+async def _patch_file(
+    args: _ToolArgs,
+    *,
+    resolver: ToolPathResolver,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
+) -> str:
     """Parse, apply, and render one model-facing patch result."""
     validation_error = _validate_args(args)
     if validation_error is not None:
@@ -84,6 +109,19 @@ def _patch_file(args: _ToolArgs, *, resolver: ToolPathResolver) -> str:
         return f"Path is a directory: {resolved_path}"
     if not resolved_path.exists():
         return f"File not found: {resolved_path}"
+
+    permission_error = await evaluate_tool_permission(
+        ToolPermissionRequest(
+            tool_name=_TOOL_NAME,
+            operation=ToolOperation.MODIFY_FILE,
+            cwd=resolver.cwd,
+            path=resolved_path,
+        ),
+        policy=permissions,
+        approval_callback=approval_callback,
+    )
+    if permission_error is not None:
+        return permission_error
 
     try:
         edits = patch_engine.parse_blocks(args.edits)

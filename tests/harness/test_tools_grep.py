@@ -12,6 +12,7 @@ from agentlane.harness.tools import (
     TEXT_MAX_BYTES,
     HarnessToolsShim,
     ToolPathResolver,
+    WorkspaceToolPermissionPolicy,
     grep_tool,
 )
 from agentlane.models import Tools
@@ -48,6 +49,26 @@ def test_grep_tool_searches_explicit_file_path(tmp_path: Path) -> None:
     result = run_tool(grep_tool(cwd=tmp_path), pattern="needle", path="second.txt")
 
     assert result == "Search path: second.txt\nsecond.txt:1:needle"
+
+
+def test_grep_tool_denies_explicit_file_outside_workspace_policy(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("needle\n", encoding="utf-8")
+
+    result = run_tool(
+        grep_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+        ),
+        pattern="needle",
+        path=str(outside),
+    )
+
+    assert result == f"permission denied: grep is not allowed for `{outside}`"
 
 
 def test_grep_tool_supports_literal_and_ignore_case(tmp_path: Path) -> None:

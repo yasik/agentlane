@@ -10,12 +10,13 @@ from agentlane.harness.tools import (
     HarnessToolDefinition,
     HarnessToolsShim,
     ToolPathResolver,
+    WorkspaceToolPermissionPolicy,
     base_harness_tools,
     truncate_output,
 )
 from agentlane.models import Tools
 
-from .tools_test_utils import echo_tool, run_state
+from .tools_test_utils import echo_tool, run_state, run_tool
 
 
 def test_base_harness_tools_includes_current_tool_set() -> None:
@@ -31,6 +32,24 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
         "bash",
         "agent",
     ]
+
+
+def test_base_harness_tools_threads_cwd_and_permissions(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret\n", encoding="utf-8")
+    definitions = base_harness_tools(
+        cwd=workspace,
+        permissions=WorkspaceToolPermissionPolicy(root=workspace),
+    )
+    read_definition = next(
+        definition for definition in definitions if definition.tool.name == "read"
+    )
+
+    output = run_tool(read_definition, path=str(outside))
+
+    assert output == f"permission denied: read is not allowed for `{outside}`"
 
 
 def test_harness_tools_shim_merges_tools_and_appends_prompt_once() -> None:

@@ -1,6 +1,7 @@
 """Shim integration for first-party harness tool definitions."""
 
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import Any
 
 from agentlane.models.run import RunContext
@@ -13,6 +14,7 @@ from ._bash import bash_tool
 from ._find import find_tool
 from ._grep import grep_tool
 from ._patch import patch_tool
+from ._permissions import ToolApprovalCallback, ToolPermissionPolicy
 from ._plan import plan_state_key, plan_tool
 from ._read import read_tool
 from ._types import HarnessToolDefinition
@@ -117,16 +119,45 @@ class HarnessToolsShim(Shim):
         )
 
 
-def base_harness_tools() -> tuple[HarnessToolDefinition, ...]:
+def base_harness_tools(
+    *,
+    cwd: str | Path | None = None,
+    permissions: ToolPermissionPolicy | None = None,
+    approval_callback: ToolApprovalCallback | None = None,
+) -> tuple[HarnessToolDefinition, ...]:
     """Return currently implemented first-party base harness tools."""
     return (
-        read_tool(),
-        find_tool(),
-        grep_tool(),
-        patch_tool(),
-        write_tool(),
+        read_tool(
+            cwd=cwd,
+            permissions=permissions,
+            approval_callback=approval_callback,
+        ),
+        find_tool(
+            cwd=cwd,
+            permissions=permissions,
+            approval_callback=approval_callback,
+        ),
+        grep_tool(
+            cwd=cwd,
+            permissions=permissions,
+            approval_callback=approval_callback,
+        ),
+        patch_tool(
+            cwd=cwd,
+            permissions=permissions,
+            approval_callback=approval_callback,
+        ),
+        write_tool(
+            cwd=cwd,
+            permissions=permissions,
+            approval_callback=approval_callback,
+        ),
         plan_tool(),
-        bash_tool(),
+        bash_tool(
+            cwd=cwd,
+            permissions=permissions,
+            approval_callback=approval_callback,
+        ),
         agent_tool(),
     )
 

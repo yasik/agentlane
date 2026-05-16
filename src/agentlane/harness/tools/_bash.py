@@ -17,6 +17,13 @@ from ._bash_executor import (
 )
 from ._output import BASH_MAX_BYTES, BASH_MAX_LINES, TruncatedOutput
 from ._paths import ToolPathResolver
+from ._permissions import (
+    ToolApprovalCallback,
+    ToolOperation,
+    ToolPermissionPolicy,
+    ToolPermissionRequest,
+    evaluate_tool_permission,
+)
 from ._types import HarnessToolDefinition
 
 _TOOL_NAME = "bash"
@@ -34,8 +41,9 @@ _TOOL_PROMPT_GUIDELINES = (
     "Prefer `rg` over `grep` or `find` when searching from bash.",
     "Avoid interactive commands; bash does not accept follow-up stdin.",
     "Set `timeout` for commands that may hang or run for a long time.",
-    "The bash tool does not provide sandboxing, approvals, or permission "
-    "enforcement.",
+    "The default local bash executor is not filesystem-confined; pass a "
+    "permission policy or sandboxed executor when an application needs a "
+    "stricter boundary.",
 )
 _GENERIC_BASH_ERROR = "failed to execute bash command"
 
@@ -82,6 +90,8 @@ def bash_tool(
     default_timeout: float | None = None,
     executor: BashExecutor | None = None,
     policy: BashPolicy | None = None,
+    permissions: ToolPermissionPolicy | None = None,
+    approval_callback: ToolApprovalCallback | None = None,
 ) -> HarnessToolDefinition:
     """Build the first-party bash harness tool.
 
@@ -94,6 +104,8 @@ def bash_tool(
         executor: Optional executor implementation for tests or host
             applications.
         policy: Optional pre-execution policy hook.
+        permissions: Optional shared policy for command-execution decisions.
+        approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable bash tool with prompt metadata.
@@ -115,6 +127,8 @@ def bash_tool(
                 cwd=resolver.cwd,
                 executor=bash_executor,
                 policy=bash_policy,
+                permissions=permissions,
+                approval_callback=approval_callback,
                 cancellation_token=cancellation_token,
             )
         except Exception:
@@ -138,6 +152,8 @@ async def _run_bash(
     cwd: Path,
     executor: BashExecutor,
     policy: BashPolicy,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
     cancellation_token: CancellationToken,
 ) -> str:
     """Validate model arguments, execute the command, and render the result."""
@@ -170,6 +186,19 @@ async def _run_bash(
         cwd=cwd,
         timeout_seconds=args.timeout,
     )
+    permission_error = await evaluate_tool_permission(
+        ToolPermissionRequest(
+            tool_name=_TOOL_NAME,
+            operation=ToolOperation.EXECUTE_COMMAND,
+            cwd=cwd,
+            command=args.command,
+        ),
+        policy=permissions,
+        approval_callback=approval_callback,
+    )
+    if permission_error is not None:
+        return permission_error
+
     decision = policy.check(request)
     if not decision.allowed:
         return decision.reason or "bash command denied"

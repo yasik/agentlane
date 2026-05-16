@@ -36,6 +36,12 @@ from agentlane.harness.skills._prompt import (
     render_skills_system_prompt,
 )
 from agentlane.harness.skills._shim import ActivateSkillInput
+from agentlane.harness.tools import (
+    ToolOperation,
+    ToolPermissionGrantPolicy,
+    ToolPermissionOutcome,
+    ToolPermissionRequest,
+)
 from agentlane.models import MessageDict, Model, ModelResponse, ToolCall, Tools
 from agentlane.runtime import CancellationToken
 
@@ -195,6 +201,7 @@ def _write_skill(
     body: str,
     metadata: str | None = None,
     compatibility: str | None = None,
+    allowed_tools: str | None = None,
 ) -> Path:
     skill_root = root / name
     skill_root.mkdir(parents=True)
@@ -206,6 +213,8 @@ def _write_skill(
     ]
     if compatibility is not None:
         frontmatter_lines.append(f"compatibility: {compatibility}")
+    if allowed_tools is not None:
+        frontmatter_lines.append(f"allowed-tools: {allowed_tools}")
     if metadata is not None:
         frontmatter_lines.extend(
             [
@@ -249,9 +258,72 @@ def test_parse_skill_file_returns_manifest_and_body(tmp_path: Path) -> None:
     assert parsed.manifest.skill_file == (skill_root / "SKILL.md").resolve()
     assert parsed.manifest.metadata == {"author": "agentlane"}
     assert parsed.manifest.compatibility == "Requires local files only"
+    assert parsed.manifest.allowed_tool_grants == ()
     assert parsed.instructions == (
         "# Refund Policy\n\nUse this skill for return-window questions."
     )
+
+
+def test_parse_skill_file_normalizes_allowed_tools_permissions(
+    tmp_path: Path,
+) -> None:
+    skill_root = _write_skill(
+        root=tmp_path,
+        name="workspace-editor",
+        description="Edit workspace files.",
+        body="# Workspace Editor",
+        allowed_tools="read, write:create_file, patch:modify_file",
+    )
+
+    parsed = parse_skill_file(skill_root / "SKILL.md")
+    if parsed is None:
+        raise AssertionError("Expected skill file to parse.")
+
+    grants = parsed.manifest.allowed_tool_grants
+    assert [(grant.tool_name, grant.operation) for grant in grants] == [
+        ("read", None),
+        ("write", ToolOperation.CREATE_FILE),
+        ("patch", ToolOperation.MODIFY_FILE),
+    ]
+
+    policy = ToolPermissionGrantPolicy(grants)
+    decision = policy.check(
+        ToolPermissionRequest(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=tmp_path,
+            path=tmp_path / "notes.txt",
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.ALLOW
+
+
+def test_parse_skill_file_warns_and_skips_invalid_allowed_tools(
+    tmp_path: Path,
+    caplog: LogCaptureFixture,
+) -> None:
+    skill_root = _write_skill(
+        root=tmp_path,
+        name="workspace-editor",
+        description="Edit workspace files.",
+        body="# Workspace Editor",
+        allowed_tools="read, write:read_file, unknown",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        parsed = parse_skill_file(skill_root / "SKILL.md")
+    if parsed is None:
+        raise AssertionError("Expected skill file to parse.")
+
+    assert [
+        (grant.tool_name, grant.operation)
+        for grant in parsed.manifest.allowed_tool_grants
+    ] == [
+        ("read", None),
+    ]
+    assert "Ignoring unsupported allowed-tools entry `write:read_file`" in caplog.text
+    assert "Ignoring unsupported allowed-tools entry `unknown`" in caplog.text
 
 
 def test_parse_skill_file_trims_oversize_fields_and_body(tmp_path: Path) -> None:

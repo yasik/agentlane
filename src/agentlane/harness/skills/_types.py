@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..tools import ToolPermissionGrant
+
 
 @dataclass(frozen=True, slots=True)
 class SkillManifest:
@@ -31,6 +33,9 @@ class SkillManifest:
 
     allowed_tools: str | None = None
     """Optional pre-approved tools string from the frontmatter."""
+
+    allowed_tool_grants: tuple[ToolPermissionGrant, ...] = ()
+    """Normalized whole-tool or operation-level permission grants."""
 
 
 @dataclass(frozen=True, slots=True)

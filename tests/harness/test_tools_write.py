@@ -6,7 +6,13 @@ import pytest
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
-from agentlane.harness.tools import HarnessToolsShim, ToolPathResolver, write_tool
+from agentlane.harness.tools import (
+    HarnessToolsShim,
+    ToolOperation,
+    ToolPathResolver,
+    WorkspaceToolPermissionPolicy,
+    write_tool,
+)
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
 
@@ -57,6 +63,44 @@ def test_write_tool_accepts_absolute_paths(tmp_path: Path) -> None:
 
     assert output == f"Wrote 8 bytes to {target}."
     assert target.read_text(encoding="utf-8") == "absolute"
+
+
+def test_write_tool_denies_create_outside_workspace_policy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+
+    output = run_tool(
+        write_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+        ),
+        path=str(outside),
+        content="secret",
+    )
+
+    assert output == f"permission denied: write is not allowed for `{outside}`"
+    assert not outside.exists()
+
+
+def test_write_tool_denies_parent_directory_creation_before_side_effect(
+    tmp_path: Path,
+) -> None:
+    policy = WorkspaceToolPermissionPolicy(
+        root=tmp_path,
+        allowed_operations=(ToolOperation.CREATE_FILE,),
+    )
+
+    output = run_tool(
+        write_tool(cwd=tmp_path, permissions=policy),
+        path="nested/notes.txt",
+        content="notes",
+    )
+
+    assert output == (
+        f"permission denied: write is not allowed for `{tmp_path / 'nested'}`"
+    )
+    assert not (tmp_path / "nested").exists()
 
 
 def test_write_tool_overwrites_existing_file(tmp_path: Path) -> None:

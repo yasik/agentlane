@@ -7,6 +7,7 @@ from typing import cast
 
 import yaml
 
+from ..tools import parse_tool_permission_grants
 from ._constraints import (
     SKILL_MAX_COMPATIBILITY_LENGTH,
     SKILL_MAX_DESCRIPTION_LENGTH,
@@ -89,6 +90,17 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
         )
         return None
 
+    allowed_tools = _coerce_optional_string(frontmatter, "allowed-tools")
+    allowed_tool_grants, invalid_allowed_tool_entries = parse_tool_permission_grants(
+        allowed_tools
+    )
+    for entry in invalid_allowed_tool_entries:
+        logger.warning(
+            "Ignoring unsupported allowed-tools entry `%s` in %s.",
+            entry,
+            skill_file,
+        )
+
     manifest = SkillManifest(
         name=_validate_name(name, root=root, skill_file=skill_file),
         description=_validate_description(description),
@@ -99,7 +111,8 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
             _coerce_optional_string(frontmatter, "compatibility")
         ),
         metadata=_validate_metadata(frontmatter.get("metadata")),
-        allowed_tools=_coerce_optional_string(frontmatter, "allowed-tools"),
+        allowed_tools=allowed_tools,
+        allowed_tool_grants=allowed_tool_grants,
     )
 
     instructions = body.strip()

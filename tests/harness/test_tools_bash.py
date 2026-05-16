@@ -21,6 +21,10 @@ from agentlane.harness.tools import (
     BashPolicyDecision,
     HarnessToolDefinition,
     HarnessToolsShim,
+    ToolOperation,
+    ToolPermissionDecision,
+    ToolPermissionRequest,
+    WorkspaceToolPermissionPolicy,
     bash_tool,
 )
 from agentlane.harness.tools._output import TruncatedOutput
@@ -244,6 +248,71 @@ def test_bash_tool_policy_can_deny_before_executor_runs(tmp_path: Path) -> None:
 
     assert output == "bash command denied by test"
     assert requests == []
+
+
+def test_bash_tool_shared_permissions_can_deny_before_executor_runs(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> tuple[str, list[BashExecutionRequest]]:
+        executor = _FakeBashExecutor()
+        definition = bash_tool(
+            cwd=tmp_path,
+            executor=executor,
+            permissions=WorkspaceToolPermissionPolicy(
+                root=tmp_path,
+                allowed_operations=(ToolOperation.READ_FILE,),
+            ),
+        )
+        tool = _executable_tool(definition)
+        args_model = tool.args_type()
+        output = await tool.run(
+            args_model(command="pwd"),
+            CancellationToken(),
+        )
+        return output, executor.requests
+
+    output, requests = asyncio.run(scenario())
+
+    assert output == "permission denied: bash is not allowed for this command"
+    assert requests == []
+
+
+def test_bash_tool_approval_callback_can_allow_command(tmp_path: Path) -> None:
+    class RequireApprovalPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            del request
+            return ToolPermissionDecision.require_approval()
+
+    async def scenario() -> tuple[str, list[BashExecutionRequest]]:
+        executor = _FakeBashExecutor()
+
+        async def approve(
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            assert request.command == "pwd"
+            return ToolPermissionDecision.allow()
+
+        definition = bash_tool(
+            cwd=tmp_path,
+            executor=executor,
+            permissions=RequireApprovalPolicy(),
+            approval_callback=approve,
+        )
+        tool = _executable_tool(definition)
+        args_model = tool.args_type()
+        output = await tool.run(
+            args_model(command="pwd"),
+            CancellationToken(),
+        )
+        return output, executor.requests
+
+    output, requests = asyncio.run(scenario())
+
+    assert output == "fake output"
+    assert len(requests) == 1
 
 
 def test_bash_tool_returns_nonzero_exit_code() -> None:
@@ -554,7 +623,8 @@ def test_bash_tool_prompt_snippet_through_harness_tools_shim() -> None:
         "- Prefer `rg` over `grep` or `find` when searching from bash.\n"
         "- Avoid interactive commands; bash does not accept follow-up stdin.\n"
         "- Set `timeout` for commands that may hang or run for a long time.\n"
-        "- The bash tool does not provide sandboxing, approvals, or "
-        "permission enforcement.\n"
+        "- The default local bash executor is not filesystem-confined; pass a "
+        "permission policy or sandboxed executor when an application needs a "
+        "stricter boundary.\n"
         "</default_tools>"
     )

@@ -27,6 +27,10 @@ down to the lower-level harness agent or runtime APIs.
 from agentlane.harness import INHERIT_TOOLS, OVERRIDE_TOOLS, RESTRICT_TOOLS
 from agentlane.harness.tools import (
     HarnessToolsShim,
+    ToolOperation,
+    ToolPermissionDecision,
+    ToolPermissionRequest,
+    WorkspaceToolPermissionPolicy,
     agent_tool,
     base_harness_tools,
     bash_tool,
@@ -56,9 +60,20 @@ The current standard set is `read`, `find`, `grep`, `patch`, `write`,
 `write_plan`, `bash`, and `agent`. The public base-tools set currently does not
 include `ls`.
 
-`base_harness_tools()` returns the standard set with each filesystem tool
-capturing `Path.cwd()` at construction time. Prefer explicit per-tool
-construction when an agent should operate inside a specific workspace:
+`base_harness_tools()` returns the standard set. By default each local tool
+captures `Path.cwd()` at construction time and remains permissive. Pass `cwd=`,
+`permissions=`, and optionally `approval_callback=` when an agent should
+operate inside a specific workspace boundary:
+
+```python
+workspace_tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=WorkspaceToolPermissionPolicy(root=WORKSPACE),
+)
+```
+
+You can also construct tools individually when an agent needs a custom tool
+set:
 
 ```python
 workspace_tools = (
@@ -142,8 +157,64 @@ Filesystem tools use `ToolPathResolver`. Relative paths resolve against the
 the current implementation. Paths are normalized with
 `Path.resolve(strict=False)`.
 
-The first-party path resolver does not enforce a sandbox boundary, permission
-allowlist, or approval workflow.
+AgentLane is a framework, so the first-party helpers stay permissive unless an
+application passes an explicit policy. With no `permissions=` argument, `read`,
+`find`, `grep`, `patch`, `write`, and `bash` preserve the trusted local
+behavior from earlier releases.
+
+Every local helper accepts the shared permission layer:
+
+```python
+tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=WorkspaceToolPermissionPolicy(root=WORKSPACE),
+)
+```
+
+`WorkspaceToolPermissionPolicy(root=...)` allows path operations only when the
+resolved target stays inside the configured root. Existing paths are resolved
+through symlinks. New paths are checked through their nearest existing parent,
+so writing `nested/file.txt` still requires the target parent chain to stay
+inside the workspace. Absolute paths are still accepted, but a workspace policy
+denies absolute targets outside the root.
+
+Denied calls return stable tool-result text before side effects:
+
+```text
+permission denied: read is not allowed for `/workspace/private.txt`
+```
+
+Policies may also return `require_approval`. The core harness does not provide
+an interactive approval UI. Instead, tools accept an optional
+`approval_callback` that an application, CLI, desktop app, or service can use
+to decide whether the pending `ToolPermissionRequest` should proceed:
+
+```python
+async def approve(request: ToolPermissionRequest) -> ToolPermissionDecision:
+    return ToolPermissionDecision.allow()
+```
+
+If no callback is configured, the tool returns a stable approval-required
+result and does not execute.
+
+Operations are intentionally small and tool-oriented:
+
+| Tool | Operations |
+| --- | --- |
+| `read` | `read_file` |
+| `find` | `search_files` |
+| `grep` | `read_file` for file paths, `search_files` for directories |
+| `write` | `create_file`, `overwrite_file`, `create_directory` |
+| `patch` | `modify_file` |
+| `bash` | `execute_command` |
+
+The shared policy can gate local `bash` before the process starts, but the
+default local executor is not filesystem-confined after startup. Because
+`WorkspaceToolPermissionPolicy` is a path sandbox, it denies `execute_command`
+unless `ToolOperation.EXECUTE_COMMAND` is explicitly included in
+`allowed_operations` or another host policy allows it. Applications that need
+real process isolation should provide a sandboxed `BashExecutor`, container,
+remote worker, or equivalent host boundary.
 
 ## Output Limits
 
@@ -607,6 +678,10 @@ Host applications can import the executor-facing contracts
 and `BashPolicyDecision` from `agentlane.harness.tools` when they need to wrap
 or replace local execution.
 
+`bash_tool(permissions=...)` evaluates the shared permission policy before the
+executor starts. `bash_tool(policy=...)` remains available for existing
+command-level checks. When both are supplied, both must allow the command.
+
 Empty successful commands return `(no output)`. Non-zero exits, timeouts,
 cancellations, and truncation add short bracketed notices after the output:
 
@@ -624,5 +699,6 @@ graceful termination sends `CTRL_BREAK_EVENT` to the new process group when
 available, then falls back to leader-only termination; forced termination uses
 `taskkill /F /T` for the process tree. The tool is intentionally
 non-interactive: it does not stream partial output to the model and does not
-accept follow-up stdin for a running command. It does not provide a sandbox
-boundary, permission allowlist, or approval workflow.
+accept follow-up stdin for a running command. The default local executor is
+not a process sandbox; hosts with strict data boundaries should provide an
+executor that controls execution and full-output log storage.
