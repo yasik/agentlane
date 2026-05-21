@@ -16,12 +16,14 @@ Key invariants maintained here:
 """
 
 import asyncio
+import re
 from asyncio import Future, get_running_loop
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, Self
 
+from faker import Faker
 from pydantic import BaseModel
 
 from agentlane.models import (
@@ -65,6 +67,22 @@ class _EmptyAgentToolArgs(BaseModel):
     """Default args model for predefined parameterless agent tools."""
 
 
+_AGENT_NAME_FAKER = Faker()
+
+
+def _generated_agent_name() -> str:
+    """Return a Faker-generated adjective-noun fallback agent name."""
+    adjective = _agent_name_token(_AGENT_NAME_FAKER.word(part_of_speech="adjective"))
+    noun = _agent_name_token(_AGENT_NAME_FAKER.word(part_of_speech="noun"))
+    return f"{adjective}-{noun}"
+
+
+def _agent_name_token(value: str) -> str:
+    """Normalize one generated name token for use in an agent name."""
+    token = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return token or "agent"
+
+
 @dataclass(slots=True)
 class DefaultHandoff:
     """Configuration for the generic fresh-agent handoff tool."""
@@ -102,8 +120,12 @@ class AgentDescriptor:
     the lifecycle so recovered state and static config never conflate.
     """
 
-    name: str
-    """Human-readable agent name."""
+    name: str = field(default_factory=_generated_agent_name)
+    """Human-readable agent name.
+
+    Omitted or blank names are replaced with a generated fallback so downstream
+    runner and tool-correlation code can treat the name as always present.
+    """
 
     description: str | None = None
     """Short description of the agent responsibility."""
@@ -135,6 +157,11 @@ class AgentDescriptor:
 
     default_handoff: DefaultHandoff | None = None
     """Optional generic handoff configuration for fresh spawned sub-agents."""
+
+    def __post_init__(self) -> None:
+        """Normalize descriptor invariants at construction time."""
+        if self.name.strip() == "":
+            self.name = _generated_agent_name()
 
     def as_tool(
         self,

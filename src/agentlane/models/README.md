@@ -50,6 +50,11 @@ functions rather than hand-writing argument models for every simple tool. Reach
 for `@as_tool` when you want the function declaration itself to read like a
 tool definition, `Tools(tools=[my_function])` for lightweight one-offs, and the
 explicit `Tool(...)` constructor only when you need low-level control over the
-schema, handler shape, or output formatting.
+schema, handler shape, execution context, or output formatting. Explicit
+`Tool(...)` handlers receive a `ToolExecutionContext` alongside the validated
+arguments and cancellation token so framework correlation is passed directly
+instead of through hidden process-local state. The ergonomic function path can
+also opt in by declaring a `context` parameter; like `cancellation_token`, it
+is injected by the framework and excluded from the model-visible schema.
 
 If you are defining how the framework talks to models, validates outputs, executes tools, or carries ephemeral model-call state, it belongs here.

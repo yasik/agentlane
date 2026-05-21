@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from wcmatch import glob as wcmatch_glob
 from wcmatch.glob import WcMatcher
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._gitignore import GitignoreMatcher
@@ -107,6 +107,7 @@ def find_tool(
     async def run_find(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         try:
             return await _find_files(
@@ -115,6 +116,7 @@ def find_tool(
                 permissions=permissions,
                 approval_callback=approval_callback,
                 cancellation_token=cancellation_token,
+                context=context,
             )
         except Exception:
             return _GENERIC_FIND_ERROR
@@ -138,6 +140,7 @@ async def _find_files(
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
 ) -> str:
     """Find files and render a plain-text tool result."""
     pattern = args.pattern.strip()
@@ -158,6 +161,7 @@ async def _find_files(
         ),
         policy=permissions,
         approval_callback=approval_callback,
+        context=context,
     )
     if permission_error is not None:
         return permission_error

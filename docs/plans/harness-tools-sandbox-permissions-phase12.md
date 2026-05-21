@@ -362,40 +362,28 @@ provide an executor that controls log storage.
 
 ## Skills Mapping
 
-The current `SkillManifest` already carries optional `allowed_tools` metadata
-from `allowed-tools` frontmatter.
+Skill tool metadata controls model-visible tool exposure, not host permission
+grants. The allowlist field is `tools`; the deny-list field is
+`disallowedTools`.
 
-Phase 12 should normalize that field into the shared permission vocabulary
-without adding script execution yet.
+Phase 12 should enforce these fields without adding script execution.
 
-Recommended first behavior:
+Required behavior:
 
-1. Treat missing `allowed-tools` as no skill-specific grants.
-2. Parse comma-separated entries that support both whole-tool and
-   operation-level grants.
-3. Bare tool names grant all operations for that tool: `read`, `grep`, `find`,
-   `write`, `patch`, `bash`.
-4. Operation-level entries use `tool:operation` with lower-case operation names:
-   - `read:read_file`
-   - `find:search_files`
-   - `grep:read_file`
-   - `grep:search_files`
-   - `write:create_file`
-   - `write:overwrite_file`
-   - `write:create_directory`
-   - `patch:modify_file`
-   - `bash:execute_command`
-5. Skill metadata can only narrow or label requests; it must not override the
-   developer's outer policy.
-6. The effective decision for a skill-driven tool call is the intersection of:
-   - the host application's policy,
-   - the workspace sandbox,
-   - the skill's declared tool and operation grants.
-7. Unknown tool names or operations in `allowed-tools` should be ignored with a
-   loader warning, not crash discovery.
+1. Missing `tools` inherits the current/session tool pool, subject to deny
+   filters.
+2. Present `tools` replaces the current/session tool pool with exactly those
+   named tools.
+3. `disallowedTools` is deny-first and subtractive. It removes tools before
+   the model sees the active skill context.
+4. If a name appears in both `tools` and `disallowedTools`, the deny rule wins.
+5. Both fields accept a comma-separated string or YAML list.
+6. Tool-selection metadata cannot override the developer's outer permission,
+   sandbox, and approval policy.
 
-This gives script-backed skills a clear future path while keeping Phase 12
-focused on contracts and policy decisions.
+This keeps Phase 12 focused on composable framework contracts: tool exposure is
+handled before model invocation, while execution permission stays with the
+host-provided policy layer.
 
 ## Implementation Checklist
 
@@ -414,15 +402,16 @@ focused on contracts and policy decisions.
 - [x] Add `cwd` and `permissions` arguments to `base_harness_tools()`.
 - [x] Add the approval callback seam and approval-required result handling
       without adding an app-specific approval UI.
-- [x] Normalize `allowed-tools` skill metadata into whole-tool and
-      operation-level allowlist entries.
-- [x] Add tests for skill metadata intersecting with the shared permission
-      layer.
+- [x] Enforce skill `tools` and `disallowedTools` metadata before model
+      exposure.
+- [x] Add tests for skill tool replacement, inherited tool filtering, and
+      deny-first behavior.
 - [x] Update `docs/code-style/tool-design.md` with the approved permission
       guidance.
 - [x] Update `docs/harness/tools.md` with the new sandbox and permission
       behavior.
-- [x] Update `docs/harness/skills.md` with `allowed-tools` behavior.
+- [x] Update `docs/harness/skills.md` with `tools` and `disallowedTools`
+      behavior.
 - [x] Update `docs/plans/agentic-harness-implementation-v1.md` Phase 12 review
       notes after implementation.
 - [x] Run targeted tests for all affected tools and skills.
@@ -430,7 +419,7 @@ focused on contracts and policy decisions.
 - [x] Run `/usr/bin/make lint`.
 - [x] Run `/usr/bin/make tests`, noting the known duplicate-`conftest.py`
       typecheck blocker only if it appears in the selected validation path.
-- [ ] Stop for user review before marking Phase 12 complete.
+- [x] Stop for user review before marking Phase 12 complete.
 
 ## Targeted Validation Plan
 
@@ -461,8 +450,8 @@ Reviewed on 2026-05-15:
 2. `require_approval` should have a framework callback seam for future CLI,
    desktop, web, or service implementations. AgentLane should not implement the
    actual approval UX in this phase.
-3. `allowed-tools` should support operation-level entries, not only whole-tool
-   names.
+3. Skill tool selection uses `tools` for allowlist/replacement semantics and
+   `disallowedTools` for deny-first subtraction.
 4. `bash` should not be excluded from `base_harness_tools(...)`; applications
    decide whether to restrict it through policy.
 
@@ -478,10 +467,18 @@ Implemented for review on 2026-05-15.
 4. Kept `bash` in the base tools set and documented that command gating is not
    process confinement. The workspace policy denies `execute_command` unless it
    is explicitly granted.
-5. Updated skills parsing so `allowed-tools` frontmatter normalizes to
-   whole-tool or operation-level grants without implementing script execution.
-6. Validation passed:
-   - `uv run pytest -q tests/harness/test_tools_permissions.py tests/harness/test_tools_foundation.py tests/harness/test_tools_read.py tests/harness/test_tools_find.py tests/harness/test_tools_grep.py tests/harness/test_tools_write.py tests/harness/test_tools_patch.py tests/harness/test_tools_bash.py tests/harness/test_skills.py` (188 passed)
+5. Updated skills parsing and activation so `tools` replaces the visible tool
+   pool, `disallowedTools` subtracts before model exposure, and deny wins when
+   both fields mention the same tool.
+6. Added explicit framework correlation through `ToolExecutionContext`:
+   the runner builds it, `ToolExecutor` passes it to the tool handler, and
+   first-party permission checks copy `run_id`, `agent_name`, `tool_call_id`,
+   and application metadata onto `ToolPermissionRequest`.
+7. Generic spawned helpers now inherit parent descriptor shims directly, so
+   configured base-tools `cwd`, permissions, and approval callback flow through
+   the same `HarnessToolsShim` the parent already uses.
+8. Validation passed:
+   - `uv run pytest -q tests/models/test_tooling.py tests/harness/test_tools_permissions.py tests/harness/test_tools_read.py tests/harness/test_tools_bash.py tests/harness/test_tools_patch.py tests/harness/test_tools_agent.py tests/harness/test_skills.py tests/harness/test_runner.py tests/harness/test_shims.py` (172 passed)
    - `/usr/bin/make format`
    - `/usr/bin/make lint`
-   - `/usr/bin/make tests` (510 passed)
+   - `/usr/bin/make tests` (524 passed)

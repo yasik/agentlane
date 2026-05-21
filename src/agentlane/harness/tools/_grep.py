@@ -12,7 +12,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 from ripgrepy import RipGrepNotFound, Ripgrepy
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._gitignore import GitignoreMatcher
@@ -189,6 +189,7 @@ def grep_tool(
     async def run_grep(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         del cancellation_token
         try:
@@ -197,6 +198,7 @@ def grep_tool(
                 resolver=resolver,
                 permissions=permissions,
                 approval_callback=approval_callback,
+                context=context,
             )
         except Exception:
             return _GENERIC_GREP_ERROR
@@ -219,6 +221,7 @@ async def _search_files(
     resolver: ToolPathResolver,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
+    context: ToolExecutionContext,
 ) -> str:
     """Search files with ripgrep and render a plain-text tool result."""
     validation_error = _validate_args(args)
@@ -238,6 +241,7 @@ async def _search_files(
         ),
         policy=permissions,
         approval_callback=approval_callback,
+        context=context,
     )
     if permission_error is not None:
         return permission_error

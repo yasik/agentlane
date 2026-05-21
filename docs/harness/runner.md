@@ -180,6 +180,12 @@ Ordinary executable tools run through
 enforces tool visibility and loop-safety limits so a run cannot keep requesting
 the same tools forever.
 
+For each ordinary executable tool call, the runner also builds an explicit
+`ToolExecutionContext` containing the run id, agent name, and model tool-call
+id. `ToolExecutor` passes that context to the tool handler; permission policies
+and approval callbacks can use it for audit or UI correlation without relying
+on hidden process-local state.
+
 ## Agent-As-Tool
 
 Agent-as-tool uses the same model-facing pattern as any other tool: the model
@@ -197,8 +203,8 @@ The first-party base `agent` tool is the generic spawned-helper form of this
 pattern. It accepts a one-word logging/tracing `name` plus a complete `task`
 instruction, spawns a fresh helper, and returns that helper's result as tool
 text. Generic spawned helpers do not inherit the parent conversation or parent
-system prompt. They inherit parent direct tools by default, then receive the
-standard base tools through `HarnessToolsShim`, so tool guidance is appended
+system prompt. They inherit parent direct tools by default and reuse the
+parent's descriptor shims, so shim-contributed tools and prompt guidance flow
 through the same prepared-turn path used by parent agents. The `Runner` carries
 process-local depth and live-agent limits to prevent runaway recursion.
 

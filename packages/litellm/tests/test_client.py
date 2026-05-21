@@ -18,6 +18,7 @@ from agentlane.models import (
     ModelTracing,
     Tool,
     ToolCall,
+    ToolExecutionContext,
     Tools,
 )
 from agentlane.runtime import CancellationToken
@@ -45,8 +46,10 @@ class StructuredResponse(BaseModel):
 async def _echo_handler(
     args: EchoArgs,
     cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
 ) -> str:
     """Return the provided text."""
+    del context
     del cancellation_token
     return args.text
 

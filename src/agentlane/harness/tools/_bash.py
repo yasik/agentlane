@@ -6,7 +6,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._bash_executor import (
@@ -120,6 +120,7 @@ def bash_tool(
     async def run_bash(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         try:
             return await _run_bash(
@@ -130,6 +131,7 @@ def bash_tool(
                 permissions=permissions,
                 approval_callback=approval_callback,
                 cancellation_token=cancellation_token,
+                context=context,
             )
         except Exception:
             return _GENERIC_BASH_ERROR
@@ -155,6 +157,7 @@ async def _run_bash(
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
 ) -> str:
     """Validate model arguments, execute the command, and render the result."""
     if args.command.strip() == "":
@@ -195,6 +198,7 @@ async def _run_bash(
         ),
         policy=permissions,
         approval_callback=approval_callback,
+        context=context,
     )
     if permission_error is not None:
         return permission_error

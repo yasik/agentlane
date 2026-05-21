@@ -22,10 +22,15 @@ lower-level harness.
 
 A practical high-level agent usually starts with:
 
-1. `AgentDescriptor` for the agent name, model, instructions, tools, and shims
+1. `AgentDescriptor` for the model, instructions, tools, shims, and optional
+   explicit agent name
 2. `DefaultAgent` for local runtime and runner ownership
 3. `HarnessToolsShim` when the agent needs first-party workspace tools
 4. `Tools` limits when you want predictable tool-loop behavior
+
+If the descriptor name is omitted or blank, AgentLane generates a Faker-backed
+adjective-noun fallback name. Applications that care about stable trace labels
+should pass the name explicitly.
 
 This path keeps early application code compact. If the agent later needs direct
 runtime addressing, distributed workers, or custom orchestration, move the same

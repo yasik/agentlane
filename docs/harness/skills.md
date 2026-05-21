@@ -190,49 +190,51 @@ It logs a warning and continues for softer issues such as:
 One malformed skill does not fail discovery or break the agent loop. The loader
 skips that skill and continues with the rest.
 
-## Allowed Tools Metadata
+## Tool Selection Metadata
 
-Skills may include an optional `allowed-tools` frontmatter field. AgentLane
-normalizes that string into shared harness-tool permission grants on
-`SkillManifest.allowed_tool_grants`.
+Skills may include optional `tools` and `disallowedTools` frontmatter fields.
+These fields control the model-visible tool pool after a skill is active. They
+do not grant host permissions and cannot override an application's outer
+permission policy.
 
 ```markdown
 ---
 name: workspace-editor
 description: Edit files in the active workspace.
-allowed-tools: read, grep:search_files, write:create_file, patch:modify_file
+tools: read, grep, write, patch
+disallowedTools: bash
 ---
 ```
 
-This metadata does not grant capabilities by itself and does not override the
-application's outer policy. It gives framework integrations and future
-script-backed skills a structured way to intersect a skill's declared tool
-needs with the host application's sandbox, approval, and permission policy.
+Tool selection follows deny-first replacement rules:
 
-Missing `allowed-tools` means the skill has no skill-specific grants. Unknown
-tool names or unsupported operation entries are ignored with a loader warning,
-so one loose field does not break skill discovery.
+1. Missing `tools` inherits the current tool pool, subject to deny filters.
+2. Present `tools` replaces the current tool pool with the declared names.
+3. `disallowedTools` subtracts tool names before the model sees the active
+   skill context.
+4. If a tool is both in `tools` and `disallowedTools`, the deny rule wins.
 
-Supported whole-tool entries are:
+Both fields accept a comma-separated string or a YAML list:
 
-1. `read`
-2. `find`
-3. `grep`
-4. `write`
-5. `patch`
-6. `bash`
+```markdown
+---
+name: workspace-reader
+description: Read files in the active workspace.
+tools:
+  - read
+  - grep
+disallowedTools:
+  - bash
+  - write
+---
+```
 
-Supported operation-level entries are:
+There is no alternate allowlist field. `tools` is the framework's only
+allowlist/replacement frontmatter field.
 
-1. `read:read_file`
-2. `find:search_files`
-3. `grep:read_file`
-4. `grep:search_files`
-5. `write:create_file`
-6. `write:overwrite_file`
-7. `write:create_directory`
-8. `patch:modify_file`
-9. `bash:execute_command`
+These fields filter model exposure. The host application's sandbox,
+permissions, and approval callbacks still decide whether an exposed tool call
+is allowed to execute.
 
 ## State
 

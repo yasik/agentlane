@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._output import TEXT_MAX_BYTES, TEXT_MAX_LINES
@@ -81,6 +81,7 @@ def read_tool(
     async def run_read(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         del cancellation_token
         try:
@@ -89,6 +90,7 @@ def read_tool(
                 resolver=resolver,
                 permissions=permissions,
                 approval_callback=approval_callback,
+                context=context,
             )
         except Exception:
             return _GENERIC_READ_ERROR
@@ -111,6 +113,7 @@ async def _read_file(
     resolver: ToolPathResolver,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
+    context: ToolExecutionContext,
 ) -> str:
     """Read one file and render a plain-text tool result."""
     if args.offset is not None and args.offset < 1:
@@ -130,6 +133,7 @@ async def _read_file(
         ),
         policy=permissions,
         approval_callback=approval_callback,
+        context=context,
     )
     if permission_error is not None:
         return permission_error

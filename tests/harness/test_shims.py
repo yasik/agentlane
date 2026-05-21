@@ -19,6 +19,7 @@ from agentlane.models import (
     ModelResponse,
     Tool,
     ToolCall,
+    ToolExecutionContext,
     Tools,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
@@ -163,8 +164,11 @@ class _EchoArgs(BaseModel):
 
 
 async def _echo_from_shim(
-    args: _EchoArgs, cancellation_token: CancellationToken
+    args: _EchoArgs,
+    cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
 ) -> str:
+    del context
     del cancellation_token
     return f"echo:{args.text}"
 

@@ -12,6 +12,7 @@ from agentlane.models import (
     ModelBehaviorError,
     Tool,
     ToolCall,
+    ToolExecutionContext,
     ToolExecutor,
     Tools,
     ToolSpec,
@@ -35,8 +36,10 @@ class EchoResult(BaseModel):
 async def _echo_handler(
     args: EchoArgs,
     cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
 ) -> EchoResult:
     """Return a structured echo result."""
+    del context
     del cancellation_token
     return EchoResult(echoed=args.text)
 
@@ -73,6 +76,44 @@ def test_tool_runs_and_formats_pydantic_result() -> None:
 
     assert result == EchoResult(echoed="hello")
     assert json.loads(tool.return_value_as_string(result)) == {"echoed": "hello"}
+
+
+def test_tool_run_passes_context() -> None:
+    """Tool.run should pass explicit framework context to the handler."""
+    seen_contexts: list[ToolExecutionContext] = []
+
+    async def context_handler(
+        args: EchoArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> EchoResult:
+        del cancellation_token
+        seen_contexts.append(context)
+        return EchoResult(echoed=args.text)
+
+    context = ToolExecutionContext(
+        run_id="run_1",
+        agent_name="Reviewer",
+        tool_call_id="call_1",
+        metadata={"surface": "cli"},
+    )
+    tool: Tool[EchoArgs, EchoResult] = Tool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=context_handler,
+    )
+
+    result = asyncio.run(
+        tool.run(
+            EchoArgs(text="hello"),
+            CancellationToken(),
+            context=context,
+        )
+    )
+
+    assert result == EchoResult(echoed="hello")
+    assert seen_contexts == [context]
 
 
 def test_tool_from_function_infers_name_description_and_schema() -> None:
@@ -123,6 +164,39 @@ def test_tool_from_function_supports_annotated_descriptions_and_cancellation() -
     assert tool.schema["parameters"]["properties"]["city"]["description"] == (
         "City to search for"
     )
+
+
+def test_tool_from_function_supports_context_injection() -> None:
+    """`context` should be injected and not exposed in the schema."""
+    received_contexts: list[ToolExecutionContext] = []
+
+    async def lookup_order(
+        order_id: str,
+        context: ToolExecutionContext,
+    ) -> str:
+        """Look up one order."""
+        received_contexts.append(context)
+        return order_id.upper()
+
+    tool = Tool.from_function(lookup_order)
+    token = CancellationToken()
+    context = ToolExecutionContext(
+        run_id="run_1",
+        agent_name="LookupAgent",
+        tool_call_id="call_1",
+    )
+    args_model = tool.args_type()
+    result = asyncio.run(
+        tool.run(
+            args_model(order_id="a-123"),
+            token,
+            context=context,
+        )
+    )
+
+    assert result == "A-123"
+    assert received_contexts == [context]
+    assert "context" not in tool.schema["parameters"]["properties"]
 
 
 def test_tool_from_function_raises_for_missing_parameter_annotations() -> None:
@@ -255,6 +329,80 @@ def test_tool_executor_returns_chat_completion_tool_message() -> None:
             "name": "echo",
             "content": '{"echoed":"hello"}',
         }
+    ]
+
+
+def test_tool_executor_passes_per_call_context() -> None:
+    """ToolExecutor should pass explicit context keyed by tool call id."""
+    seen_contexts: list[ToolExecutionContext] = []
+
+    async def context_handler(
+        args: EchoArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> EchoResult:
+        del cancellation_token
+        seen_contexts.append(context)
+        return EchoResult(echoed=args.text)
+
+    context = ToolExecutionContext(
+        run_id="run_1",
+        agent_name="Reviewer",
+        tool_call_id="call_1",
+    )
+    tool: Tool[EchoArgs, EchoResult] = Tool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=context_handler,
+    )
+    executor = ToolExecutor()
+
+    messages = asyncio.run(
+        executor.execute(
+            tool_calls=[_make_tool_call('{"text": "hello"}')],
+            tools=Tools(tools=[tool]),
+            context={"call_1": context},
+        )
+    )
+
+    assert messages[0]["content"] == '{"echoed":"hello"}'
+    assert seen_contexts == [context]
+
+
+def test_tool_executor_defaults_context_to_tool_call_id() -> None:
+    """ToolExecutor should supply the call id even without caller context."""
+    seen_contexts: list[ToolExecutionContext] = []
+
+    async def context_handler(
+        args: EchoArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> EchoResult:
+        del cancellation_token
+        seen_contexts.append(context)
+        return EchoResult(echoed=args.text)
+
+    tool: Tool[EchoArgs, EchoResult] = Tool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=context_handler,
+    )
+    executor = ToolExecutor()
+
+    messages = asyncio.run(
+        executor.execute(
+            tool_calls=[_make_tool_call('{"text": "hello"}')],
+            tools=Tools(tools=[tool]),
+        )
+    )
+
+    assert messages[0]["content"] == '{"echoed":"hello"}'
+    assert seen_contexts == [
+        ToolExecutionContext(
+            tool_call_id="call_1",
+        )
     ]
 
 

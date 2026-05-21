@@ -171,6 +171,19 @@ tools = base_harness_tools(
 )
 ```
 
+The exported permission primitives are framework extension points:
+
+1. `ToolPermissionRequest` describes one operation before a side effect.
+2. `ToolPermissionDecision` returns `allow`, `deny`, or `require_approval`.
+3. `WorkspaceToolPermissionPolicy` is the built-in path sandbox policy.
+4. `AllOfToolPermissionPolicy` composes policies conservatively: deny wins,
+   then approval, then allow.
+5. `ToolPermissionGrantPolicy` and `parse_tool_permission_grants()` are small
+   helpers for operation-level allowlists.
+6. `evaluate_tool_permission()` and `format_tool_permission_result()` are
+   reusable helpers for custom tools that want the same deny and
+   approval-required result contract.
+
 `WorkspaceToolPermissionPolicy(root=...)` allows path operations only when the
 resolved target stays inside the configured root. Existing paths are resolved
 through symlinks. New paths are checked through their nearest existing parent,
@@ -190,12 +203,33 @@ an interactive approval UI. Instead, tools accept an optional
 to decide whether the pending `ToolPermissionRequest` should proceed:
 
 ```python
-async def approve(request: ToolPermissionRequest) -> ToolPermissionDecision:
+async def approve(
+    request: ToolPermissionRequest,
+    decision: ToolPermissionDecision,
+) -> ToolPermissionDecision:
     return ToolPermissionDecision.allow()
 ```
 
 If no callback is configured, the tool returns a stable approval-required
 result and does not execute.
+
+When a first-party tool runs through the default runner, permission requests
+also receive framework correlation from an explicit
+`agentlane.models.ToolExecutionContext`. The runner builds that context for
+each model tool call, `ToolExecutor` passes it to the tool handler, and the
+first-party permission helper copies these fields onto `ToolPermissionRequest`
+before policy and approval evaluation:
+
+1. `run_id`
+2. `agent_name`
+3. `tool_call_id`
+4. `metadata` for application-defined correlation
+
+The framework does not render correlation metadata back to the model by
+default. Applications can use it in policies, approval callbacks, audit logs,
+or UI prompts. There is no hidden ambient permission context; custom tools that
+need framework correlation should accept the `ToolExecutionContext` passed by
+`Tool.run(...)`.
 
 Operations are intentionally small and tool-oriented:
 
@@ -256,10 +290,12 @@ Example tool call:
 and then continues its own loop. The spawned helper treats the explicit `task`
 as its assigned work, not the generated `name`. Generic spawned helpers do not
 inherit the parent's system prompt or conversation history. They do inherit the
-parent's direct tool configuration by default, and they also receive the
-standard base-tools set through `HarnessToolsShim`. The inherited tools and
-base tools are merged by tool name so duplicate definitions are exposed only
-once.
+parent's direct tool configuration by default, and they inherit the parent's
+descriptor shims. When the parent exposes `base_harness_tools(cwd=...,
+permissions=..., approval_callback=...)` through `HarnessToolsShim`, spawned
+helpers get the same configured base tools through normal shim inheritance.
+Inherited direct tools and shim-contributed tools are merged by tool name so
+duplicate definitions are exposed only once.
 
 Tool inheritance is controlled by the same `ToolConfig` policy used by
 `AgentDescriptor.tools`:

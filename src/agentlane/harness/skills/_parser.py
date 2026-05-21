@@ -1,13 +1,13 @@
 """`SKILL.md` frontmatter parsing for harness skills."""
 
-import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+import structlog
 import yaml
 
-from ..tools import parse_tool_permission_grants
 from ._constraints import (
     SKILL_MAX_COMPATIBILITY_LENGTH,
     SKILL_MAX_DESCRIPTION_LENGTH,
@@ -16,7 +16,7 @@ from ._constraints import (
 )
 from ._types import SkillManifest
 
-logger = logging.getLogger(__name__)
+LOGGER = structlog.get_logger(log_tag="agentlane.harness.skills.parser")
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,21 +35,26 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
-        logger.warning("Failed to read skill file %s: %s", path, error)
+        LOGGER.warning(
+            "failed to read skill file",
+            skill_file=str(path),
+            error=str(error),
+        )
         return None
 
     if _exceeds_file_size_limit(text):
-        logger.warning(
-            "Skipping skill file %s because it exceeds the configured file size guidance.",
-            path,
+        LOGGER.warning(
+            "skipping oversized skill file",
+            skill_file=str(path),
+            max_lines=SKILL_MAX_FILE_LINES,
         )
         return None
 
     split_result = _split_frontmatter(text)
     if split_result is None:
-        logger.warning(
-            "Skipping skill file %s because YAML frontmatter could not be parsed.",
-            path,
+        LOGGER.warning(
+            "skipping skill file without parseable frontmatter",
+            skill_file=str(path),
         )
         return None
 
@@ -58,17 +63,18 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
     try:
         raw_frontmatter = yaml.safe_load(frontmatter_text)
     except yaml.YAMLError as error:
-        logger.warning(
-            "Skipping skill file %s because frontmatter YAML is invalid: %s",
-            path,
-            error,
+        LOGGER.warning(
+            "skipping skill file with invalid frontmatter YAML",
+            skill_file=str(path),
+            error=str(error),
         )
         return None
 
     if not isinstance(raw_frontmatter, dict):
-        logger.warning(
-            "Skipping skill file %s because frontmatter is not a YAML mapping.",
-            path,
+        LOGGER.warning(
+            "skipping skill file with non-mapping frontmatter",
+            skill_file=str(path),
+            frontmatter_type=type(raw_frontmatter).__name__,
         )
         return None
 
@@ -78,28 +84,19 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
 
     name = _coerce_required_string(frontmatter, "name")
     if not name:
-        logger.warning(
-            "Skipping skill file %s because `name` is missing or empty.", path
+        LOGGER.warning(
+            "skipping skill file with missing name",
+            skill_file=str(path),
         )
         return None
 
     description = _coerce_required_string(frontmatter, "description")
     if not description:
-        logger.warning(
-            "Skipping skill file %s because `description` is missing or empty.", path
+        LOGGER.warning(
+            "skipping skill file with missing description",
+            skill_file=str(path),
         )
         return None
-
-    allowed_tools = _coerce_optional_string(frontmatter, "allowed-tools")
-    allowed_tool_grants, invalid_allowed_tool_entries = parse_tool_permission_grants(
-        allowed_tools
-    )
-    for entry in invalid_allowed_tool_entries:
-        logger.warning(
-            "Ignoring unsupported allowed-tools entry `%s` in %s.",
-            entry,
-            skill_file,
-        )
 
     manifest = SkillManifest(
         name=_validate_name(name, root=root, skill_file=skill_file),
@@ -111,8 +108,16 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
             _coerce_optional_string(frontmatter, "compatibility")
         ),
         metadata=_validate_metadata(frontmatter.get("metadata")),
-        allowed_tools=allowed_tools,
-        allowed_tool_grants=allowed_tool_grants,
+        tools=_validate_optional_tool_names(
+            frontmatter,
+            key="tools",
+            skill_file=skill_file,
+        ),
+        disallowed_tools=_validate_tool_names(
+            frontmatter.get("disallowedTools"),
+            field_name="disallowedTools",
+            skill_file=skill_file,
+        ),
     )
 
     instructions = body.strip()
@@ -153,41 +158,41 @@ def _exceeds_file_size_limit(text: str) -> bool:
 def _validate_name(name: str, *, root: Path, skill_file: Path) -> str:
     """Validate the required skill name field."""
     if len(name) > SKILL_MAX_NAME_LENGTH:
-        logger.warning(
-            "Skill `%s` in %s exceeds %d characters; continuing anyway.",
-            name,
-            skill_file,
-            SKILL_MAX_NAME_LENGTH,
+        LOGGER.warning(
+            "skill name exceeds configured length",
+            skill=name,
+            skill_file=str(skill_file),
+            max_length=SKILL_MAX_NAME_LENGTH,
         )
     if name.startswith("-") or name.endswith("-"):
-        logger.warning(
-            "Skill `%s` in %s starts or ends with `-`; continuing anyway.",
-            name,
-            skill_file,
+        LOGGER.warning(
+            "skill name starts or ends with hyphen",
+            skill=name,
+            skill_file=str(skill_file),
         )
     if "--" in name:
-        logger.warning(
-            "Skill `%s` in %s contains consecutive hyphens; continuing anyway.",
-            name,
-            skill_file,
+        LOGGER.warning(
+            "skill name contains consecutive hyphens",
+            skill=name,
+            skill_file=str(skill_file),
         )
     for character in name:
         if character == "-":
             continue
         if (character.isalpha() and character.islower()) or character.isdigit():
             continue
-        logger.warning(
-            "Skill `%s` in %s contains non-compliant characters; continuing anyway.",
-            name,
-            skill_file,
+        LOGGER.warning(
+            "skill name contains non-compliant characters",
+            skill=name,
+            skill_file=str(skill_file),
         )
         break
     if root.name != name:
-        logger.warning(
-            "Skill `%s` in %s does not match parent directory `%s`; continuing anyway.",
-            name,
-            skill_file,
-            root.name,
+        LOGGER.warning(
+            "skill name does not match parent directory",
+            skill=name,
+            skill_file=str(skill_file),
+            directory=root.name,
         )
 
     return name
@@ -196,9 +201,9 @@ def _validate_name(name: str, *, root: Path, skill_file: Path) -> str:
 def _validate_description(description: str) -> str:
     """Validate the required skill description field."""
     if len(description) > SKILL_MAX_DESCRIPTION_LENGTH:
-        logger.warning(
-            "Skill description exceeds %d characters; truncating.",
-            SKILL_MAX_DESCRIPTION_LENGTH,
+        LOGGER.warning(
+            "skill description exceeds configured length",
+            max_length=SKILL_MAX_DESCRIPTION_LENGTH,
         )
 
     return description[:SKILL_MAX_DESCRIPTION_LENGTH]
@@ -210,9 +215,9 @@ def _validate_compatibility(compatibility: str | None) -> str | None:
         return None
 
     if len(compatibility) > SKILL_MAX_COMPATIBILITY_LENGTH:
-        logger.warning(
-            "Skill compatibility exceeds %d characters; truncating.",
-            SKILL_MAX_COMPATIBILITY_LENGTH,
+        LOGGER.warning(
+            "skill compatibility exceeds configured length",
+            max_length=SKILL_MAX_COMPATIBILITY_LENGTH,
         )
 
     return compatibility[:SKILL_MAX_COMPATIBILITY_LENGTH]
@@ -224,9 +229,9 @@ def _validate_metadata(raw_metadata: object) -> dict[str, str] | None:
         return None
 
     if not isinstance(raw_metadata, dict):
-        logger.warning(
-            "Ignoring non-mapping skill metadata of type %s.",
-            type(raw_metadata).__name__,
+        LOGGER.warning(
+            "ignoring non-mapping skill metadata",
+            metadata_type=type(raw_metadata).__name__,
         )
         return None
 
@@ -234,6 +239,63 @@ def _validate_metadata(raw_metadata: object) -> dict[str, str] | None:
     for key, value in cast(dict[object, object], raw_metadata).items():
         normalized[str(key)] = str(value)
     return normalized
+
+
+def _validate_optional_tool_names(
+    frontmatter: dict[str, object],
+    *,
+    key: str,
+    skill_file: Path,
+) -> tuple[str, ...] | None:
+    """Return parsed tool names when a field is present, preserving omission."""
+    if key not in frontmatter:
+        return None
+
+    return _validate_tool_names(
+        frontmatter.get(key),
+        field_name=key,
+        skill_file=skill_file,
+    )
+
+
+def _validate_tool_names(
+    raw_value: object,
+    *,
+    field_name: str,
+    skill_file: Path,
+) -> tuple[str, ...]:
+    """Normalize comma-separated or YAML-list tool names."""
+    if raw_value is None:
+        return ()
+    if isinstance(raw_value, str):
+        raw_items: Sequence[object] = raw_value.split(",")
+    elif isinstance(raw_value, (list, tuple)):
+        raw_items = cast(Sequence[object], raw_value)
+    else:
+        LOGGER.warning(
+            "ignoring invalid skill tool field",
+            field=field_name,
+            skill_file=str(skill_file),
+            value_type=type(raw_value).__name__,
+        )
+        return ()
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        name = str(raw_item).strip()
+        if name == "":
+            LOGGER.warning(
+                "ignoring empty skill tool entry",
+                field=field_name,
+                skill_file=str(skill_file),
+            )
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
 
 
 def _coerce_required_string(frontmatter: dict[str, object], key: str) -> str | None:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._paths import ToolPathResolver
@@ -57,6 +57,7 @@ def write_tool(
     async def run_write(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         del cancellation_token
         try:
@@ -65,6 +66,7 @@ def write_tool(
                 resolver=resolver,
                 permissions=permissions,
                 approval_callback=approval_callback,
+                context=context,
             )
         except Exception:
             return _GENERIC_WRITE_ERROR
@@ -87,6 +89,7 @@ async def _write_file(
     resolver: ToolPathResolver,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
+    context: ToolExecutionContext,
 ) -> str:
     """Write text content and return a model-facing status message."""
     if args.path.strip() == "":
@@ -105,6 +108,7 @@ async def _write_file(
         resolver=resolver,
         permissions=permissions,
         approval_callback=approval_callback,
+        context=context,
     )
     if permission_error is not None:
         return permission_error
@@ -141,6 +145,7 @@ async def _check_write_permissions(
     resolver: ToolPathResolver,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
+    context: ToolExecutionContext,
 ) -> str | None:
     """Return a model-facing permission result before any write side effect."""
     requests: list[ToolPermissionRequest] = []
@@ -171,6 +176,7 @@ async def _check_write_permissions(
             request,
             policy=permissions,
             approval_callback=approval_callback,
+            context=context,
         )
         if permission_error is not None:
             return permission_error

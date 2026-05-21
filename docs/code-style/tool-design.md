@@ -15,6 +15,9 @@ Use this page when adding or changing first-party tools, especially tools under
 - Keep construction-time configuration on the helper function. Example:
   `read_tool(cwd=workspace)` captures path policy before the model can call the
   tool.
+- When using `Tool.from_function(...)` or `@as_tool`, a parameter named
+  `context` is framework-injected and excluded from the model-visible schema,
+  the same way `cancellation_token` is handled.
 - Register standard first-party tools through `base_harness_tools()` only after
   the tool behavior, tests, docs, and example are complete.
 
@@ -76,7 +79,11 @@ Use this page when adding or changing first-party tools, especially tools under
   primitives from `agentlane.harness.tools` instead of inventing tool-specific
   policy types. Evaluate the policy after simple argument validation and path
   resolution, before filesystem writes, file opens, process startup, or other
-  side effects.
+  side effects. Also evaluate permissions before existence or type checks that
+  would reveal information about paths outside the allowed boundary.
+- Policy composition must be conservative. For `AllOfToolPermissionPolicy`,
+  deny wins over approval, approval wins over allow, and allow is returned only
+  when every nested policy allows the request.
 - Denied and approval-required decisions are normal model-facing tool results,
   not exceptions. Keep the wording stable, for example:
   ```text
@@ -84,8 +91,16 @@ Use this page when adding or changing first-party tools, especially tools under
   approval required: bash command requires application approval before execution
   ```
 - `require_approval` is a framework seam. Core tools may call an optional
-  approval callback supplied by the host application, but the harness library
-  should not implement CLI, desktop, web, or service-specific approval UX.
+  approval callback supplied by the host application with both the
+  `ToolPermissionRequest` and the approval-required `ToolPermissionDecision`,
+  but the harness library should not implement CLI, desktop, web, or
+  service-specific approval UX.
+- Framework correlation flows through `ToolExecutionContext`, which
+  `ToolExecutor` passes explicitly to tool handlers. First-party permission
+  checks copy `run_id`, `agent_name`, and `tool_call_id` from that context onto
+  `ToolPermissionRequest`; use `metadata` only for host-application
+  correlation data. Do not use ambient context or render correlation metadata
+  in model-facing text by default.
 - Be precise about `bash`: command execution can be denied or approval-gated
   before startup, but the default local executor is not filesystem-confined
   after startup. Real process isolation belongs in a host-provided executor,
@@ -103,13 +118,14 @@ Use this page when adding or changing first-party tools, especially tools under
 - Define constants for the tool name, description, prompt snippet, prompt
   guideline, and generic error text.
 - Keep the async handler thin. It should adapt the `Tool` call boundary, handle
-  cancellation-token plumbing, and delegate tool behavior to typed helpers.
+  cancellation-token and `ToolExecutionContext` plumbing, and delegate tool
+  behavior to typed helpers.
 - Split validation, execution, output collection, and formatting into small
   helpers when that makes the result contract easier to test.
 - Use small internal dataclasses when a helper needs to return content plus
   metadata such as continuation or error state.
-- Use `del cancellation_token` or pass the token through intentionally. Avoid
-  leaving unused parameters ambiguous.
+- Use `del cancellation_token` / `del context` or pass them through
+  intentionally. Avoid leaving unused framework parameters ambiguous.
 
 ## Tests
 

@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -10,7 +11,13 @@ from agentlane.harness._handoff import (
 )
 from agentlane.harness._lifecycle import DefaultAgentTool
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.tools import HarnessToolsShim, agent_tool, base_harness_tools
+from agentlane.harness.tools import (
+    HarnessToolDefinition,
+    HarnessToolsShim,
+    WorkspaceToolPermissionPolicy,
+    agent_tool,
+    base_harness_tools,
+)
 from agentlane.harness.tools._shim import render_harness_tools_prompt
 from agentlane.messaging import DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import MessageDict, ModelResponse, Tools
@@ -31,10 +38,12 @@ def _message(role: str, content: object) -> MessageDict:
     }
 
 
-def _expected_default_child_system_prompt() -> str:
-    prompt = render_harness_tools_prompt(definitions=base_harness_tools())
+def _expected_child_system_prompt(
+    definitions: tuple[HarnessToolDefinition, ...],
+) -> str:
+    prompt = render_harness_tools_prompt(definitions=definitions)
     if prompt is None:
-        raise AssertionError("Base harness tools unexpectedly rendered no prompt.")
+        return default_agent_tool_instructions()
     return f"{default_agent_tool_instructions()}\n\n{prompt}"
 
 
@@ -68,7 +77,7 @@ def test_runner_rejects_invalid_agent_limits() -> None:
         Runner(agent_max_threads=0)
 
 
-def test_agent_tool_executes_through_harness_tools_shim_with_inherited_parent_tools() -> (
+def test_agent_tool_executes_through_harness_tools_shim_with_inherited_parent_state() -> (
     None
 ):
     async def scenario() -> None:
@@ -114,7 +123,7 @@ def test_agent_tool_executes_through_harness_tools_shim_with_inherited_parent_to
             [
                 _message(
                     "system",
-                    _expected_default_child_system_prompt(),
+                    _expected_child_system_prompt((agent_tool(model=child_model),)),
                 ),
                 _message("user", "Research the refund exception."),
             ]
@@ -123,8 +132,77 @@ def test_agent_tool_executes_through_harness_tools_shim_with_inherited_parent_to
         assert child_tools is not None
         child_tool_names = [tool.name for tool in child_tools.normalized_tools]
         assert "agent" in child_tool_names
-        assert "read" in child_tool_names
+        assert "read" not in child_tool_names
         assert "custom" in child_tool_names
+
+    asyncio.run(scenario())
+
+
+def test_agent_tool_inherits_configured_base_tools_shim_for_child_agents(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        outside = tmp_path / "outside.txt"
+        outside.write_text("secret\n", encoding="utf-8")
+        model = SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="call_1",
+                            name="agent",
+                            arguments=(
+                                '{"name":"Researcher",'
+                                '"task":"Read the outside file."}'
+                            ),
+                        )
+                    ],
+                ),
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="child_call_1",
+                            name="read",
+                            arguments=f'{{"path": "{outside}"}}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="child complete"),
+                make_assistant_response(content="parent complete"),
+            ]
+        )
+        agent = DefaultAgent(
+            runtime=runtime,
+            runner=runner,
+            descriptor=AgentDescriptor(
+                name="Manager",
+                model=model,
+                shims=(
+                    HarnessToolsShim(
+                        base_harness_tools(
+                            cwd=workspace,
+                            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+                        )
+                    ),
+                ),
+            ),
+        )
+
+        result = await agent.run("Need a delegated read")
+
+        assert result.final_output == "parent complete"
+        child_tool_result = model.calls[2][-1]
+        assert child_tool_result["tool_call_id"] == "child_call_1"
+        assert child_tool_result["name"] == "read"
+        assert child_tool_result["content"] == (
+            f"permission denied: read is not allowed for `{outside}`"
+        )
 
     asyncio.run(scenario())
 

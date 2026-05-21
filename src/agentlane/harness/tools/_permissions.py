@@ -1,11 +1,13 @@
 """Permission primitives for first-party harness tools."""
 
 import inspect
-from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
+
+from agentlane.models import ToolExecutionContext
 
 
 class ToolOperation(StrEnum):
@@ -28,6 +30,11 @@ class ToolPermissionOutcome(StrEnum):
     REQUIRE_APPROVAL = "require_approval"
 
 
+def _empty_metadata() -> dict[str, object]:
+    """Return a typed empty metadata mapping for permission dataclasses."""
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class ToolPermissionRequest:
     """Context for one permission check before a local tool operation."""
@@ -39,6 +46,10 @@ class ToolPermissionRequest:
     command: str | None = None
     skill_name: str | None = None
     reason: str | None = None
+    run_id: str | None = None
+    agent_name: str | None = None
+    tool_call_id: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=_empty_metadata)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +87,7 @@ type ToolPermissionCheckResult = (
     ToolPermissionDecision | Awaitable[ToolPermissionDecision]
 )
 type ToolApprovalCallback = Callable[
-    [ToolPermissionRequest],
+    [ToolPermissionRequest, ToolPermissionDecision],
     ToolPermissionCheckResult,
 ]
 
@@ -130,10 +141,18 @@ class AllOfToolPermissionPolicy:
         self._policies = tuple(policies)
 
     async def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
+        approval_decision: ToolPermissionDecision | None = None
         for policy in self._policies:
             decision = await _resolve_permission_result(policy.check(request))
+            if decision.outcome == ToolPermissionOutcome.DENY:
+                return decision
+            if decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL:
+                approval_decision = approval_decision or decision
+                continue
             if not decision.allowed:
                 return decision
+        if approval_decision is not None:
+            return approval_decision
         return ToolPermissionDecision.allow()
 
 
@@ -185,19 +204,26 @@ async def evaluate_tool_permission(
     *,
     policy: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
+    context: ToolExecutionContext | None = None,
 ) -> str | None:
     """Return a model-facing denial result, or None when execution may proceed."""
+    active_request = _request_with_context(
+        request,
+        context=context,
+    )
     active_policy = policy or AllowAllToolPermissionPolicy()
-    decision = await _resolve_permission_result(active_policy.check(request))
+    decision = await _resolve_permission_result(active_policy.check(active_request))
     if (
         decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
         and approval_callback is not None
     ):
-        decision = await _resolve_permission_result(approval_callback(request))
+        decision = await _resolve_permission_result(
+            approval_callback(active_request, decision)
+        )
 
     if decision.allowed:
         return None
-    return format_tool_permission_result(request=request, decision=decision)
+    return format_tool_permission_result(request=active_request, decision=decision)
 
 
 def format_tool_permission_result(
@@ -260,6 +286,23 @@ async def _resolve_permission_result(
     if inspect.isawaitable(result):
         return await result
     return result
+
+
+def _request_with_context(
+    request: ToolPermissionRequest,
+    *,
+    context: ToolExecutionContext | None,
+) -> ToolPermissionRequest:
+    """Return `request` with explicit tool execution context applied."""
+    if context is None:
+        return request
+    return replace(
+        request,
+        run_id=request.run_id or context.run_id,
+        agent_name=request.agent_name or context.agent_name,
+        tool_call_id=request.tool_call_id or context.tool_call_id,
+        metadata=(request.metadata if request.metadata else dict(context.metadata)),
+    )
 
 
 def _format_permission_denied(request: ToolPermissionRequest) -> str:

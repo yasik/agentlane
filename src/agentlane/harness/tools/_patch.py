@@ -5,7 +5,7 @@ from pathlib import Path
 import patch_tool as patch_engine
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._paths import ToolPathResolver
@@ -68,6 +68,7 @@ def patch_tool(
     async def run_patch(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         del cancellation_token
         try:
@@ -76,6 +77,7 @@ def patch_tool(
                 resolver=resolver,
                 permissions=permissions,
                 approval_callback=approval_callback,
+                context=context,
             )
         except Exception:
             return _GENERIC_PATCH_ERROR
@@ -98,6 +100,7 @@ async def _patch_file(
     resolver: ToolPathResolver,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
+    context: ToolExecutionContext,
 ) -> str:
     """Parse, apply, and render one model-facing patch result."""
     validation_error = _validate_args(args)
@@ -105,11 +108,6 @@ async def _patch_file(
         return validation_error
 
     resolved_path = resolver.resolve(args.path)
-    if resolved_path.is_dir():
-        return f"Path is a directory: {resolved_path}"
-    if not resolved_path.exists():
-        return f"File not found: {resolved_path}"
-
     permission_error = await evaluate_tool_permission(
         ToolPermissionRequest(
             tool_name=_TOOL_NAME,
@@ -119,9 +117,15 @@ async def _patch_file(
         ),
         policy=permissions,
         approval_callback=approval_callback,
+        context=context,
     )
     if permission_error is not None:
         return permission_error
+
+    if resolved_path.is_dir():
+        return f"Path is a directory: {resolved_path}"
+    if not resolved_path.exists():
+        return f"File not found: {resolved_path}"
 
     try:
         edits = patch_engine.parse_blocks(args.edits)

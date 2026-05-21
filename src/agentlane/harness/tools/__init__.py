@@ -39,6 +39,8 @@ from ._permissions import (
     ToolPermissionPolicy,
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
+    evaluate_tool_permission,
+    format_tool_permission_result,
     parse_tool_permission_grants,
 )
 from ._plan import plan_tool
@@ -82,7 +84,9 @@ __all__ = [
     "agent_tool",
     "base_harness_tools",
     "bash_tool",
+    "evaluate_tool_permission",
     "find_tool",
+    "format_tool_permission_result",
     "grep_tool",
     "patch_tool",
     "plan_tool",

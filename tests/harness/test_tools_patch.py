@@ -161,6 +161,45 @@ def test_patch_tool_denies_modify_outside_workspace_policy(tmp_path: Path) -> No
     assert outside.read_text(encoding="utf-8") == original
 
 
+def test_patch_tool_denies_missing_path_outside_workspace_before_existence_check(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "missing.txt"
+
+    output = run_tool(
+        patch_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+        ),
+        path=str(outside),
+        edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",
+    )
+
+    assert output == f"permission denied: patch is not allowed for `{outside}`"
+
+
+def test_patch_tool_denies_directory_outside_workspace_before_type_check(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+
+    output = run_tool(
+        patch_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+        ),
+        path=str(outside),
+        edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",
+    )
+
+    assert output == f"permission denied: patch is not allowed for `{outside}`"
+
+
 def test_patch_tool_reports_parser_errors_and_empty_patch(tmp_path: Path) -> None:
     target = tmp_path / "notes.txt"
     target.write_text("alpha\n", encoding="utf-8")

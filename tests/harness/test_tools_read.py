@@ -12,10 +12,12 @@ from agentlane.harness.tools import (
     HarnessToolsShim,
     ToolPathResolver,
     ToolPermissionDecision,
+    ToolPermissionOutcome,
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
     read_tool,
 )
+from agentlane.messaging import AgentId
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
 
@@ -84,9 +86,14 @@ def test_read_tool_approval_callback_can_allow_request(tmp_path: Path) -> None:
             return ToolPermissionDecision.require_approval()
 
     approved_requests: list[ToolPermissionRequest] = []
+    approval_decisions: list[ToolPermissionDecision] = []
 
-    async def approve(request: ToolPermissionRequest) -> ToolPermissionDecision:
+    async def approve(
+        request: ToolPermissionRequest,
+        decision: ToolPermissionDecision,
+    ) -> ToolPermissionDecision:
         approved_requests.append(request)
+        approval_decisions.append(decision)
         return ToolPermissionDecision.allow()
 
     target = tmp_path / "notes.txt"
@@ -103,6 +110,9 @@ def test_read_tool_approval_callback_can_allow_request(tmp_path: Path) -> None:
 
     assert output == "approved"
     assert [request.path for request in approved_requests] == [target]
+    assert [decision.outcome for decision in approval_decisions] == [
+        ToolPermissionOutcome.REQUIRE_APPROVAL
+    ]
 
 
 def test_read_tool_reports_approval_required_without_callback(tmp_path: Path) -> None:
@@ -337,6 +347,74 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
         assert tool_message["role"] == "tool"
         assert tool_message["name"] == "read"
         assert tool_message["content"] == "runner content"
+
+    asyncio.run(scenario())
+
+
+def test_read_tool_permission_request_includes_runner_correlation_context(
+    tmp_path: Path,
+) -> None:
+    class RecordingPolicy:
+        def __init__(self) -> None:
+            self.requests: list[ToolPermissionRequest] = []
+
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            self.requests.append(request)
+            return ToolPermissionDecision.allow()
+
+    async def scenario() -> None:
+        (tmp_path / "runner.txt").write_text("runner content\n", encoding="utf-8")
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        policy = RecordingPolicy()
+        model = SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="call_1",
+                            name="read",
+                            arguments='{"path":"runner.txt"}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ]
+        )
+        agent_id = AgentId.from_values("assistant-agent", "session-1")
+        agent = Agent(
+            runtime,
+            runner,
+            bind_id=agent_id,
+            descriptor=AgentDescriptor(
+                name="ReadRunner",
+                model=model,
+                tools=Tools(
+                    tools=[read_tool(cwd=tmp_path, permissions=policy).tool],
+                    tool_choice="required",
+                    tool_call_limits={"read": 1},
+                ),
+            ),
+        )
+        state = RunState(
+            instructions="Read the requested file before answering.",
+            history=["inspect runner.txt"],
+            responses=[],
+        )
+
+        result = await runner.run(agent, state)
+
+        assert result.final_output == "done"
+        assert len(policy.requests) == 1
+        request = policy.requests[0]
+        assert request.run_id == str(agent_id)
+        assert request.agent_name == "ReadRunner"
+        assert request.tool_call_id == "call_1"
+        assert request.metadata == {}
 
     asyncio.run(scenario())
 

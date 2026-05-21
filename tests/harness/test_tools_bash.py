@@ -23,6 +23,7 @@ from agentlane.harness.tools import (
     HarnessToolsShim,
     ToolOperation,
     ToolPermissionDecision,
+    ToolPermissionOutcome,
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
     bash_tool,
@@ -291,8 +292,10 @@ def test_bash_tool_approval_callback_can_allow_command(tmp_path: Path) -> None:
 
         async def approve(
             request: ToolPermissionRequest,
+            decision: ToolPermissionDecision,
         ) -> ToolPermissionDecision:
             assert request.command == "pwd"
+            assert decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
             return ToolPermissionDecision.allow()
 
         definition = bash_tool(

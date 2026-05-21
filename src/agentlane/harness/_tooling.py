@@ -132,6 +132,24 @@ def filter_tools(
     return _with_tools(tools, filtered)
 
 
+def exclude_tools(
+    tools: Tools | None,
+    *,
+    names: frozenset[str],
+) -> Tools | None:
+    """Return a copy without tools whose names are denied."""
+    if tools is None:
+        return None
+    if not names:
+        return tools
+
+    filtered = tuple(tool for tool in tools.normalized_tools if tool.name not in names)
+    if not filtered:
+        return None
+
+    return _with_tools(tools, filtered)
+
+
 def merge_tools(
     primary: Tools | None,
     extra: tuple[ToolSpec[Any], ...],

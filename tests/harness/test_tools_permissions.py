@@ -11,8 +11,10 @@ from agentlane.harness.tools import (
     ToolPermissionOutcome,
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
+    evaluate_tool_permission,
     parse_tool_permission_grants,
 )
+from agentlane.models import ToolExecutionContext
 
 
 def _request(
@@ -42,6 +44,85 @@ def test_workspace_permission_policy_allows_paths_inside_root(
     decision = policy.check(_request(cwd=workspace, path=target))
 
     assert decision.outcome == ToolPermissionOutcome.ALLOW
+
+
+def test_evaluate_tool_permission_applies_explicit_context(
+    tmp_path: Path,
+) -> None:
+    seen: list[ToolPermissionRequest] = []
+
+    class RecordingPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            seen.append(request)
+            return ToolPermissionDecision.allow()
+
+    error = asyncio.run(
+        evaluate_tool_permission(
+            _request(cwd=tmp_path, path=tmp_path / "notes.txt"),
+            policy=RecordingPolicy(),
+            context=ToolExecutionContext(
+                run_id="assistant-agent:session-1",
+                agent_name="Reviewer",
+                tool_call_id="call_1",
+                metadata={"surface": "cli"},
+            ),
+        )
+    )
+
+    assert error is None
+    assert seen[0].run_id == "assistant-agent:session-1"
+    assert seen[0].agent_name == "Reviewer"
+    assert seen[0].tool_call_id == "call_1"
+    assert seen[0].metadata == {"surface": "cli"}
+
+
+def test_evaluate_tool_permission_preserves_explicit_request_fields(
+    tmp_path: Path,
+) -> None:
+    seen: list[ToolPermissionRequest] = []
+
+    class RecordingPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            seen.append(request)
+            return ToolPermissionDecision.allow()
+
+    error = asyncio.run(
+        evaluate_tool_permission(
+            ToolPermissionRequest(
+                tool_name="read",
+                operation=ToolOperation.READ_FILE,
+                cwd=tmp_path,
+                path=tmp_path / "notes.txt",
+                run_id="explicit-run",
+                metadata={"surface": "app"},
+            ),
+            policy=RecordingPolicy(),
+            context=ToolExecutionContext(
+                run_id="context-run",
+                agent_name="Reviewer",
+                tool_call_id="call_1",
+                metadata={"surface": "cli"},
+            ),
+        )
+    )
+
+    assert error is None
+    assert seen[0] == ToolPermissionRequest(
+        tool_name="read",
+        operation=ToolOperation.READ_FILE,
+        cwd=tmp_path,
+        path=tmp_path / "notes.txt",
+        run_id="explicit-run",
+        agent_name="Reviewer",
+        tool_call_id="call_1",
+        metadata={"surface": "app"},
+    )
 
 
 def test_workspace_permission_policy_denies_paths_outside_root(
@@ -203,3 +284,55 @@ def test_all_of_tool_permission_policy_intersects_decisions(tmp_path: Path) -> N
     decision = asyncio.run(policy.check(request))
 
     assert decision == ToolPermissionDecision.allow()
+
+
+def test_all_of_tool_permission_policy_denies_after_approval_required(
+    tmp_path: Path,
+) -> None:
+    class RequireApprovalPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            del request
+            return ToolPermissionDecision.require_approval()
+
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside.txt"
+    workspace.mkdir()
+    outside.write_text("secret", encoding="utf-8")
+    policy = AllOfToolPermissionPolicy(
+        (
+            RequireApprovalPolicy(),
+            WorkspaceToolPermissionPolicy(root=workspace),
+        )
+    )
+    request = _request(cwd=workspace, path=outside)
+
+    decision = asyncio.run(policy.check(request))
+
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_all_of_tool_permission_policy_requires_approval_after_allows(
+    tmp_path: Path,
+) -> None:
+    class RequireApprovalPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            del request
+            return ToolPermissionDecision.require_approval("approval needed")
+
+    policy = AllOfToolPermissionPolicy(
+        (
+            WorkspaceToolPermissionPolicy(root=tmp_path),
+            RequireApprovalPolicy(),
+        )
+    )
+    request = _request(cwd=tmp_path, path=tmp_path / "notes.txt")
+
+    decision = asyncio.run(policy.check(request))
+
+    assert decision == ToolPermissionDecision.require_approval("approval needed")

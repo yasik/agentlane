@@ -34,6 +34,7 @@ from agentlane.models import (
     RunErrorDetails,
     Tool,
     ToolCall,
+    ToolExecutionContext,
     ToolExecutor,
     Tools,
     ToolSpec,
@@ -72,10 +73,8 @@ from ._run import (
 )
 from ._stream import RunStream
 from ._task import Task
-from ._tooling import InheritTools, RestrictTools
 from .shims import PreparedTurn, Shim
 from .shims._manager import BoundShimManager
-from .tools import HarnessToolsShim, base_harness_tools
 
 _AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
 _AGENT_THREAD_LIMIT_REACHED = "Agent thread limit reached. Solve the task yourself."
@@ -89,6 +88,9 @@ class RunnerTask(Protocol):
     The runner accesses these properties during request building and model
     calls. Any task that exposes them is compatible — no subclassing needed.
     """
+
+    @property
+    def name(self) -> str: ...
 
     @property
     def model(self) -> Model[ModelResponse] | None: ...
@@ -107,6 +109,9 @@ class RunnerTask(Protocol):
 
     @property
     def instructions(self) -> str | PromptSpec[Any] | None: ...
+
+    @property
+    def shims(self) -> Sequence[Shim] | None: ...
 
 
 @runtime_checkable
@@ -238,7 +243,7 @@ class Runner:
 
         # Narrow the agent to the runner protocol once per run. All helper
         # functions receive the narrowed value instead of re-checking.
-        runner_task = _narrow_runner_task(agent)
+        runner_task = _require_runner_task(agent)
         shim_manager = _shim_manager(agent)
         transient_state = DefaultRunContext()
 
@@ -407,7 +412,7 @@ class Runner:
     ) -> RunResult:
         """Execute the generic harness loop while forwarding model events."""
         result: RunResult | None = None
-        runner_task = _narrow_runner_task(agent)
+        runner_task = _require_runner_task(agent)
         shim_manager = _shim_manager(agent)
         transient_state = DefaultRunContext()
         tool_call_counts: dict[str, int] = {}
@@ -507,7 +512,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         messages: list[MessageDict],
         tools: Tools | None,
         model_args: dict[str, object] | None,
@@ -530,7 +535,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         messages: list[MessageDict],
         tools: Tools | None,
         model_args: dict[str, object] | None,
@@ -544,7 +549,7 @@ class Runner:
         response = await model(
             messages,
             extra_call_args=model_args,
-            schema=_schema(runner_task),
+            schema=runner_task.schema,
             tools=tools,
             cancellation_token=cancellation_token,
         )
@@ -556,7 +561,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         messages: list[MessageDict],
         tools: Tools | None,
         model_args: dict[str, object] | None,
@@ -577,7 +582,7 @@ class Runner:
         async for event in model.stream_response(
             messages,
             extra_call_args=model_args,
-            schema=_schema(runner_task),
+            schema=runner_task.schema,
             tools=tools,
             cancellation_token=cancellation_token,
         ):
@@ -601,7 +606,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tools: Tools | None,
         tool_calls: list[ToolCall],
         response: ModelResponse,
@@ -664,7 +669,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tools: Tools,
         tool_call: ToolCall,
         tool_definition: ToolSpec[Any],
@@ -694,6 +699,11 @@ class Runner:
 
         if isinstance(tool_definition, Tool):
             tool_config = replace(tools, tools=(tool_definition,))
+            context = _tool_context(
+                agent=agent,
+                runner_task=runner_task,
+                tool_call=tool_call,
+            )
             tool_messages = await self._tool_executor.execute(
                 tool_calls=[tool_call],
                 tools=tool_config,
@@ -707,6 +717,7 @@ class Runner:
                     ended_call,
                     result,
                 ),
+                context={tool_call.id: context},
             )
             return tool_messages[0]
 
@@ -722,7 +733,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tool_call: ToolCall,
         tool_definition: AgentTool,
         hooks: RunnerHooks,
@@ -754,7 +765,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tool_call: ToolCall,
         tool_definition: DefaultAgentTool,
         hooks: RunnerHooks,
@@ -786,7 +797,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         state: RunState,
         response: ModelResponse,
         handoff_call: ToolCall,
@@ -859,7 +870,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         state: RunState,
         response: ModelResponse,
         handoff_call: ToolCall,
@@ -930,7 +941,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tool_name: str,
         descriptor: AgentDescriptor,
         run_input: list[RunHistoryItem],
@@ -947,7 +958,7 @@ class Runner:
             type(agent).create_factory(
                 runner=self,
                 descriptor=child_descriptor,
-                parent_tools=_base_tools(runner_task),
+                parent_tools=runner_task.base_tools,
             ),
         )
         outcome = await agent.send_message(
@@ -961,7 +972,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tool_name: str,
         tool_definition: DefaultAgentTool,
         parsed_input: DefaultAgentToolInput,
@@ -991,14 +1002,14 @@ class Runner:
                 ),
                 schema=tool_definition.output_schema,
                 tools=tool_definition.tools,
-                shims=_default_agent_child_shims(tool_definition),
+                shims=_default_agent_child_shims(runner_task),
             )
             runtime.register_factory(
                 delegated_agent_type(agent.id, tool_name, kind="tool"),
                 type(agent).create_factory(
                     runner=self,
                     descriptor=child_descriptor,
-                    parent_tools=_base_tools(runner_task),
+                    parent_tools=runner_task.base_tools,
                 ),
             )
             outcome = await agent.send_message(
@@ -1014,7 +1025,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tool_name: str,
         descriptor: AgentDescriptor,
         transferred_state: RunState,
@@ -1027,7 +1038,7 @@ class Runner:
             type(agent).create_factory(
                 runner=self,
                 descriptor=descriptor,
-                parent_tools=_base_tools(runner_task),
+                parent_tools=runner_task.base_tools,
             ),
         )
         outcome = await agent.send_message(
@@ -1041,7 +1052,7 @@ class Runner:
         self,
         *,
         agent: Task,
-        runner_task: RunnerTask | None,
+        runner_task: RunnerTask,
         tool_name: str,
         descriptor: AgentDescriptor,
         transferred_state: RunState,
@@ -1055,7 +1066,7 @@ class Runner:
             delegated_agent_id(agent.id, tool_name, kind="handoff"),
             runner=self,
             descriptor=descriptor,
-            parent_tools=_base_tools(runner_task),
+            parent_tools=runner_task.base_tools,
         )
         if not isinstance(bound_agent, _StreamRunnableAgent):
             raise RuntimeError(
@@ -1130,7 +1141,7 @@ def _require_handoff_tool_definition(
 
 def _resolved_handoff_descriptor(
     *,
-    runner_task: RunnerTask | None,
+    runner_task: RunnerTask,
     tool_definition: HandoffTool | DefaultHandoffTool,
 ) -> AgentDescriptor:
     """Return the resolved descriptor for one intercepted handoff tool."""
@@ -1158,7 +1169,7 @@ def _resolved_handoff_descriptor(
 
 def _resolved_child_descriptor(
     *,
-    runner_task: RunnerTask | None,
+    runner_task: RunnerTask,
     descriptor: AgentDescriptor,
 ) -> AgentDescriptor:
     """Fill child descriptor model defaults from the current agent."""
@@ -1173,13 +1184,6 @@ def _resolved_child_descriptor(
         model=model,
         model_args=model_args,
     )
-
-
-def _base_tools(runner_task: RunnerTask | None) -> Tools | None:
-    """Return the explicit parent tool catalog before handoff merge."""
-    if runner_task is None:
-        return None
-    return runner_task.base_tools
 
 
 def _overwrite_run_state(target: RunState, source: RunState) -> None:
@@ -1266,12 +1270,9 @@ def _default_agent_tool_run_input(
     return [parsed_input.task]
 
 
-def _default_agent_child_shims(tool_definition: DefaultAgentTool) -> tuple[Shim, ...]:
-    """Return shim policy for one generic spawned helper."""
-    if not isinstance(tool_definition.tools, (InheritTools, RestrictTools)):
-        return ()
-
-    return (HarnessToolsShim(base_harness_tools()),)
+def _default_agent_child_shims(runner_task: RunnerTask) -> tuple[Shim, ...]:
+    """Return parent shims inherited by one generic spawned helper."""
+    return tuple(runner_task.shims or ())
 
 
 def _tool_result_message(
@@ -1405,11 +1406,12 @@ def _as_message_dict(item: object) -> dict[str, object] | None:
     return None
 
 
-def _narrow_runner_task(agent: Task) -> RunnerTask | None:
-    """Narrow a ``Task`` to ``RunnerTask`` once per run."""
+def _require_runner_task(agent: Task) -> RunnerTask:
+    """Return a ``Task`` as the explicit runner interface."""
     if isinstance(agent, RunnerTask):
         return agent
-    return None
+
+    raise RuntimeError("Runner requires the task to expose the RunnerTask interface.")
 
 
 def _shim_manager(agent: Task) -> BoundShimManager | None:
@@ -1420,19 +1422,18 @@ def _shim_manager(agent: Task) -> BoundShimManager | None:
     return manager
 
 
-def _require_model(runner_task: RunnerTask | None) -> Model[ModelResponse]:
+def _require_model(runner_task: RunnerTask) -> Model[ModelResponse]:
     """Return the agent's model client, or raise if unconfigured."""
-    if runner_task is not None and runner_task.model is not None:
+    if runner_task.model is not None:
         return runner_task.model
+
     raise RuntimeError(
         "Runner requires the task to expose a configured 'model' client."
     )
 
 
-def _model_args(runner_task: RunnerTask | None) -> dict[str, object] | None:
+def _model_args(runner_task: RunnerTask) -> dict[str, object] | None:
     """Return a defensive copy of the agent's model-call arguments."""
-    if runner_task is None:
-        return None
     model_args = runner_task.model_args
     if model_args is None:
         return None
@@ -1441,25 +1442,27 @@ def _model_args(runner_task: RunnerTask | None) -> dict[str, object] | None:
     return dict(model_args)
 
 
-def _schema(
-    runner_task: RunnerTask | None,
-) -> type[BaseModel] | OutputSchema[Any] | None:
-    """Return the structured-output schema exposed by the agent, if any."""
-    return runner_task.schema if runner_task else None
-
-
-def _tools(runner_task: RunnerTask | None) -> Tools | None:
-    """Return the tool configuration exposed by the agent, if any."""
-    return runner_task.tools if runner_task else None
+def _tool_context(
+    *,
+    agent: Task,
+    runner_task: RunnerTask,
+    tool_call: ToolCall,
+) -> ToolExecutionContext:
+    """Return framework correlation fields for one local tool call."""
+    return ToolExecutionContext(
+        run_id=str(agent.task_id),
+        agent_name=runner_task.name,
+        tool_call_id=tool_call.id,
+    )
 
 
 def _visible_tools(
-    runner_task: RunnerTask | None,
+    runner_task: RunnerTask,
     tool_call_counts: dict[str, int],
     tool_round_trips: int,
 ) -> Tools | None:
     """Return the effective tools visible for the next model turn."""
-    tools = _tools(runner_task)
+    tools = runner_task.tools
     if tools is None:
         return None
     return _limit_tools(tools, tool_call_counts, tool_round_trips)
