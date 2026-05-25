@@ -163,22 +163,68 @@ class AllOfToolPermissionPolicy:
         return ToolPermissionDecision.allow()
 
 
-@dataclass(frozen=True, slots=True)
+def workspace_tool_policy(
+    *,
+    root: str | Path,
+    grants: Iterable[ToolPermissionGrant] | None = None,
+    require_approval_for_side_effects: bool = False,
+    allow_bash_gate: bool = False,
+) -> AllOfToolPermissionPolicy:
+    """Build the common workspace policy used by application harnesses.
+
+    The returned policy composes the public low-level primitives:
+
+    1. workspace containment for path operations,
+    2. optional tool or operation-level grants,
+    3. optional approval gating for side effects, and
+    4. optional command-execution admission so `bash` can reach the approval
+       gate.
+    """
+    policies: list[ToolPermissionPolicy] = [
+        WorkspaceToolPermissionPolicy(
+            root=root,
+            allowed_operations=_workspace_policy_operations(
+                allow_bash_gate=allow_bash_gate,
+            ),
+        )
+    ]
+    if grants is not None:
+        policies.append(ToolPermissionGrantPolicy(grants))
+    if require_approval_for_side_effects:
+        policies.append(_SideEffectApprovalPolicy())
+
+    return AllOfToolPermissionPolicy(policies)
+
+
+class _SideEffectApprovalPolicy:
+    """Require application approval before side-effecting operations."""
+
+    def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
+        if request.operation in _SIDE_EFFECT_OPERATIONS:
+            return ToolPermissionDecision.require_approval()
+        return ToolPermissionDecision.allow()
+
+
 class WorkspaceToolPermissionPolicy:
     """Allow operations only when path targets stay inside a workspace root."""
 
-    root: str | Path
-    allowed_operations: Iterable[ToolOperation | str] | None = None
+    root: Path
+    allowed_operations: frozenset[ToolOperation] | None
 
-    def __post_init__(self) -> None:
-        root = Path(self.root).expanduser().resolve(strict=False)
-        object.__setattr__(self, "root", root)
-        if self.allowed_operations is None:
-            return
-        operations = frozenset(
-            _coerce_operation(operation) for operation in self.allowed_operations
+    def __init__(
+        self,
+        *,
+        root: str | Path,
+        allowed_operations: Iterable[ToolOperation | str] | None = None,
+    ) -> None:
+        self.root = Path(root).expanduser().resolve(strict=False)
+        self.allowed_operations = (
+            None
+            if allowed_operations is None
+            else frozenset(
+                _coerce_operation(operation) for operation in allowed_operations
+            )
         )
-        object.__setattr__(self, "allowed_operations", operations)
 
     def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
         if (
@@ -191,11 +237,14 @@ class WorkspaceToolPermissionPolicy:
             # explicit grant via `allowed_operations`.
             if self.allowed_operations is None:
                 return ToolPermissionDecision.deny()
+
             return ToolPermissionDecision.allow()
+
         if request.path is None or not _is_path_inside_root(
-            request.path, root=Path(self.root)
+            request.path, root=self.root
         ):
             return ToolPermissionDecision.deny()
+
         return ToolPermissionDecision.allow()
 
 
@@ -377,6 +426,35 @@ _PATH_OPERATIONS = frozenset(
         ToolOperation.CREATE_DIRECTORY,
     }
 )
+
+_SIDE_EFFECT_OPERATIONS = frozenset(
+    {
+        ToolOperation.CREATE_FILE,
+        ToolOperation.OVERWRITE_FILE,
+        ToolOperation.MODIFY_FILE,
+        ToolOperation.CREATE_DIRECTORY,
+        ToolOperation.EXECUTE_COMMAND,
+    }
+)
+
+_WORKSPACE_POLICY_PATH_OPERATIONS = (
+    ToolOperation.READ_FILE,
+    ToolOperation.SEARCH_FILES,
+    ToolOperation.CREATE_FILE,
+    ToolOperation.OVERWRITE_FILE,
+    ToolOperation.MODIFY_FILE,
+    ToolOperation.CREATE_DIRECTORY,
+)
+
+
+def _workspace_policy_operations(
+    *,
+    allow_bash_gate: bool,
+) -> tuple[ToolOperation, ...]:
+    if allow_bash_gate:
+        return (*_WORKSPACE_POLICY_PATH_OPERATIONS, ToolOperation.EXECUTE_COMMAND)
+    return _WORKSPACE_POLICY_PATH_OPERATIONS
+
 
 _TOOL_OPERATIONS_BY_TOOL: dict[str, frozenset[ToolOperation]] = {
     "read": frozenset({ToolOperation.READ_FILE}),

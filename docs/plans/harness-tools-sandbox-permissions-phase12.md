@@ -482,3 +482,25 @@ Implemented for review on 2026-05-15.
    - `/usr/bin/make format`
    - `/usr/bin/make lint`
    - `/usr/bin/make tests` (524 passed)
+
+## Follow-Up: Common Workspace App Policy
+
+Review feedback after the first implementation identified that application
+harnesses need a concise way to express the common policy shape:
+
+1. path operations stay inside a workspace root,
+2. tool or operation grants define the exposed capability set,
+3. side-effecting operations require application approval, and
+4. `bash` command execution is explicitly admitted to the permission layer
+   before approval can decide whether it should run.
+
+Tracked follow-up:
+
+- [x] Add `workspace_tool_policy(...)` as a typed convenience constructor.
+- [x] Keep `WorkspaceToolPermissionPolicy`, `ToolPermissionGrantPolicy`, and
+      `AllOfToolPermissionPolicy` public for custom compositions.
+- [x] Require `allow_bash_gate=True` before `bash:execute_command` can pass the
+      workspace policy.
+- [x] Add tests covering read allow, write approval, bash approval, outside-path
+      denial, and missing bash-gate denial.
+- [x] Document the helper in `docs/harness/tools.md`.

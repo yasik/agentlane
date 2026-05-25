@@ -38,7 +38,9 @@ from agentlane.harness.tools import (
     grep_tool,
     patch_tool,
     plan_tool,
+    parse_tool_permission_grants,
     read_tool,
+    workspace_tool_policy,
     write_tool,
 )
 ```
@@ -170,6 +172,34 @@ tools = base_harness_tools(
     permissions=WorkspaceToolPermissionPolicy(root=WORKSPACE),
 )
 ```
+
+For the common application policy "stay inside this workspace, use this grant
+allowlist, and require app approval before side effects", use
+`workspace_tool_policy(...)`:
+
+```python
+grants, invalid_entries = parse_tool_permission_grants(
+    "read, find, grep, write:create_file, patch:modify_file, "
+    "bash:execute_command"
+)
+if invalid_entries:
+    raise ValueError(f"Unsupported tool grants: {invalid_entries}")
+
+tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=workspace_tool_policy(
+        root=WORKSPACE,
+        grants=grants,
+        require_approval_for_side_effects=True,
+        allow_bash_gate=True,
+    ),
+    approval_callback=approve,
+)
+```
+
+The helper composes `WorkspaceToolPermissionPolicy`,
+`ToolPermissionGrantPolicy`, and `AllOfToolPermissionPolicy`; the underlying
+policy pieces remain public for applications that need a different shape.
 
 The exported permission primitives are framework extension points:
 

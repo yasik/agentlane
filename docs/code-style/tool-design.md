@@ -84,6 +84,9 @@ Use this page when adding or changing first-party tools, especially tools under
 - Policy composition must be conservative. For `AllOfToolPermissionPolicy`,
   deny wins over approval, approval wins over allow, and allow is returned only
   when every nested policy allows the request.
+- If a common application policy shape becomes verbose, add a typed convenience
+  constructor that composes the public primitives. Do not replace the low-level
+  policies or hide extension points behind an app-specific default.
 - Denied and approval-required decisions are normal model-facing tool results,
   not exceptions. Keep the wording stable, for example:
   ```text

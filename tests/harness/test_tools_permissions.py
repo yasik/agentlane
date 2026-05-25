@@ -13,6 +13,7 @@ from agentlane.harness.tools import (
     WorkspaceToolPermissionPolicy,
     evaluate_tool_permission,
     parse_tool_permission_grants,
+    workspace_tool_policy,
 )
 from agentlane.models import ToolExecutionContext
 
@@ -23,12 +24,14 @@ def _request(
     operation: ToolOperation = ToolOperation.READ_FILE,
     cwd: Path,
     path: Path | None = None,
+    command: str | None = None,
 ) -> ToolPermissionRequest:
     return ToolPermissionRequest(
         tool_name=tool_name,
         operation=operation,
         cwd=cwd,
         path=path,
+        command=command,
     )
 
 
@@ -336,3 +339,106 @@ def test_all_of_tool_permission_policy_requires_approval_after_allows(
     decision = asyncio.run(policy.check(request))
 
     assert decision == ToolPermissionDecision.require_approval("approval needed")
+
+
+def test_workspace_tool_policy_allows_reads_and_approval_gates_side_effects(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    grants, invalid_entries = parse_tool_permission_grants(
+        "read, write:create_file, bash:execute_command"
+    )
+    policy = workspace_tool_policy(
+        root=workspace,
+        grants=grants,
+        require_approval_for_side_effects=True,
+        allow_bash_gate=True,
+    )
+
+    read_decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="read",
+                operation=ToolOperation.READ_FILE,
+                cwd=workspace,
+                path=workspace / "notes.txt",
+            )
+        )
+    )
+    create_decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="write",
+                operation=ToolOperation.CREATE_FILE,
+                cwd=workspace,
+                path=workspace / "notes.txt",
+            )
+        )
+    )
+    bash_decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="bash",
+                operation=ToolOperation.EXECUTE_COMMAND,
+                cwd=workspace,
+                command="printf 'hello\\n'",
+            )
+        )
+    )
+
+    assert invalid_entries == ()
+    assert read_decision == ToolPermissionDecision.allow()
+    assert create_decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+    assert bash_decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_workspace_tool_policy_still_denies_outside_paths_before_approval(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside.txt"
+    workspace.mkdir()
+    grants, _ = parse_tool_permission_grants("write:create_file")
+    policy = workspace_tool_policy(
+        root=workspace,
+        grants=grants,
+        require_approval_for_side_effects=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="write",
+                operation=ToolOperation.CREATE_FILE,
+                cwd=workspace,
+                path=outside,
+            )
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_workspace_tool_policy_requires_explicit_bash_gate(
+    tmp_path: Path,
+) -> None:
+    grants, _ = parse_tool_permission_grants("bash:execute_command")
+    policy = workspace_tool_policy(
+        root=tmp_path,
+        grants=grants,
+        require_approval_for_side_effects=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="bash",
+                operation=ToolOperation.EXECUTE_COMMAND,
+                cwd=tmp_path,
+                command="printf 'hello\\n'",
+            )
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.DENY

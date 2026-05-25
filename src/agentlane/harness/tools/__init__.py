@@ -42,6 +42,7 @@ from ._permissions import (
     evaluate_tool_permission,
     format_tool_permission_result,
     parse_tool_permission_grants,
+    workspace_tool_policy,
 )
 from ._plan import plan_tool
 from ._read import read_tool
@@ -93,4 +94,5 @@ __all__ = [
     "resolve_bash_shell",
     "truncate_output",
     "write_tool",
+    "workspace_tool_policy",
 ]
