@@ -10,6 +10,13 @@ class ToolPathResolver:
 
     cwd: Path = field(default_factory=Path.cwd)
 
+    @classmethod
+    def for_optional(cls, cwd: str | Path | None = None) -> "ToolPathResolver":
+        """Return a resolver for an optional caller-provided working directory."""
+        if cwd is None:
+            return cls()
+        return cls(cwd=Path(cwd))
+
     def __post_init__(self) -> None:
         """Normalize the captured working directory."""
         object.__setattr__(

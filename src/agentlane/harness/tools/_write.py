@@ -52,7 +52,7 @@ def write_tool(
     Returns:
         HarnessToolDefinition: Executable tool plus prompt metadata.
     """
-    resolver = ToolPathResolver() if cwd is None else ToolPathResolver(cwd=Path(cwd))
+    resolver = ToolPathResolver.for_optional(cwd)
 
     async def run_write(
         args: _ToolArgs,

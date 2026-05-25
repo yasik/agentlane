@@ -18,7 +18,6 @@ from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     BashExecutionRequest,
     BashExecutionResult,
-    BashPolicyDecision,
     HarnessToolDefinition,
     HarnessToolsShim,
     ToolOperation,
@@ -174,12 +173,6 @@ class _FakeBashExecutor:
         )
 
 
-class _DenyBashPolicy:
-    def check(self, request: BashExecutionRequest) -> BashPolicyDecision:
-        del request
-        return BashPolicyDecision(allowed=False, reason="bash command denied by test")
-
-
 def test_bash_tool_runs_successful_command(tmp_path: Path) -> None:
     output = _run_bash("printf 'hello\\n'", cwd=tmp_path)
 
@@ -227,28 +220,6 @@ def test_bash_tool_adapter_passes_request_to_executor(tmp_path: Path) -> None:
         cwd=tmp_path,
         timeout_seconds=3,
     )
-
-
-def test_bash_tool_policy_can_deny_before_executor_runs(tmp_path: Path) -> None:
-    async def scenario() -> tuple[str, list[BashExecutionRequest]]:
-        executor = _FakeBashExecutor()
-        definition = bash_tool(
-            cwd=tmp_path,
-            executor=executor,
-            policy=_DenyBashPolicy(),
-        )
-        tool = _executable_tool(definition)
-        args_model = tool.args_type()
-        output = await tool.run(
-            args_model(command="pwd"),
-            CancellationToken(),
-        )
-        return output, executor.requests
-
-    output, requests = asyncio.run(scenario())
-
-    assert output == "bash command denied by test"
-    assert requests == []
 
 
 def test_bash_tool_shared_permissions_can_deny_before_executor_runs(

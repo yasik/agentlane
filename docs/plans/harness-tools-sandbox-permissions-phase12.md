@@ -58,9 +58,9 @@ Tool-specific behavior today:
    and replaces existing files through a sibling temporary file where
    practical.
 6. `bash` executes arbitrary non-interactive `bash -lc` commands in the
-   captured `cwd`, returns combined stdout/stderr, and already has a
-   command-level `BashPolicy` hook. That hook can deny before execution, but
-   the default policy allows all commands and does not sandbox the process.
+   captured `cwd` and returns combined stdout/stderr. The default executor
+   allows all commands and does not sandbox the process; gating is delegated
+   to the shared permission policy.
 
 The important gap is that path tools have structured operations but no policy
 check, while `bash` has a policy check but cannot infer all filesystem effects
@@ -252,9 +252,9 @@ workspace_tools = base_harness_tools(
 )
 ```
 
-`bash_tool(policy=...)` should remain supported as a compatibility hook for
-command-only checks. New code should prefer the shared `permissions=` policy.
-If both are supplied, the tool should require both to allow execution.
+The legacy `bash_tool(policy=...)` hook has been removed during follow-up
+cleanup. Command-level gating now flows through the shared `permissions=`
+policy.
 
 `bash` should remain part of `base_harness_tools()`. AgentLane is the framework,
 not the final harness application, so it should expose the standard tool set
@@ -397,8 +397,8 @@ host-provided policy layer.
       successful output contracts.
 - [x] Add policy checks to `write` and `patch`, including create, overwrite,
       modify, and parent-directory cases.
-- [x] Adapt `bash` to the shared policy while preserving the existing
-      `BashPolicy` compatibility hook.
+- [x] Adapt `bash` to the shared policy. The interim `BashPolicy`
+      compatibility hook was removed during follow-up cleanup.
 - [x] Add `cwd` and `permissions` arguments to `base_harness_tools()`.
 - [x] Add the approval callback seam and approval-required result handling
       without adding an app-specific approval UI.

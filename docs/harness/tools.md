@@ -710,13 +710,12 @@ stable text errors before any process starts.
 
 Host applications can import the executor-facing contracts
 `BashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`,
-`BashExecutionResult`, `BashShellConfig`, `resolve_bash_shell`, `BashPolicy`,
-and `BashPolicyDecision` from `agentlane.harness.tools` when they need to wrap
-or replace local execution.
+`BashExecutionResult`, `BashShellConfig`, and `resolve_bash_shell` from
+`agentlane.harness.tools` when they need to wrap or replace local execution.
 
 `bash_tool(permissions=...)` evaluates the shared permission policy before the
-executor starts. `bash_tool(policy=...)` remains available for existing
-command-level checks. When both are supplied, both must allow the command.
+executor starts. Pair it with `approval_callback=` to gate `require_approval`
+decisions on a host-controlled prompt.
 
 Empty successful commands return `(no output)`. Non-zero exits, timeouts,
 cancellations, and truncation add short bracketed notices after the output:

@@ -63,7 +63,7 @@ def patch_tool(
     Returns:
         HarnessToolDefinition: Executable patch tool with prompt metadata.
     """
-    resolver = ToolPathResolver() if cwd is None else ToolPathResolver(cwd=Path(cwd))
+    resolver = ToolPathResolver.for_optional(cwd)
 
     async def run_patch(
         args: _ToolArgs,

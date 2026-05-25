@@ -119,6 +119,7 @@ class ToolPermissionGrant:
         """Return whether this grant permits the request."""
         if self.tool_name != request.tool_name:
             return False
+
         return self.operation is None or self.operation == request.operation
 
 
@@ -142,17 +143,23 @@ class AllOfToolPermissionPolicy:
 
     async def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
         approval_decision: ToolPermissionDecision | None = None
+
         for policy in self._policies:
             decision = await _resolve_permission_result(policy.check(request))
+
             if decision.outcome == ToolPermissionOutcome.DENY:
                 return decision
+
             if decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL:
                 approval_decision = approval_decision or decision
                 continue
+
             if not decision.allowed:
                 return decision
+
         if approval_decision is not None:
             return approval_decision
+
         return ToolPermissionDecision.allow()
 
 
@@ -174,29 +181,22 @@ class WorkspaceToolPermissionPolicy:
         object.__setattr__(self, "allowed_operations", operations)
 
     def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
-        if not self._operation_allowed(request.operation):
+        if (
+            self.allowed_operations is not None
+            and request.operation not in self.allowed_operations
+        ):
             return ToolPermissionDecision.deny()
         if request.operation not in _PATH_OPERATIONS:
-            if self._operation_explicitly_allowed(request.operation):
-                return ToolPermissionDecision.allow()
-            return ToolPermissionDecision.deny()
-        if request.path is None:
-            return ToolPermissionDecision.deny()
-        if _is_path_inside_root(request.path, root=Path(self.root)):
+            # Non-path ops (currently only EXECUTE_COMMAND) require an
+            # explicit grant via `allowed_operations`.
+            if self.allowed_operations is None:
+                return ToolPermissionDecision.deny()
             return ToolPermissionDecision.allow()
-        return ToolPermissionDecision.deny()
-
-    def _operation_allowed(self, operation: ToolOperation) -> bool:
-        allowed_operations = self.allowed_operations
-        if allowed_operations is None:
-            return True
-        return operation in allowed_operations
-
-    def _operation_explicitly_allowed(self, operation: ToolOperation) -> bool:
-        allowed_operations = self.allowed_operations
-        if allowed_operations is None:
-            return False
-        return operation in allowed_operations
+        if request.path is None or not _is_path_inside_root(
+            request.path, root=Path(self.root)
+        ):
+            return ToolPermissionDecision.deny()
+        return ToolPermissionDecision.allow()
 
 
 async def evaluate_tool_permission(
@@ -339,22 +339,15 @@ def _permission_subject(request: ToolPermissionRequest) -> str | None:
 
 
 def _is_path_inside_root(path: Path, *, root: Path) -> bool:
-    real_root = _real_path(root)
-    real_path = _real_path_for_request(path)
-    return _is_relative_to(real_path, real_root)
+    return _real_path_for_request(path).is_relative_to(_real_path(root))
 
 
 def _real_path_for_request(path: Path) -> Path:
     if path.exists():
         return _real_path(path)
-
     nearest_parent = _nearest_existing_parent(path)
-    real_parent = _real_path(nearest_parent)
-    try:
-        suffix = path.relative_to(nearest_parent)
-    except ValueError:
-        return path.resolve(strict=False)
-    return real_parent / suffix
+    suffix = path.relative_to(nearest_parent)
+    return _real_path(nearest_parent) / suffix
 
 
 def _nearest_existing_parent(path: Path) -> Path:
@@ -366,14 +359,6 @@ def _nearest_existing_parent(path: Path) -> Path:
 
 def _real_path(path: Path) -> Path:
     return path.expanduser().resolve(strict=False)
-
-
-def _is_relative_to(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
 
 
 def _coerce_operation(operation: ToolOperation | str) -> ToolOperation:

@@ -72,7 +72,8 @@ class Agent(Task):
         resolved_descriptor = descriptor or AgentDescriptor()
         super().__init__(
             engine,
-            bind_id=bind_id or _default_runtime_agent_id(resolved_descriptor),
+            bind_id=bind_id
+            or AgentId.from_values(resolved_descriptor.name, uuid4().hex),
         )
         self._runner = runner
         self._parent_tools = parent_tools
@@ -250,8 +251,3 @@ class Agent(Task):
         """Handle one inbound resumable run state."""
         _ = context
         return await self._enqueue_input(payload)
-
-
-def _default_runtime_agent_id(descriptor: AgentDescriptor) -> AgentId:
-    """Return a generated runtime id for direct agent construction."""
-    return AgentId.from_values(descriptor.name, uuid4().hex)

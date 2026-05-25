@@ -1,7 +1,7 @@
 """First-party harness tool definitions and integration helpers."""
 
 from ._agent import agent_tool
-from ._bash import BashPolicy, BashPolicyDecision, bash_tool
+from ._bash import bash_tool
 from ._bash_executor import (
     BashExecutionRequest,
     BashExecutionResult,
@@ -55,8 +55,6 @@ __all__ = [
     "BashExecutionRequest",
     "BashExecutionResult",
     "BashExecutor",
-    "BashPolicy",
-    "BashPolicyDecision",
     "BashShellConfig",
     "FIND_DEFAULT_LIMIT",
     "GREP_DEFAULT_LIMIT",

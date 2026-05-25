@@ -76,7 +76,7 @@ def read_tool(
     Returns:
         HarnessToolDefinition: Executable read tool with prompt metadata.
     """
-    resolver = ToolPathResolver() if cwd is None else ToolPathResolver(cwd=Path(cwd))
+    resolver = ToolPathResolver.for_optional(cwd)
 
     async def run_read(
         args: _ToolArgs,
