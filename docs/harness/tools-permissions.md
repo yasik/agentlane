@@ -82,12 +82,17 @@ that exact file. Non-existing scopes allow only that exact future path, which
 keeps a file grant from silently becoming a directory grant. Empty `paths=()`
 denies all path operations. Prefer absolute paths for policy scopes; relative
 scope entries resolve when the policy is constructed, the same as
-`WorkspaceToolPermissionPolicy(...)`.
+`WorkspaceToolPermissionPolicy(...)`. Scope matching is a simple linear scan,
+which keeps the bundled policy easy to understand for short approved lists.
+Applications with hundreds of approved scopes or hot-loop checks should
+provide an indexed custom policy.
 
 Both path policies resolve symlinks and check the nearest existing parent for
 new paths. This is a framework permission boundary, not a TOCTOU-safe operating
 system sandbox; hosts that need hard filesystem isolation should provide a
-sandboxed executor, container, or remote worker.
+sandboxed executor, container, or remote worker. The nearest-parent check uses
+filesystem stats at permission time, which is appropriate for interactive
+agent tool calls but not a substitute for kernel-enforced isolation.
 
 For the common application policy "stay inside this workspace, apply a tool
 grant allowlist, and require app approval before side effects", use
@@ -183,7 +188,9 @@ The exported permission primitives are framework extension points:
 such as `read` and operation entries such as `write:create_file`. It returns
 `(grants, invalid_entries)`, preserves duplicates, and does not let later
 entries override earlier ones. Callers should reject or report
-`invalid_entries` before constructing a policy.
+`invalid_entries` before constructing a policy. Partial success is intentional:
+CLI and environment-variable callers can collect every unsupported entry and
+report them together instead of failing on the first one.
 
 Custom policies only need a `check(request)` method:
 

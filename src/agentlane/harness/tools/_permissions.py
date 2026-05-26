@@ -298,7 +298,9 @@ class PathScopeToolPermissionPolicy:
     files or directories outside that workspace. Existing directories allow
     descendants, existing files allow only that exact file, and non-existing
     paths allow only that exact future target. Empty `paths` denies path
-    operations.
+    operations. Scope checks are intentionally linear because the common case
+    is a short host-approved list; hosts with large scope catalogs can provide
+    an indexed custom policy.
     """
 
     paths: tuple[Path, ...]
@@ -399,8 +401,9 @@ def parse_tool_permission_grants(
 ) -> tuple[tuple[ToolPermissionGrant, ...], tuple[str, ...]]:
     """Parse comma-separated whole-tool and operation-level permission grants.
 
-    The parser preserves valid duplicates and does not apply override
-    semantics. Callers that want a unique set should deduplicate explicitly.
+    The parser returns partial success as `(grants, invalid_entries)`, preserves
+    valid duplicates, and does not apply override semantics. Callers that want
+    a unique set or fail-fast behavior should layer that policy explicitly.
     """
     if value is None or value.strip() == "":
         return (), ()
@@ -518,8 +521,11 @@ def _is_path_inside_scope(path: Path, *, scope: Path) -> bool:
 def _real_path_for_request(path: Path) -> Path:
     if path.exists():
         return _real_path(path)
+
     # For new files, resolve the nearest existing parent so a symlinked parent
-    # cannot move the eventual target outside the configured workspace.
+    # cannot move the eventual target outside the configured workspace. This
+    # intentionally spends a few filesystem stats per permission check; these
+    # tools are optimized for interactive agent calls, not tight sandbox loops.
     nearest_parent = _nearest_existing_parent(path)
     suffix = path.relative_to(nearest_parent)
     return _real_path(nearest_parent) / suffix
