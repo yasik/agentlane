@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel
 
@@ -56,9 +57,10 @@ class Agent(Task):
         Args:
             engine: Runtime engine messaging capability exposed to this agent.
             runner: Stateless runner responsible for each conversation turn.
-            bind_id: Optional pre-bound agent id, primarily for tests.
+            bind_id: Optional explicit runtime id. When omitted, the agent
+                gets a generated id based on its descriptor name.
             descriptor: Optional static agent descriptor. When omitted, the
-                agent uses a default descriptor with its class name.
+                agent uses a default descriptor with a generated name.
             parent_tools: Optional inherited parent tool configuration used
                 when the descriptor leaves tool visibility unset.
             run_state: Optional recovered run state for this concrete agent
@@ -67,10 +69,15 @@ class Agent(Task):
             hooks: Optional runner hook or ordered hook list for lifecycle
                 callbacks, tests, and application-defined side effects.
         """
-        super().__init__(engine, bind_id=bind_id)
+        resolved_descriptor = descriptor or AgentDescriptor()
+        super().__init__(
+            engine,
+            bind_id=bind_id
+            or AgentId.from_values(resolved_descriptor.name, uuid4().hex),
+        )
         self._runner = runner
         self._parent_tools = parent_tools
-        self._descriptor = descriptor or AgentDescriptor(name=type(self).__name__)
+        self._descriptor = resolved_descriptor
         self._lifecycle = AgentLifecycle(
             descriptor=self._descriptor,
             run_state=run_state,

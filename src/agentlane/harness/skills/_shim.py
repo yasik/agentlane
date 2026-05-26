@@ -5,12 +5,12 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext, Tools
 from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
 from .._run import RunState, ShimState
-from .._tooling import merge_tools
+from .._tooling import exclude_tools, filter_tools, merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._catalog import SkillCatalog
 from ._loader import SkillLoader
@@ -75,13 +75,22 @@ class _BoundSkillsShim(BoundShim):
                 ),
             )
             turn.append_system_instruction(skills_prompt)
+
         turn.tools = merge_tools(turn.tools, (self._tool,))
+        turn.tools = _apply_active_skill_tool_filters(
+            tools=turn.tools,
+            catalog=self._catalog,
+            shim_state=turn.run_state.shim_state,
+            active_names_key=_active_names_key(self._shim_name),
+        )
 
     async def _activate_skill(
         self,
         args: ActivateSkillInput,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
+        del context
         del cancellation_token
 
         skill_name = args.name
@@ -154,15 +163,19 @@ class SkillsShim(Shim):
 def _build_activate_skill_tool(
     *,
     tool_name: str,
-    handler: Callable[[ActivateSkillInput, CancellationToken], Awaitable[str]],
+    handler: Callable[
+        [ActivateSkillInput, CancellationToken, ToolExecutionContext],
+        Awaitable[str],
+    ],
 ) -> Tool[ActivateSkillInput, str]:
     """Return the normal skill-activation tool contributed by the shim."""
 
     async def run_tool(
         args: ActivateSkillInput,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
-        return await handler(args, cancellation_token)
+        return await handler(args, cancellation_token, context)
 
     return Tool(
         name=tool_name,
@@ -198,3 +211,43 @@ def _already_active_message(skill_name: str) -> str:
         f'Continue using the existing `<skill_content name="{skill_name}">`; '
         "do not call `activate_skill` for this skill again."
     )
+
+
+def _apply_active_skill_tool_filters(
+    *,
+    tools: Tools | None,
+    catalog: SkillCatalog,
+    shim_state: ShimState,
+    active_names_key: str,
+) -> Tools | None:
+    """Apply active skill tool replacement and deny rules before model exposure."""
+    active_manifests = [
+        manifest
+        for skill_name in _active_skill_names(
+            shim_state=shim_state,
+            key=active_names_key,
+        )
+        if (manifest := catalog.get(skill_name)) is not None
+    ]
+    if not active_manifests:
+        return tools
+
+    filtered_tools = tools
+    denied_names = frozenset(
+        tool_name
+        for manifest in active_manifests
+        for tool_name in manifest.disallowed_tools
+    )
+    if denied_names:
+        filtered_tools = exclude_tools(filtered_tools, names=denied_names)
+
+    explicit_tool_sets = [
+        manifest.tools for manifest in active_manifests if manifest.tools is not None
+    ]
+    if explicit_tool_sets:
+        allowed_names = frozenset(
+            tool_name for tool_names in explicit_tool_sets for tool_name in tool_names
+        )
+        filtered_tools = filter_tools(filtered_tools, names=allowed_names)
+
+    return filtered_tools

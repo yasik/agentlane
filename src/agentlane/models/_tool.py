@@ -4,8 +4,8 @@ import functools
 import inspect
 import json
 import re
-from collections.abc import Awaitable, Callable
-from dataclasses import asdict, is_dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Annotated, Any, get_args, get_origin, get_type_hints, overload
 
 from pydantic import BaseModel, Field, create_model
@@ -13,11 +13,29 @@ from pydantic import BaseModel, Field, create_model
 from ..runtime import CancellationToken
 from ._strict_schema import ensure_strict_json_schema
 
+_FRAMEWORK_TOOL_PARAMETERS = frozenset(("cancellation_token", "context"))
+
+
+def _empty_execution_metadata() -> dict[str, object]:
+    """Return a typed empty metadata mapping for tool execution context."""
+    return {}
+
+
+@dataclass(frozen=True, slots=True)
+class ToolExecutionContext:
+    """Framework correlation context for one tool execution."""
+
+    run_id: str | None = None
+    agent_name: str | None = None
+    tool_call_id: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=_empty_execution_metadata)
+
+
 type ToolHandler[ArgsT: BaseModel, ResultT] = Callable[
-    [ArgsT, CancellationToken],
+    [ArgsT, CancellationToken, ToolExecutionContext],
     ResultT | Awaitable[ResultT],
 ]
-"""Callable used to execute one tool invocation."""
+"""Callable used to execute one tool invocation with framework context."""
 
 type ToolFormatter[ResultT] = Callable[[ResultT], str]
 """Callable used to render a tool result back into the conversation."""
@@ -67,9 +85,10 @@ class ToolSpec[ArgsT: BaseModel]:
         """Create a tool directly from a normal typed Python callable.
 
         The function signature becomes the tool schema. Visible parameters must
-        be type annotated. A parameter named `cancellation_token` is treated as
-        framework-injected and is excluded from the tool schema. Parameter
-        descriptions may be supplied with `Annotated[..., "description"]`.
+        be type annotated. Parameters named `cancellation_token` and `context`
+        are treated as framework-injected and are excluded from the tool
+        schema. Parameter descriptions may be supplied with `Annotated[...,
+        "description"]`.
 
         Args:
             func: Sync or async Python callable to expose as a tool.
@@ -86,17 +105,23 @@ class ToolSpec[ArgsT: BaseModel]:
         parameter_names = tuple(
             parameter.name
             for parameter in signature.parameters.values()
-            if parameter.name != "cancellation_token"
+            if parameter.name not in _FRAMEWORK_TOOL_PARAMETERS
         )
         has_cancellation_support = "cancellation_token" in signature.parameters
+        has_context_support = "context" in signature.parameters
 
         async def inferred_handler(
             args: BaseModel,
             cancellation_token: CancellationToken,
+            context: ToolExecutionContext,
         ) -> Any:
             kwargs = {name: getattr(args, name) for name in parameter_names}
             if has_cancellation_support:
                 kwargs["cancellation_token"] = cancellation_token
+            if has_context_support:
+                kwargs["context"] = context
+            else:
+                del context
 
             result = func(**kwargs)
             if inspect.isawaitable(result):
@@ -153,17 +178,23 @@ class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
         self,
         args: ArgsT,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext | None = None,
     ) -> ResultT:
         """Execute the tool handler.
 
         Args:
             args: Validated tool arguments.
             cancellation_token: Cooperative cancellation token.
+            context: Optional framework correlation context for this tool call.
 
         Returns:
             ResultT: Tool execution result.
         """
-        result = self._handler(args, cancellation_token)
+        result = self._handler(
+            args,
+            cancellation_token,
+            context or ToolExecutionContext(),
+        )
         if inspect.isawaitable(result):
             return await result
         return result
@@ -284,7 +315,7 @@ def _args_model_from_signature(
     missing_annotations: list[str] = []
 
     for parameter in signature.parameters.values():
-        if parameter.name == "cancellation_token":
+        if parameter.name in _FRAMEWORK_TOOL_PARAMETERS:
             continue
 
         if parameter.kind not in (

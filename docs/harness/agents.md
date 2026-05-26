@@ -18,6 +18,12 @@ That split is what makes an addressed agent feel stable across turns. The
 descriptor says what kind of agent this is. The run state says where one
 concrete interaction currently stands.
 
+`AgentDescriptor.name` is always populated. Provide one when the application
+has a stable human-readable name for logs, tracing, or tool correlation. If it
+is omitted or blank, the framework generates a Faker-backed adjective-noun
+fallback name, such as `deterministic-butterfly`, at descriptor construction so
+the runner does not need defensive name handling later.
+
 ## What The Lower-Level Agent Owns
 
 1. the descriptor that defines instructions, tools, schema, handoffs, and
@@ -75,10 +81,11 @@ The base `agent` tool is the generic spawned-helper version of agent-as-tool.
 It lets the model create a fresh helper for a delegated task without inheriting
 the parent conversation or parent system prompt. The helper name is used for
 logging and tracing; the task text is the instruction the helper receives.
-Default spawned helpers inherit parent direct tools, then get the standard base
-tools through `HarnessToolsShim`, so their tool guidance is appended through
-the normal prepared-turn system context path. `ToolConfig` can override that
-default inheritance or restrict inherited parent tools by name.
+Default spawned helpers inherit parent direct tools and parent descriptor
+shims. If those shims include `HarnessToolsShim(base_harness_tools(...))`, the
+helper gets the same configured base tools and prompt guidance through the
+normal prepared-turn path. `ToolConfig` can override or restrict inherited
+direct tools by name.
 
 ## Concurrency Per Agent
 

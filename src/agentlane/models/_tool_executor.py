@@ -8,7 +8,7 @@ parallel/sequential execution and optional tracing integration.
 import asyncio
 import inspect
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 import structlog
@@ -18,6 +18,7 @@ from ..runtime import CancellationToken
 from ..tracing import Span, function_span
 from ._exceptions import ModelBehaviorError
 from ._interface import ModelTracing, Tools
+from ._tool import ToolExecutionContext
 from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapter
 from ._types import ToolCall
 
@@ -69,6 +70,7 @@ class ToolExecutor:
         cancellation_token: CancellationToken | None = None,
         on_tool_start: ToolStartCallback | None = None,
         on_tool_end: ToolEndCallback | None = None,
+        context: Mapping[str, ToolExecutionContext] | None = None,
     ) -> list[dict[str, Any]]:
         """Execute tool calls and return formatted messages.
 
@@ -81,6 +83,8 @@ class ToolExecutor:
                 handler invocation begins.
             on_tool_end: Optional callback fired after one tool invocation
                 finishes or exhausts timeout retries.
+            context: Optional per-tool-call framework context keyed by tool
+                call id.
 
         Returns:
             List of tool result messages formatted by the adapter.
@@ -126,12 +130,24 @@ class ToolExecutor:
                 )
 
             async def _run_tool() -> Any:
+                call_context = _context_for_call(
+                    call,
+                    context=context,
+                )
                 if timeout is not None:
                     return await asyncio.wait_for(
-                        tool.run(args_model, token),
+                        tool.run(
+                            args_model,
+                            token,
+                            context=call_context,
+                        ),
                         timeout=timeout,
                     )
-                return await tool.run(args_model, token)
+                return await tool.run(
+                    args_model,
+                    token,
+                    context=call_context,
+                )
 
             with function_span(
                 name=function_name,
@@ -188,6 +204,20 @@ class ToolExecutor:
             responses.append(await _invoke(call))
 
         return responses
+
+
+def _context_for_call(
+    call: ToolCall,
+    *,
+    context: Mapping[str, ToolExecutionContext] | None,
+) -> ToolExecutionContext:
+    """Return explicit context for a tool call, defaulting to its call id."""
+    if context is not None:
+        call_context = context.get(call.id)
+        if call_context is not None:
+            return call_context
+
+    return ToolExecutionContext(tool_call_id=call.id)
 
 
 async def _maybe_await(

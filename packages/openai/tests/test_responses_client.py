@@ -24,6 +24,7 @@ from agentlane.models import (
 )
 from agentlane.models import Tool as NativeTool
 from agentlane.models import (
+    ToolExecutionContext,
     Tools,
 )
 from agentlane.runtime import CancellationToken
@@ -51,8 +52,10 @@ class StructuredResponse(BaseModel):
 async def _echo_handler(
     args: EchoArgs,
     cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
 ) -> str:
     """Return a simple string result for tool forwarding checks."""
+    del context
     del cancellation_token
     return args.text
 

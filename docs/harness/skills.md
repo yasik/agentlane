@@ -190,6 +190,52 @@ It logs a warning and continues for softer issues such as:
 One malformed skill does not fail discovery or break the agent loop. The loader
 skips that skill and continues with the rest.
 
+## Tool Selection Metadata
+
+Skills may include optional `tools` and `disallowedTools` frontmatter fields.
+These fields control the model-visible tool pool after a skill is active. They
+do not grant host permissions and cannot override an application's outer
+permission policy.
+
+```markdown
+---
+name: workspace-editor
+description: Edit files in the active workspace.
+tools: read, grep, write, patch
+disallowedTools: bash
+---
+```
+
+Tool selection follows deny-first replacement rules:
+
+1. Missing `tools` inherits the current tool pool, subject to deny filters.
+2. Present `tools` replaces the current tool pool with the declared names.
+3. `disallowedTools` subtracts tool names before the model sees the active
+   skill context.
+4. If a tool is both in `tools` and `disallowedTools`, the deny rule wins.
+
+Both fields accept a comma-separated string or a YAML list:
+
+```markdown
+---
+name: workspace-reader
+description: Read files in the active workspace.
+tools:
+  - read
+  - grep
+disallowedTools:
+  - bash
+  - write
+---
+```
+
+There is no alternate allowlist field. `tools` is the framework's only
+allowlist/replacement frontmatter field.
+
+These fields filter model exposure. The host application's sandbox,
+permissions, and approval callbacks still decide whether an exposed tool call
+is allowed to execute.
+
 ## State
 
 Activated skill names are persisted in `RunState.shim_state`.

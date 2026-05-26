@@ -7,7 +7,12 @@ import pytest
 
 from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
-from agentlane.harness.tools import HarnessToolsShim, ToolPathResolver, patch_tool
+from agentlane.harness.tools import (
+    HarnessToolsShim,
+    ToolPathResolver,
+    WorkspaceToolPermissionPolicy,
+    patch_tool,
+)
 from agentlane.models import Tools
 from agentlane.runtime import SingleThreadedRuntimeEngine
 
@@ -134,6 +139,65 @@ def test_patch_tool_accepts_absolute_paths(tmp_path: Path) -> None:
 
     assert output == f"Applied 1 edit to {target}."
     assert target.read_text(encoding="utf-8") == "patched\n"
+
+
+def test_patch_tool_denies_modify_outside_workspace_policy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    original = "outside\n"
+    outside.write_text(original, encoding="utf-8")
+
+    output = run_tool(
+        patch_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(workspace),
+        ),
+        path=str(outside),
+        edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",
+    )
+
+    assert output == f"permission denied: patch is not allowed for `{outside}`"
+    assert outside.read_text(encoding="utf-8") == original
+
+
+def test_patch_tool_denies_missing_path_outside_workspace_before_existence_check(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "missing.txt"
+
+    output = run_tool(
+        patch_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(workspace),
+        ),
+        path=str(outside),
+        edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",
+    )
+
+    assert output == f"permission denied: patch is not allowed for `{outside}`"
+
+
+def test_patch_tool_denies_directory_outside_workspace_before_type_check(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+
+    output = run_tool(
+        patch_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(workspace),
+        ),
+        path=str(outside),
+        edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",
+    )
+
+    assert output == f"permission denied: patch is not allowed for `{outside}`"
 
 
 def test_patch_tool_reports_parser_errors_and_empty_patch(tmp_path: Path) -> None:

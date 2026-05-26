@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._types import HarnessToolDefinition
@@ -104,7 +104,9 @@ def plan_tool(
     async def run_tool(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
+        del context
         del cancellation_token
         try:
             return _write_plan(
@@ -169,7 +171,10 @@ def _plan_snapshot(args: _ToolArgs) -> dict[str, object]:
 
 def _build_plan_tool(
     *,
-    handler: Callable[[_ToolArgs, CancellationToken], Awaitable[str]],
+    handler: Callable[
+        [_ToolArgs, CancellationToken, ToolExecutionContext],
+        Awaitable[str],
+    ],
 ) -> Tool[_ToolArgs, str]:
     """Build a concrete executable plan tool."""
     return Tool(

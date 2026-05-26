@@ -12,7 +12,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 from ripgrepy import RipGrepNotFound, Ripgrepy
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._gitignore import GitignoreMatcher
@@ -23,6 +23,13 @@ from ._output import (
     is_likely_binary_file,
 )
 from ._paths import ToolPathResolver
+from ._permissions import (
+    ToolApprovalCallback,
+    ToolOperation,
+    ToolPermissionPolicy,
+    ToolPermissionRequest,
+    evaluate_tool_permission,
+)
 from ._types import HarnessToolDefinition
 
 _TOOL_NAME = "grep"
@@ -159,26 +166,40 @@ class _RenderedMatches:
     line_truncated: bool = False
 
 
-def grep_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
+def grep_tool(
+    *,
+    cwd: str | Path | None = None,
+    permissions: ToolPermissionPolicy | None = None,
+    approval_callback: ToolApprovalCallback | None = None,
+) -> HarnessToolDefinition:
     """Build the first-party grep harness tool.
 
     Args:
         cwd: Optional working directory used to resolve relative paths. When
             omitted, the current working directory is captured at construction
             time.
+        permissions: Optional policy for read/search permission decisions.
+        approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable grep tool with prompt metadata.
     """
-    resolver = ToolPathResolver() if cwd is None else ToolPathResolver(cwd=Path(cwd))
+    resolver = ToolPathResolver.for_optional(cwd)
 
     async def run_grep(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         del cancellation_token
         try:
-            return _search_files(args, resolver=resolver)
+            return await _search_files(
+                args,
+                resolver=resolver,
+                permissions=permissions,
+                approval_callback=approval_callback,
+                context=context,
+            )
         except Exception:
             return _GENERIC_GREP_ERROR
 
@@ -194,10 +215,13 @@ def grep_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     )
 
 
-def _search_files(
+async def _search_files(
     args: _ToolArgs,
     *,
     resolver: ToolPathResolver,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
+    context: ToolExecutionContext,
 ) -> str:
     """Search files with ripgrep and render a plain-text tool result."""
     validation_error = _validate_args(args)
@@ -205,6 +229,23 @@ def _search_files(
         return validation_error
 
     search_path = resolver.resolve(args.path or ".")
+    operation = (
+        ToolOperation.READ_FILE if search_path.is_file() else ToolOperation.SEARCH_FILES
+    )
+    permission_error = await evaluate_tool_permission(
+        ToolPermissionRequest(
+            tool_name=_TOOL_NAME,
+            operation=operation,
+            cwd=resolver.cwd,
+            path=search_path,
+        ),
+        policy=permissions,
+        approval_callback=approval_callback,
+        context=context,
+    )
+    if permission_error is not None:
+        return permission_error
+
     content = _collect_grep_content(search_path, args=args, resolver=resolver)
     if content.error is not None:
         return content.error

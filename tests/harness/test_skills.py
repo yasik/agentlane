@@ -1,10 +1,9 @@
 import asyncio
 import json
-import logging
 from pathlib import Path
 
 import pytest
-from pytest import LogCaptureFixture, MonkeyPatch
+from pytest import CaptureFixture, MonkeyPatch
 
 from agentlane.harness import (
     AgentDescriptor,
@@ -36,6 +35,11 @@ from agentlane.harness.skills._prompt import (
     render_skills_system_prompt,
 )
 from agentlane.harness.skills._shim import ActivateSkillInput
+from agentlane.harness.tools import (
+    HarnessToolsShim,
+    read_tool,
+    write_tool,
+)
 from agentlane.models import MessageDict, Model, ModelResponse, ToolCall, Tools
 from agentlane.runtime import CancellationToken
 
@@ -195,6 +199,8 @@ def _write_skill(
     body: str,
     metadata: str | None = None,
     compatibility: str | None = None,
+    tools: str | list[str] | None = None,
+    disallowed_tools: str | list[str] | None = None,
 ) -> Path:
     skill_root = root / name
     skill_root.mkdir(parents=True)
@@ -206,6 +212,14 @@ def _write_skill(
     ]
     if compatibility is not None:
         frontmatter_lines.append(f"compatibility: {compatibility}")
+    if tools is not None:
+        _append_frontmatter_tool_names(frontmatter_lines, key="tools", names=tools)
+    if disallowed_tools is not None:
+        _append_frontmatter_tool_names(
+            frontmatter_lines,
+            key="disallowedTools",
+            names=disallowed_tools,
+        )
     if metadata is not None:
         frontmatter_lines.extend(
             [
@@ -220,6 +234,28 @@ def _write_skill(
         encoding="utf-8",
     )
     return skill_root
+
+
+def _append_frontmatter_tool_names(
+    lines: list[str],
+    *,
+    key: str,
+    names: str | list[str],
+) -> None:
+    """Append a scalar or YAML-list tool-name field to skill frontmatter."""
+    if isinstance(names, str):
+        lines.append(f"{key}: {names}")
+        return
+
+    lines.append(f"{key}:")
+    for name in names:
+        lines.append(f"  - {name}")
+
+
+def _tool_option_names(tools: object) -> list[str]:
+    if not isinstance(tools, Tools):
+        raise AssertionError("Expected model-visible tools.")
+    return [tool.name for tool in tools.normalized_tools]
 
 
 def test_parse_skill_file_returns_manifest_and_body(tmp_path: Path) -> None:
@@ -249,9 +285,31 @@ def test_parse_skill_file_returns_manifest_and_body(tmp_path: Path) -> None:
     assert parsed.manifest.skill_file == (skill_root / "SKILL.md").resolve()
     assert parsed.manifest.metadata == {"author": "agentlane"}
     assert parsed.manifest.compatibility == "Requires local files only"
+    assert parsed.manifest.tools is None
+    assert parsed.manifest.disallowed_tools == ()
     assert parsed.instructions == (
         "# Refund Policy\n\nUse this skill for return-window questions."
     )
+
+
+def test_parse_skill_file_normalizes_tool_filters(
+    tmp_path: Path,
+) -> None:
+    skill_root = _write_skill(
+        root=tmp_path,
+        name="workspace-editor",
+        description="Edit workspace files.",
+        body="# Workspace Editor",
+        tools="read, write, patch",
+        disallowed_tools=["bash", "grep", "read"],
+    )
+
+    parsed = parse_skill_file(skill_root / "SKILL.md")
+    if parsed is None:
+        raise AssertionError("Expected skill file to parse.")
+
+    assert parsed.manifest.tools == ("read", "write", "patch")
+    assert parsed.manifest.disallowed_tools == ("bash", "grep", "read")
 
 
 def test_parse_skill_file_trims_oversize_fields_and_body(tmp_path: Path) -> None:
@@ -285,7 +343,7 @@ def test_parse_skill_file_trims_oversize_fields_and_body(tmp_path: Path) -> None
 
 def test_parse_skill_file_warns_but_keeps_non_compliant_skill_name(
     tmp_path: Path,
-    caplog: LogCaptureFixture,
+    capsys: CaptureFixture[str],
 ) -> None:
     skill_root = _write_skill(
         root=tmp_path,
@@ -294,13 +352,12 @@ def test_parse_skill_file_warns_but_keeps_non_compliant_skill_name(
         body="# Refund Policy",
     )
 
-    with caplog.at_level(logging.WARNING):
-        parsed = parse_skill_file(skill_root / "SKILL.md")
+    parsed = parse_skill_file(skill_root / "SKILL.md")
 
     if parsed is None:
         raise AssertionError("Expected malformed name to warn but still parse.")
     assert parsed.manifest.name == "refund--policy"
-    assert "consecutive hyphens" in caplog.text
+    assert "consecutive hyphens" in capsys.readouterr().out
 
 
 def test_parse_skill_file_returns_none_for_missing_frontmatter(tmp_path: Path) -> None:
@@ -359,7 +416,7 @@ def test_parse_skill_file_returns_none_when_file_exceeds_size_limit(
 
 def test_filesystem_skill_loader_loads_skill_by_manifest_name_when_directory_differs(
     tmp_path: Path,
-    caplog: LogCaptureFixture,
+    capsys: CaptureFixture[str],
 ) -> None:
     skill_root = tmp_path / "refund-policy-dir"
     skill_root.mkdir(parents=True)
@@ -380,14 +437,13 @@ def test_filesystem_skill_loader_loads_skill_by_manifest_name_when_directory_dif
     )
 
     async def scenario() -> None:
-        with caplog.at_level(logging.WARNING):
-            manifests = await loader.discover()
-            loaded = await loader.load("refund-policy")
+        manifests = await loader.discover()
+        loaded = await loader.load("refund-policy")
 
         assert [manifest.name for manifest in manifests] == ["refund-policy"]
         assert loaded.manifest.name == "refund-policy"
         assert loaded.manifest.root == skill_root.resolve()
-        assert "does not match parent directory" in caplog.text
+        assert "does not match parent directory" in capsys.readouterr().out
 
     asyncio.run(scenario())
 
@@ -681,6 +737,183 @@ def test_skills_shim_deduplicates_duplicate_activation_calls_in_same_batch() -> 
             ),
         }
         assert isinstance(model.call_options[1]["tools"], Tools)
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_tools_frontmatter_replaces_visible_tool_pool(
+    tmp_path: Path,
+) -> None:
+    loaded_skill = LoadedSkill(
+        manifest=SkillManifest(
+            name="workspace-reader",
+            description="Read workspace files.",
+            skill_file=Path("/skills/workspace-reader/SKILL.md"),
+            root=Path("/skills/workspace-reader"),
+            tools=("read",),
+        ),
+        instructions="# Workspace Reader",
+        resources=(),
+    )
+    loader = _MemorySkillLoader(loaded_skill)
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "workspace-reader"}),
+                    )
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(
+                HarnessToolsShim(
+                    (
+                        read_tool(cwd=tmp_path),
+                        write_tool(cwd=tmp_path),
+                    )
+                ),
+                SkillsShim(loader=loader),
+            ),
+        )
+    )
+
+    async def scenario() -> None:
+        result = await agent.run("Inspect the workspace.")
+
+        assert result.final_output == "done"
+        assert _tool_option_names(model.call_options[0]["tools"]) == [
+            "read",
+            "write",
+            "activate_skill",
+        ]
+        assert _tool_option_names(model.call_options[1]["tools"]) == ["read"]
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_disallowed_tools_frontmatter_subtracts_visible_tools(
+    tmp_path: Path,
+) -> None:
+    loaded_skill = LoadedSkill(
+        manifest=SkillManifest(
+            name="workspace-reader",
+            description="Read workspace files.",
+            skill_file=Path("/skills/workspace-reader/SKILL.md"),
+            root=Path("/skills/workspace-reader"),
+            disallowed_tools=("write",),
+        ),
+        instructions="# Workspace Reader",
+        resources=(),
+    )
+    loader = _MemorySkillLoader(loaded_skill)
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "workspace-reader"}),
+                    )
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(
+                HarnessToolsShim(
+                    (
+                        read_tool(cwd=tmp_path),
+                        write_tool(cwd=tmp_path),
+                    )
+                ),
+                SkillsShim(loader=loader),
+            ),
+        )
+    )
+
+    async def scenario() -> None:
+        result = await agent.run("Inspect the workspace.")
+
+        assert result.final_output == "done"
+        assert _tool_option_names(model.call_options[1]["tools"]) == [
+            "read",
+            "activate_skill",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_disallowed_tools_are_deny_first(
+    tmp_path: Path,
+) -> None:
+    loaded_skill = LoadedSkill(
+        manifest=SkillManifest(
+            name="workspace-reader",
+            description="Read workspace files.",
+            skill_file=Path("/skills/workspace-reader/SKILL.md"),
+            root=Path("/skills/workspace-reader"),
+            tools=("read", "write", "activate_skill"),
+            disallowed_tools=("write", "activate_skill"),
+        ),
+        instructions="# Workspace Reader",
+        resources=(),
+    )
+    loader = _MemorySkillLoader(loaded_skill)
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "workspace-reader"}),
+                    )
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(
+                HarnessToolsShim(
+                    (
+                        read_tool(cwd=tmp_path),
+                        write_tool(cwd=tmp_path),
+                    )
+                ),
+                SkillsShim(loader=loader),
+            ),
+        )
+    )
+
+    async def scenario() -> None:
+        result = await agent.run("Inspect the workspace.")
+
+        assert result.final_output == "done"
+        assert _tool_option_names(model.call_options[1]["tools"]) == ["read"]
 
     asyncio.run(scenario())
 

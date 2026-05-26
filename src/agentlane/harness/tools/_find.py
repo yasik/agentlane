@@ -8,12 +8,19 @@ from pydantic import BaseModel, Field
 from wcmatch import glob as wcmatch_glob
 from wcmatch.glob import WcMatcher
 
-from agentlane.models import Tool
+from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._gitignore import GitignoreMatcher
 from ._output import FIND_DEFAULT_LIMIT, TEXT_MAX_BYTES
 from ._paths import ToolPathResolver
+from ._permissions import (
+    ToolApprovalCallback,
+    ToolOperation,
+    ToolPermissionPolicy,
+    ToolPermissionRequest,
+    evaluate_tool_permission,
+)
 from ._types import HarnessToolDefinition
 
 _TOOL_NAME = "find"
@@ -77,28 +84,39 @@ class _FindContent:
     continuation_message: str | None = None
 
 
-def find_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
+def find_tool(
+    *,
+    cwd: str | Path | None = None,
+    permissions: ToolPermissionPolicy | None = None,
+    approval_callback: ToolApprovalCallback | None = None,
+) -> HarnessToolDefinition:
     """Build the first-party file find harness tool.
 
     Args:
         cwd: Optional working directory used to resolve relative search paths.
             When omitted, the current working directory is captured at
             construction time.
+        permissions: Optional policy for search permission decisions.
+        approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable find tool with prompt metadata.
     """
-    resolver = ToolPathResolver() if cwd is None else ToolPathResolver(cwd=Path(cwd))
+    resolver = ToolPathResolver.for_optional(cwd)
 
     async def run_find(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
     ) -> str:
         try:
-            return _find_files(
+            return await _find_files(
                 args,
                 resolver=resolver,
+                permissions=permissions,
+                approval_callback=approval_callback,
                 cancellation_token=cancellation_token,
+                context=context,
             )
         except Exception:
             return _GENERIC_FIND_ERROR
@@ -115,11 +133,14 @@ def find_tool(*, cwd: str | Path | None = None) -> HarnessToolDefinition:
     )
 
 
-def _find_files(
+async def _find_files(
     args: _ToolArgs,
     *,
     resolver: ToolPathResolver,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
     cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
 ) -> str:
     """Find files and render a plain-text tool result."""
     pattern = args.pattern.strip()
@@ -131,6 +152,20 @@ def _find_files(
         return "limit must be greater than zero"
 
     search_dir = resolver.cwd if args.path is None else resolver.resolve(args.path)
+    permission_error = await evaluate_tool_permission(
+        ToolPermissionRequest(
+            tool_name=_TOOL_NAME,
+            operation=ToolOperation.SEARCH_FILES,
+            cwd=resolver.cwd,
+            path=search_dir,
+        ),
+        policy=permissions,
+        approval_callback=approval_callback,
+        context=context,
+    )
+    if permission_error is not None:
+        return permission_error
+
     if not search_dir.is_dir():
         return f"path is not a directory: `{search_dir}`"
 

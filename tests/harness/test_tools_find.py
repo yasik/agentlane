@@ -11,6 +11,7 @@ from agentlane.harness.tools import (
     TEXT_MAX_BYTES,
     HarnessToolsShim,
     ToolPathResolver,
+    WorkspaceToolPermissionPolicy,
     find_tool,
 )
 from agentlane.models import Tools
@@ -56,6 +57,24 @@ def test_find_tool_uses_explicit_search_path(tmp_path: Path) -> None:
     output = run_tool(find_tool(cwd=tmp_path), pattern="*.py", path="src")
 
     assert output == f"Search directory: {tmp_path / 'src'}\ninside.py"
+
+
+def test_find_tool_denies_search_outside_workspace_policy(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+
+    output = run_tool(
+        find_tool(
+            cwd=workspace,
+            permissions=WorkspaceToolPermissionPolicy(workspace),
+        ),
+        pattern="*.py",
+        path=str(outside),
+    )
+
+    assert output == f"permission denied: find is not allowed for `{outside}`"
 
 
 def test_find_tool_includes_dotfiles(tmp_path: Path) -> None:

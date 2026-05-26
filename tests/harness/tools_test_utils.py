@@ -7,7 +7,15 @@ from pydantic import BaseModel
 
 from agentlane.harness import RunState
 from agentlane.harness.tools import HarnessToolDefinition
-from agentlane.models import MessageDict, Model, ModelResponse, Tool, ToolCall, Tools
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    Tool,
+    ToolCall,
+    ToolExecutionContext,
+    Tools,
+)
 from agentlane.runtime import CancellationToken
 
 
@@ -15,7 +23,12 @@ class EchoArgs(BaseModel):
     text: str
 
 
-async def echo(args: EchoArgs, cancellation_token: CancellationToken) -> str:
+async def echo(
+    args: EchoArgs,
+    cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
+) -> str:
+    del context
     del cancellation_token
     return args.text
 

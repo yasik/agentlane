@@ -15,6 +15,9 @@ Use this page when adding or changing first-party tools, especially tools under
 - Keep construction-time configuration on the helper function. Example:
   `read_tool(cwd=workspace)` captures path policy before the model can call the
   tool.
+- When using `Tool.from_function(...)` or `@as_tool`, a parameter named
+  `context` is framework-injected and excluded from the model-visible schema,
+  the same way `cancellation_token` is handled.
 - Register standard first-party tools through `base_harness_tools()` only after
   the tool behavior, tests, docs, and example are complete.
 
@@ -69,8 +72,56 @@ Use this page when adding or changing first-party tools, especially tools under
 - Use `ToolPathResolver` for path resolution.
 - Capture `cwd` at tool construction time. Relative paths resolve from that
   captured directory.
-- Document whether absolute paths are allowed. The current Phase 11 path policy
-  allows absolute paths and does not enforce a sandbox boundary.
+- Document whether absolute paths are allowed. The current framework default
+  allows absolute paths and remains permissive until a developer passes an
+  explicit permission policy.
+- Tools that touch local files or processes should use the shared permission
+  primitives from `agentlane.harness.tools` instead of inventing tool-specific
+  policy types. Evaluate the policy after simple argument validation and path
+  resolution, before filesystem writes, file opens, process startup, or other
+  side effects. Also evaluate permissions before existence or type checks that
+  would reveal information about paths outside the allowed boundary.
+- Keep the framework default permissive. First-party helpers should preserve
+  trusted local behavior until the application passes `permissions=...`.
+- Policy composition must be conservative. For `AllOfToolPermissionPolicy`,
+  deny wins over approval, approval wins over allow, and allow is returned only
+  when every nested policy allows the request.
+- If a common application policy shape becomes verbose, add a typed convenience
+  constructor that composes the public primitives. Do not replace the low-level
+  policies or hide extension points behind an app-specific default.
+- Use `workspace_tool_policy(...)` for the standard workspace-app shape:
+  path containment, optional grants, optional approval for side effects, and
+  explicit command approval through `require_bash_approval=True`. Do not name
+  command-execution options as if they allow execution by themselves.
+- Keep single-root and multi-scope path policies separate. Use
+  `WorkspaceToolPermissionPolicy` for a hard workspace boundary, and
+  `PathScopeToolPermissionPolicy` when an app has explicitly approved files or
+  directories outside the current workspace.
+- Document subtle constructor semantics where they affect safety. For example,
+  `grants=None` should mean no grant allowlist, while `grants=()` should mean
+  an empty allowlist that denies every grant-checked request.
+- Denied and approval-required decisions are normal model-facing tool results,
+  not exceptions. Keep the wording stable, for example:
+  ```text
+  permission denied: read is not allowed for `/path/to/file`
+  approval required: bash command requires application approval before execution
+  ```
+- `require_approval` is a framework callback boundary. Core tools may call an
+  optional approval callback supplied by the host application with both the
+  `ToolPermissionRequest` and the approval-required `ToolPermissionDecision`,
+  but the harness library should not implement CLI, desktop, web, or
+  service-specific approval UX. Use `SideEffectApprovalToolPermissionPolicy`
+  when a custom composition needs the standard side-effect approval policy.
+- Framework correlation flows through `ToolExecutionContext`, which
+  `ToolExecutor` passes explicitly to tool handlers. First-party permission
+  checks copy `run_id`, `agent_name`, and `tool_call_id` from that context onto
+  `ToolPermissionRequest`; use `metadata` only for host-application
+  correlation data. Do not use ambient context or render correlation metadata
+  in model-facing text by default.
+- Be precise about `bash`: command execution can be denied or require approval
+  before startup, but the default local executor is not filesystem-confined
+  after startup. Real process isolation belongs in a host-provided executor,
+  container, remote worker, or equivalent sandbox.
 - Prefer incremental reads and walks for large files or large directories.
 - Treat binary or unsupported content as a clear tool result. For text tools,
   decode invalid UTF-8 with replacement characters when preserving surrounding
@@ -84,13 +135,14 @@ Use this page when adding or changing first-party tools, especially tools under
 - Define constants for the tool name, description, prompt snippet, prompt
   guideline, and generic error text.
 - Keep the async handler thin. It should adapt the `Tool` call boundary, handle
-  cancellation-token plumbing, and delegate tool behavior to typed helpers.
+  cancellation-token and `ToolExecutionContext` plumbing, and delegate tool
+  behavior to typed helpers.
 - Split validation, execution, output collection, and formatting into small
   helpers when that makes the result contract easier to test.
 - Use small internal dataclasses when a helper needs to return content plus
   metadata such as continuation or error state.
-- Use `del cancellation_token` or pass the token through intentionally. Avoid
-  leaving unused parameters ambiguous.
+- Use `del cancellation_token` / `del context` or pass them through
+  intentionally. Avoid leaving unused framework parameters ambiguous.
 
 ## Tests
 
@@ -108,7 +160,13 @@ Use this page when adding or changing first-party tools, especially tools under
 
 ## Documentation and examples
 
-- Update `docs/harness/tools.md` when public tool behavior changes.
+- Update the focused harness tool docs when public tool behavior changes:
+  `docs/harness/tools.md` for the index, `docs/harness/tools-design.md` for
+  shared design, `docs/harness/tools-permissions.md` for permission behavior,
+  and `docs/harness/tools-<tool>.md` for individual tool contracts.
+- Each local tool doc should include a short `Permissions` section that names
+  the emitted `ToolOperation`, shows the denied result shape, and states when
+  approval can be requested.
 - Add or update a runnable example when introducing a new public tool or a new
   common workflow.
 - Keep public docs focused on current behavior and supported boundaries. Keep

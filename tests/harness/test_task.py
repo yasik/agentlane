@@ -1,4 +1,5 @@
 import asyncio
+import re
 from collections.abc import Sequence
 
 import agentlane.harness.context as harness_context
@@ -112,6 +113,24 @@ def test_harness_public_exports_are_defined() -> None:
 def test_harness_subpackages_import() -> None:
     assert harness_context.__all__ == []
     assert harness_memory.__all__ == []
+
+
+def test_agent_descriptor_generates_missing_name() -> None:
+    omitted = AgentDescriptor()
+    blank = AgentDescriptor(name="")
+
+    assert omitted.name
+    assert blank.name
+    assert re.fullmatch(r"[a-z0-9]+-[a-z0-9]+", omitted.name)
+    assert re.fullmatch(r"[a-z0-9]+-[a-z0-9]+", blank.name)
+
+
+def test_agent_direct_construction_gets_generated_identity() -> None:
+    runtime = SingleThreadedRuntimeEngine()
+    agent = Agent(runtime, Runner())
+
+    assert agent.name
+    assert agent.task_id.type.value == agent.name
 
 
 def test_task_register_creates_runtime_factory_instances() -> None:

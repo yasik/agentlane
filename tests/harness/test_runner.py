@@ -26,8 +26,6 @@ from agentlane.harness._handoff import (
     delegated_result_text,
     normalize_delegation_tool_name,
 )
-from agentlane.harness.tools import base_harness_tools
-from agentlane.harness.tools._shim import render_harness_tools_prompt
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import (
     MessageDict,
@@ -41,6 +39,7 @@ from agentlane.models import (
     PromptTemplate,
     Tool,
     ToolCall,
+    ToolExecutionContext,
     Tools,
     ToolSpec,
     get_content_or_none,
@@ -54,13 +53,6 @@ def _message(role: str, content: object) -> MessageDict:
         "role": role,
         "content": content,
     }
-
-
-def _expected_default_child_system_prompt() -> str:
-    prompt = render_harness_tools_prompt(definitions=base_harness_tools())
-    if prompt is None:
-        raise AssertionError("Base harness tools unexpectedly rendered no prompt.")
-    return f"{default_agent_tool_instructions()}\n\n{prompt}"
 
 
 def _copy_messages(messages: list[MessageDict]) -> list[MessageDict]:
@@ -972,7 +964,9 @@ def test_runner_executes_parallel_tool_calls_and_invokes_hooks() -> None:
         async def echo_handler(
             args: _EchoArgs,
             cancellation_token: CancellationToken,
+            context: ToolExecutionContext,
         ) -> str:
+            del context
             del cancellation_token
             started_calls.append(args.text)
             if len(started_calls) == 2:
@@ -1052,14 +1046,18 @@ def test_runner_filters_exhausted_tools_on_later_turns() -> None:
         async def echo_handler(
             args: _EchoArgs,
             cancellation_token: CancellationToken,
+            context: ToolExecutionContext,
         ) -> str:
+            del context
             del cancellation_token
             return f"echo:{args.text}"
 
         async def lookup_handler(
             args: _EchoArgs,
             cancellation_token: CancellationToken,
+            context: ToolExecutionContext,
         ) -> str:
+            del context
             del cancellation_token
             return f"lookup:{args.text}"
 
@@ -1126,7 +1124,9 @@ def test_runner_disables_tools_after_max_round_trips() -> None:
         async def echo_handler(
             args: _EchoArgs,
             cancellation_token: CancellationToken,
+            context: ToolExecutionContext,
         ) -> str:
+            del context
             del cancellation_token
             return f"echo:{args.text}"
 
@@ -1811,7 +1811,7 @@ def test_runner_executes_default_agent_tool_with_default_prompt_and_task_input()
             [
                 _message(
                     "system",
-                    _expected_default_child_system_prompt(),
+                    default_agent_tool_instructions(),
                 ),
                 _message(
                     "user",
