@@ -3,8 +3,8 @@
 ## Path Policy
 
 Filesystem tools use `ToolPathResolver`. Relative paths resolve against the
-`cwd` captured when the tool is constructed. Absolute paths are accepted by
-`ToolPathResolver`; workspace and path-scope policies still enforce boundaries
+`cwd` captured when the tool is constructed. Absolute path strings are accepted
+as tool inputs, but workspace and path-scope policies still enforce boundaries
 on the resolved target. Paths are normalized with `Path.resolve(strict=False)`.
 
 AgentLane is a framework, so first-party helpers stay permissive unless an
@@ -198,8 +198,8 @@ class DenyBash:
 `WorkspaceToolPermissionPolicy(...)` resolves existing paths through
 symlinks. New paths are checked through their nearest existing parent, so
 writing `nested/file.txt` still requires the target parent chain to stay inside
-the workspace. Absolute paths are still accepted, but a workspace policy denies
-absolute targets outside the root.
+the workspace. Absolute path strings are accepted as inputs, but the policy
+denies resolved absolute targets outside the root.
 
 If an app needs a different scope shape, use one of these explicit choices:
 
