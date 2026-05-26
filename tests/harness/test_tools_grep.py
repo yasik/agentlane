@@ -62,7 +62,7 @@ def test_grep_tool_denies_explicit_file_outside_workspace_policy(
     result = run_tool(
         grep_tool(
             cwd=workspace,
-            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+            permissions=WorkspaceToolPermissionPolicy(workspace),
         ),
         pattern="needle",
         path=str(outside),

@@ -44,7 +44,7 @@ def test_workspace_permission_policy_allows_paths_inside_root(
     workspace.mkdir()
     target = workspace / "notes.txt"
     target.write_text("notes", encoding="utf-8")
-    policy = WorkspaceToolPermissionPolicy(root=workspace)
+    policy = WorkspaceToolPermissionPolicy(workspace)
 
     decision = policy.check(_request(cwd=workspace, path=target))
 
@@ -177,7 +177,7 @@ def test_workspace_permission_policy_denies_paths_outside_root(
     outside = tmp_path / "outside.txt"
     workspace.mkdir()
     outside.write_text("secret", encoding="utf-8")
-    policy = WorkspaceToolPermissionPolicy(root=workspace)
+    policy = WorkspaceToolPermissionPolicy(workspace)
 
     decision = policy.check(_request(cwd=workspace, path=outside))
 
@@ -196,7 +196,7 @@ def test_workspace_permission_policy_denies_symlink_escape(
         link.symlink_to(outside, target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"symlink creation unavailable: {exc}")
-    policy = WorkspaceToolPermissionPolicy(root=workspace)
+    policy = WorkspaceToolPermissionPolicy(workspace)
 
     decision = policy.check(_request(cwd=workspace, path=link / "secret.txt"))
 
@@ -209,7 +209,7 @@ def test_workspace_permission_policy_can_restrict_operations(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     policy = WorkspaceToolPermissionPolicy(
-        root=workspace,
+        workspace,
         allowed_operations=(ToolOperation.READ_FILE,),
     )
 
@@ -228,7 +228,7 @@ def test_workspace_permission_policy_can_restrict_operations(
 def test_workspace_permission_policy_denies_command_without_explicit_grant(
     tmp_path: Path,
 ) -> None:
-    policy = WorkspaceToolPermissionPolicy(root=tmp_path)
+    policy = WorkspaceToolPermissionPolicy(tmp_path)
 
     decision = policy.check(
         _request(
@@ -245,7 +245,7 @@ def test_workspace_permission_policy_allows_command_with_explicit_grant(
     tmp_path: Path,
 ) -> None:
     policy = WorkspaceToolPermissionPolicy(
-        root=tmp_path,
+        tmp_path,
         allowed_operations=(ToolOperation.EXECUTE_COMMAND,),
     )
 
@@ -267,7 +267,7 @@ def test_path_scope_permission_policy_allows_workspace_and_outside_file(
     outside_file = tmp_path / "brief.md"
     workspace.mkdir()
     outside_file.write_text("review me", encoding="utf-8")
-    policy = PathScopeToolPermissionPolicy(paths=(workspace, outside_file))
+    policy = PathScopeToolPermissionPolicy((workspace, outside_file))
 
     workspace_decision = policy.check(
         _request(
@@ -295,7 +295,7 @@ def test_path_scope_permission_policy_denies_unapproved_sibling_file(
     workspace.mkdir()
     approved_file.write_text("approved", encoding="utf-8")
     sibling_file.write_text("private", encoding="utf-8")
-    policy = PathScopeToolPermissionPolicy(paths=(workspace, approved_file))
+    policy = PathScopeToolPermissionPolicy((workspace, approved_file))
 
     decision = policy.check(
         _request(
@@ -315,7 +315,7 @@ def test_path_scope_permission_policy_allows_outside_directory_descendants(
     workspace.mkdir()
     outside_dir.mkdir()
     nested = outside_dir / "nested" / "brief.md"
-    policy = PathScopeToolPermissionPolicy(paths=(workspace, outside_dir))
+    policy = PathScopeToolPermissionPolicy((workspace, outside_dir))
 
     decision = policy.check(
         _request(
@@ -336,7 +336,7 @@ def test_path_scope_permission_policy_limits_existing_file_to_exact_path(
     outside_file = tmp_path / "approved.md"
     workspace.mkdir()
     outside_file.write_text("approved", encoding="utf-8")
-    policy = PathScopeToolPermissionPolicy(paths=(workspace, outside_file))
+    policy = PathScopeToolPermissionPolicy((workspace, outside_file))
 
     decision = policy.check(
         _request(
@@ -354,7 +354,7 @@ def test_path_scope_permission_policy_allows_exact_non_existing_path(
     workspace = tmp_path / "workspace"
     future_file = tmp_path / "approved.md"
     workspace.mkdir()
-    policy = PathScopeToolPermissionPolicy(paths=(workspace, future_file))
+    policy = PathScopeToolPermissionPolicy((workspace, future_file))
 
     exact_decision = policy.check(
         _request(
@@ -380,7 +380,7 @@ def test_path_scope_permission_policy_allows_exact_non_existing_path(
 def test_path_scope_permission_policy_empty_paths_denies_path_operations(
     tmp_path: Path,
 ) -> None:
-    policy = PathScopeToolPermissionPolicy(paths=())
+    policy = PathScopeToolPermissionPolicy(())
 
     decision = policy.check(
         _request(
@@ -398,7 +398,7 @@ def test_path_scope_permission_policy_can_restrict_operations(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     policy = PathScopeToolPermissionPolicy(
-        paths=(workspace,),
+        (workspace,),
         allowed_operations=(ToolOperation.READ_FILE,),
     )
 
@@ -419,9 +419,9 @@ def test_path_scope_permission_policy_requires_explicit_command_grant(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    denied_policy = PathScopeToolPermissionPolicy(paths=(workspace,))
+    denied_policy = PathScopeToolPermissionPolicy((workspace,))
     allowed_policy = PathScopeToolPermissionPolicy(
-        paths=(workspace,),
+        (workspace,),
         allowed_operations=(ToolOperation.EXECUTE_COMMAND,),
     )
 
@@ -499,7 +499,7 @@ def test_all_of_tool_permission_policy_intersects_decisions(tmp_path: Path) -> N
     grants, _ = parse_tool_permission_grants("write:create_file")
     policy = AllOfToolPermissionPolicy(
         (
-            WorkspaceToolPermissionPolicy(root=tmp_path),
+            WorkspaceToolPermissionPolicy(tmp_path),
             ToolPermissionGrantPolicy(grants),
         )
     )
@@ -550,7 +550,7 @@ def test_all_of_tool_permission_policy_denies_after_approval_required(
     policy = AllOfToolPermissionPolicy(
         (
             RequireApprovalPolicy(),
-            WorkspaceToolPermissionPolicy(root=workspace),
+            WorkspaceToolPermissionPolicy(workspace),
         )
     )
     request = _request(cwd=workspace, path=outside)
@@ -573,7 +573,7 @@ def test_all_of_tool_permission_policy_requires_approval_after_allows(
 
     policy = AllOfToolPermissionPolicy(
         (
-            WorkspaceToolPermissionPolicy(root=tmp_path),
+            WorkspaceToolPermissionPolicy(tmp_path),
             RequireApprovalPolicy(),
         )
     )
@@ -613,9 +613,7 @@ def test_side_effect_approval_policy_requires_approval_for_writes(
 def test_side_effect_approval_policy_can_require_specific_operations(
     tmp_path: Path,
 ) -> None:
-    policy = SideEffectApprovalToolPermissionPolicy(
-        operations=(ToolOperation.EXECUTE_COMMAND,)
-    )
+    policy = SideEffectApprovalToolPermissionPolicy((ToolOperation.EXECUTE_COMMAND,))
 
     write_decision = policy.check(
         _request(
@@ -647,7 +645,7 @@ def test_workspace_tool_policy_allows_reads_and_requires_approval_for_side_effec
         "read, write:create_file, bash:execute_command"
     )
     policy = workspace_tool_policy(
-        root=workspace,
+        workspace,
         grants=grants,
         require_approval_for_side_effects=True,
         require_bash_approval=True,
@@ -695,7 +693,7 @@ def test_workspace_tool_policy_without_grants_uses_workspace_only(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    policy = workspace_tool_policy(root=workspace)
+    policy = workspace_tool_policy(workspace)
 
     decision = asyncio.run(
         policy.check(
@@ -716,7 +714,7 @@ def test_workspace_tool_policy_with_empty_grants_denies_all_granted_tools(
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    policy = workspace_tool_policy(root=workspace, grants=())
+    policy = workspace_tool_policy(workspace, grants=())
 
     decision = asyncio.run(
         policy.check(
@@ -740,7 +738,7 @@ def test_workspace_tool_policy_still_denies_outside_paths_before_approval(
     workspace.mkdir()
     grants, _ = parse_tool_permission_grants("write:create_file")
     policy = workspace_tool_policy(
-        root=workspace,
+        workspace,
         grants=grants,
         require_approval_for_side_effects=True,
     )
@@ -764,7 +762,7 @@ def test_workspace_tool_policy_denies_bash_without_required_approval(
 ) -> None:
     grants, _ = parse_tool_permission_grants("bash:execute_command")
     policy = workspace_tool_policy(
-        root=tmp_path,
+        tmp_path,
         grants=grants,
         require_approval_for_side_effects=True,
     )
@@ -788,7 +786,7 @@ def test_workspace_tool_policy_requires_bash_approval_without_other_side_effects
 ) -> None:
     grants, _ = parse_tool_permission_grants("bash:execute_command")
     policy = workspace_tool_policy(
-        root=tmp_path,
+        tmp_path,
         grants=grants,
         require_bash_approval=True,
     )

@@ -151,7 +151,7 @@ def test_patch_tool_denies_modify_outside_workspace_policy(tmp_path: Path) -> No
     output = run_tool(
         patch_tool(
             cwd=workspace,
-            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+            permissions=WorkspaceToolPermissionPolicy(workspace),
         ),
         path=str(outside),
         edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",
@@ -171,7 +171,7 @@ def test_patch_tool_denies_missing_path_outside_workspace_before_existence_check
     output = run_tool(
         patch_tool(
             cwd=workspace,
-            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+            permissions=WorkspaceToolPermissionPolicy(workspace),
         ),
         path=str(outside),
         edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",
@@ -191,7 +191,7 @@ def test_patch_tool_denies_directory_outside_workspace_before_type_check(
     output = run_tool(
         patch_tool(
             cwd=workspace,
-            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+            permissions=WorkspaceToolPermissionPolicy(workspace),
         ),
         path=str(outside),
         edits="<<<<<<< SEARCH\noutside\n=======\npatched\n>>>>>>> REPLACE\n",

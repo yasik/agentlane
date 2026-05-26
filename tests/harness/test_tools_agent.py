@@ -187,7 +187,7 @@ def test_agent_tool_inherits_configured_base_tools_shim_for_child_agents(
                     HarnessToolsShim(
                         base_harness_tools(
                             cwd=workspace,
-                            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+                            permissions=WorkspaceToolPermissionPolicy(workspace),
                         )
                     ),
                 ),

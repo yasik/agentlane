@@ -41,7 +41,7 @@ def test_base_harness_tools_threads_cwd_and_permissions(tmp_path: Path) -> None:
     outside.write_text("secret\n", encoding="utf-8")
     definitions = base_harness_tools(
         cwd=workspace,
-        permissions=WorkspaceToolPermissionPolicy(root=workspace),
+        permissions=WorkspaceToolPermissionPolicy(workspace),
     )
     read_definition = next(
         definition for definition in definitions if definition.tool.name == "read"

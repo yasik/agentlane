@@ -73,7 +73,7 @@ def test_write_tool_denies_create_outside_workspace_policy(tmp_path: Path) -> No
     output = run_tool(
         write_tool(
             cwd=workspace,
-            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+            permissions=WorkspaceToolPermissionPolicy(workspace),
         ),
         path=str(outside),
         content="secret",

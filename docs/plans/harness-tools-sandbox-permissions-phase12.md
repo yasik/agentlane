@@ -111,17 +111,16 @@ applications need to configure policies:
 2. `ToolPermissionRequest`
 3. `ToolPermissionDecision`
 4. `ToolPermissionPolicy`
-5. `AllowAllToolPermissionPolicy`
-6. `WorkspaceToolPermissionPolicy`
-7. `PathScopeToolPermissionPolicy`
-8. `ToolPermissionGrant`
-9. `ToolPermissionGrantPolicy`
-10. `SideEffectApprovalToolPermissionPolicy`
-11. `AllOfToolPermissionPolicy`
-12. `workspace_tool_policy`
-13. `parse_tool_permission_grants`
-14. `evaluate_tool_permission`
-15. `format_tool_permission_result`
+5. `WorkspaceToolPermissionPolicy`
+6. `PathScopeToolPermissionPolicy`
+7. `ToolPermissionGrant`
+8. `ToolPermissionGrantPolicy`
+9. `SideEffectApprovalToolPermissionPolicy`
+10. `AllOfToolPermissionPolicy`
+11. `workspace_tool_policy`
+12. `parse_tool_permission_grants`
+13. `evaluate_tool_permission`
+14. `format_tool_permission_result`
 
 The policy boundary should be evaluated inside each tool helper before the
 tool performs filesystem or process side effects. The runner and
@@ -208,11 +207,11 @@ Phase 12 should introduce a path sandbox for Python-owned filesystem tools.
 
 Recommended first implementation:
 
-1. `AllowAllToolPermissionPolicy` preserves current behavior when no policy is
-   supplied. This is intentional framework behavior: AgentLane should give
-   developers an explicit policy surface without forcing sandbox defaults on
-   every application.
-2. `WorkspaceToolPermissionPolicy(root=...)` allows path operations only when
+1. `permissions=None` preserves current behavior when no policy is supplied.
+   This is intentional framework behavior: AgentLane should give developers an
+   explicit policy surface without forcing sandbox defaults on every
+   application.
+2. `WorkspaceToolPermissionPolicy(...)` allows path operations only when
    the resolved target is inside the configured root.
 3. The policy resolves existing paths with symlink targets considered, so a
    symlink that points outside the root is denied.
@@ -238,7 +237,7 @@ shared contract is proven.
 Each tool helper should accept an optional shared policy:
 
 ```python
-read_tool(cwd=workspace, permissions=WorkspaceToolPermissionPolicy(root=workspace))
+read_tool(cwd=workspace, permissions=WorkspaceToolPermissionPolicy(workspace))
 ```
 
 Apply the same keyword to:
@@ -262,7 +261,7 @@ threading policy through every tool:
 ```python
 workspace_tools = base_harness_tools(
     cwd=workspace,
-    permissions=WorkspaceToolPermissionPolicy(root=workspace),
+    permissions=WorkspaceToolPermissionPolicy(workspace),
 )
 ```
 
@@ -536,6 +535,8 @@ Tracked follow-up:
 - [x] Add regression tests for omitted grants versus an empty grant list.
 - [x] Update public docs so common workspace policy setup is a direct recipe
       and low-level primitives remain clear extension points.
+- [x] Remove the public allow-all policy sentinel and document
+      `permissions=None` as the canonical permissive default.
 
 ## Follow-Up: Approved External Path Scopes
 

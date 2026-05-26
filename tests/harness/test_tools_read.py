@@ -68,7 +68,7 @@ def test_read_tool_denies_paths_outside_workspace_policy(tmp_path: Path) -> None
     output = run_tool(
         read_tool(
             cwd=workspace,
-            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+            permissions=WorkspaceToolPermissionPolicy(workspace),
         ),
         path=str(outside),
     )

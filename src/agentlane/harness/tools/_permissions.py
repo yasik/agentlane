@@ -114,14 +114,6 @@ class ToolPermissionPolicy(Protocol):
         ...
 
 
-class AllowAllToolPermissionPolicy:
-    """Default permissive policy that preserves current tool behavior."""
-
-    def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
-        del request
-        return ToolPermissionDecision.allow()
-
-
 @dataclass(frozen=True, slots=True)
 class ToolPermissionGrant:
     """One whole-tool or operation-specific capability grant.
@@ -184,8 +176,8 @@ class AllOfToolPermissionPolicy:
 
 
 def workspace_tool_policy(
-    *,
     root: str | Path,
+    *,
     grants: Iterable[ToolPermissionGrant] | None = None,
     require_approval_for_side_effects: bool = False,
     require_bash_approval: bool = False,
@@ -203,7 +195,7 @@ def workspace_tool_policy(
     """
     policies: list[ToolPermissionPolicy] = [
         WorkspaceToolPermissionPolicy(
-            root=root,
+            root,
             allowed_operations=_workspace_policy_operations(
                 include_execute_command=require_bash_approval,
             ),
@@ -367,8 +359,10 @@ async def evaluate_tool_permission(
         context=context,
     )
 
-    active_policy = policy or AllowAllToolPermissionPolicy()
-    decision = await _resolve_permission_result(active_policy.check(active_request))
+    if policy is None:
+        decision = ToolPermissionDecision.allow()
+    else:
+        decision = await _resolve_permission_result(policy.check(active_request))
     if (
         decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
         and approval_callback is not None
@@ -553,11 +547,19 @@ _PATH_OPERATIONS = (
     ToolOperation.CREATE_DIRECTORY,
 )
 
-_PATH_SIDE_EFFECT_OPERATIONS = (
-    ToolOperation.CREATE_FILE,
-    ToolOperation.OVERWRITE_FILE,
-    ToolOperation.MODIFY_FILE,
-    ToolOperation.CREATE_DIRECTORY,
+_PATH_READ_ONLY_OPERATIONS = frozenset(
+    {
+        ToolOperation.READ_FILE,
+        ToolOperation.SEARCH_FILES,
+    }
+)
+
+# Derive side effects from the canonical path list so workspace scoping and
+# approval scoping cannot drift when new path operations are added.
+_PATH_SIDE_EFFECT_OPERATIONS = tuple(
+    operation
+    for operation in _PATH_OPERATIONS
+    if operation not in _PATH_READ_ONLY_OPERATIONS
 )
 
 _SIDE_EFFECT_OPERATIONS = frozenset(

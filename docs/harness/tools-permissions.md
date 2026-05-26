@@ -19,10 +19,9 @@ tools = base_harness_tools(cwd=WORKSPACE)
 Applications opt into permissioning at tool construction time. The bundled
 policies are small and composable:
 
-1. `AllowAllToolPermissionPolicy` allows every request. This is the implicit
-   default when no `permissions=` value is passed; most callers should use
-   `permissions=None` for this behavior and reserve the class for explicit
-   composition or tests.
+1. `permissions=None` allows every request. This is the canonical allow-all
+   path for trusted app code and prototypes; there is no separate public
+   allow-all policy to compose.
 2. `WorkspaceToolPermissionPolicy` is a single-root path boundary. It allows
    path operations only when the resolved target stays inside `root`. It
    denies `ToolOperation.EXECUTE_COMMAND` unless that operation is explicitly
@@ -104,7 +103,7 @@ if invalid_entries:
 tools = base_harness_tools(
     cwd=WORKSPACE,
     permissions=workspace_tool_policy(
-        root=WORKSPACE,
+        WORKSPACE,
         grants=grants,
         require_approval_for_side_effects=True,
         require_bash_approval=True,
@@ -113,8 +112,10 @@ tools = base_harness_tools(
 )
 ```
 
-Use `grants=None` when you do not want a grant allowlist. Pass an empty
-iterable, `grants=()`, only when the grant layer should deny every tool.
+Grant defaults are intentionally distinct. Omit `grants` or pass
+`grants=None` when you do not want a grant allowlist; the helper will compose
+only workspace and approval policies. Pass an empty iterable, `grants=()`,
+only when the grant layer should exist and deny every tool.
 `require_approval_for_side_effects=True` makes file creation, overwrites,
 patches, and directory creation require approval. `bash` is separate:
 `require_bash_approval=True` is the only way this helper admits

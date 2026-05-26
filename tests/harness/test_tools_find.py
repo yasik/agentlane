@@ -68,7 +68,7 @@ def test_find_tool_denies_search_outside_workspace_policy(tmp_path: Path) -> Non
     output = run_tool(
         find_tool(
             cwd=workspace,
-            permissions=WorkspaceToolPermissionPolicy(root=workspace),
+            permissions=WorkspaceToolPermissionPolicy(workspace),
         ),
         pattern="*.py",
         path=str(outside),
