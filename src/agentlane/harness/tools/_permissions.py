@@ -125,6 +125,11 @@ class ToolPermissionGrant:
     tool_name: str
     operation: ToolOperation | None = None
 
+    @classmethod
+    def all_operations(cls, tool_name: str) -> "ToolPermissionGrant":
+        """Return a grant for every operation exposed by one tool."""
+        return cls(tool_name=tool_name)
+
     def allows(self, request: ToolPermissionRequest) -> bool:
         """Return whether this grant permits the request."""
         if self.tool_name != request.tool_name:
@@ -430,7 +435,7 @@ def _parse_permission_grant(entry: str) -> ToolPermissionGrant | None:
     if operations is None:
         return None
     if separator == "":
-        return ToolPermissionGrant(tool_name=tool_name)
+        return ToolPermissionGrant.all_operations(tool_name)
 
     try:
         operation = ToolOperation(operation_name)

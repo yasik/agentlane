@@ -184,7 +184,9 @@ For each ordinary executable tool call, the runner also builds an explicit
 `ToolExecutionContext` containing the run id, agent name, and model tool-call
 id. `ToolExecutor` passes that context to the tool handler; permission policies
 and approval callbacks can use it for audit or UI correlation without relying
-on hidden process-local state.
+on hidden process-local state. The executor accepts these contexts as a mapping
+keyed by model tool-call id because one model response can contain multiple
+tool calls. The tool handler receives only its own single context.
 
 ## Agent-As-Tool
 

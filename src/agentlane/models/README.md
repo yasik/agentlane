@@ -56,5 +56,8 @@ arguments and cancellation token so framework correlation is passed directly
 instead of through hidden process-local state. The ergonomic function path can
 also opt in by declaring a `context` parameter; like `cancellation_token`, it
 is injected by the framework and excluded from the model-visible schema.
+`ToolExecutor.execute(...)` accepts context as a mapping keyed by model
+tool-call id so batched or parallel tool calls can each receive the right
+single-call context.
 
 If you are defining how the framework talks to models, validates outputs, executes tools, or carries ephemeral model-call state, it belongs here.

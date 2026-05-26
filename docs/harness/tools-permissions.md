@@ -96,8 +96,9 @@ agent tool calls but not a substitute for kernel-enforced isolation.
 
 For the common application policy "stay inside this workspace, apply a tool
 grant allowlist, and require app approval before side effects", use
-`workspace_tool_policy(...)`. It is a convenience constructor over the same
-public primitives, not a separate policy system:
+`workspace_tool_policy(...)`. It is an opinionated convenience constructor for
+that workspace-app shape over the same public primitives, not a separate
+policy system:
 
 ```python
 grants, invalid_entries = parse_tool_permission_grants(
@@ -192,6 +193,11 @@ entries override earlier ones. Callers should reject or report
 CLI and environment-variable callers can collect every unsupported entry and
 report them together instead of failing on the first one.
 
+For programmatic grants, construct `ToolPermissionGrant` values directly.
+`ToolPermissionGrant.all_operations("read")` makes whole-tool intent explicit;
+`ToolPermissionGrant("write", ToolOperation.CREATE_FILE)` grants one
+operation.
+
 Custom policies only need a `check(request)` method:
 
 ```python
@@ -229,7 +235,9 @@ optional caller hints.
 At the execution boundary, a `Tool` handler receives one
 `ToolExecutionContext`. `ToolExecutor.execute(...)` accepts a mapping keyed by
 tool-call id because one executor invocation may run several tool calls in
-parallel and each call needs its own correlation.
+parallel and each call needs its own correlation. Custom executors should
+preserve that shape: accept per-call context at the batch boundary, then pass
+one `ToolExecutionContext` into each individual `Tool.run(...)` call.
 
 Denied calls return stable tool-result text before side effects:
 

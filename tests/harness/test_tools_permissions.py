@@ -9,6 +9,7 @@ from agentlane.harness.tools import (
     SideEffectApprovalToolPermissionPolicy,
     ToolOperation,
     ToolPermissionDecision,
+    ToolPermissionGrant,
     ToolPermissionGrantPolicy,
     ToolPermissionOutcome,
     ToolPermissionRequest,
@@ -480,6 +481,34 @@ def test_parse_tool_permission_grants_preserves_duplicate_entries() -> None:
         ("write", ToolOperation.CREATE_FILE),
         ("write", ToolOperation.CREATE_FILE),
     ]
+
+
+def test_tool_permission_grant_all_operations_allows_any_operation_for_tool(
+    tmp_path: Path,
+) -> None:
+    grant = ToolPermissionGrant.all_operations("write")
+
+    assert grant.allows(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=tmp_path,
+        )
+    )
+    assert grant.allows(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.OVERWRITE_FILE,
+            cwd=tmp_path,
+        )
+    )
+    assert not grant.allows(
+        _request(
+            tool_name="read",
+            operation=ToolOperation.READ_FILE,
+            cwd=tmp_path,
+        )
+    )
 
 
 def test_tool_permission_grant_policy_checks_operation_level_grants(
