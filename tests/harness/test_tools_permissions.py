@@ -130,6 +130,46 @@ def test_evaluate_tool_permission_preserves_explicit_request_fields(
     )
 
 
+def test_evaluate_tool_permission_merges_request_and_context_metadata(
+    tmp_path: Path,
+) -> None:
+    seen: list[ToolPermissionRequest] = []
+
+    class RecordingPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            seen.append(request)
+            return ToolPermissionDecision.allow()
+
+    error = asyncio.run(
+        evaluate_tool_permission(
+            ToolPermissionRequest(
+                tool_name="read",
+                operation=ToolOperation.READ_FILE,
+                cwd=tmp_path,
+                path=tmp_path / "notes.txt",
+                metadata={"actor": "skill-x", "surface": "tool"},
+            ),
+            policy=RecordingPolicy(),
+            context=ToolExecutionContext(
+                run_id="context-run",
+                agent_name="Reviewer",
+                tool_call_id="call_1",
+                metadata={"surface": "cli", "session": "local"},
+            ),
+        )
+    )
+
+    assert error is None
+    assert seen[0].metadata == {
+        "actor": "skill-x",
+        "surface": "tool",
+        "session": "local",
+    }
+
+
 def test_workspace_permission_policy_denies_paths_outside_root(
     tmp_path: Path,
 ) -> None:
@@ -471,6 +511,23 @@ def test_all_of_tool_permission_policy_intersects_decisions(tmp_path: Path) -> N
     )
 
     decision = asyncio.run(policy.check(request))
+
+    assert decision == ToolPermissionDecision.allow()
+
+
+def test_all_of_tool_permission_policy_allows_empty_composition(
+    tmp_path: Path,
+) -> None:
+    policy = AllOfToolPermissionPolicy(())
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                cwd=tmp_path,
+                path=tmp_path / "notes.txt",
+            )
+        )
+    )
 
     assert decision == ToolPermissionDecision.allow()
 

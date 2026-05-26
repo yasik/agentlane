@@ -164,6 +164,9 @@ Use this page when adding or changing first-party tools, especially tools under
   `docs/harness/tools.md` for the index, `docs/harness/tools-design.md` for
   shared design, `docs/harness/tools-permissions.md` for permission behavior,
   and `docs/harness/tools-<tool>.md` for individual tool contracts.
+- Each local tool doc should include a short `Permissions` section that names
+  the emitted `ToolOperation`, shows the denied result shape, and states when
+  approval can be requested.
 - Add or update a runnable example when introducing a new public tool or a new
   common workflow.
 - Keep public docs focused on current behavior and supported boundaries. Keep

@@ -7,6 +7,13 @@ Parameters:
 1. `name: str`
 2. `task: str`
 
+## Permissions
+
+`agent` does not issue a `ToolPermissionRequest` for the spawn itself. Spawned
+helpers inherit the configured base tools and their `permissions=` /
+`approval_callback=` through normal shim inheritance, so filesystem and bash
+checks still happen inside the child when it uses those tools.
+
 `name` must be one word. It can be task-relevant or random, and is used only
 for logging and tracing. `task` is the full instruction for the helper,
 including the context it needs and the expected output.

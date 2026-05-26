@@ -11,6 +11,24 @@ Parameters:
 1. `path: str`
 2. `edits: str`
 
+## Permissions
+
+`patch` resolves `path` through `ToolPathResolver` and checks
+`ToolOperation.MODIFY_FILE` before parsing or applying edits. A denied request
+returns:
+
+```text
+permission denied: patch is not allowed for `/workspace/private.txt`
+```
+
+`SideEffectApprovalToolPermissionPolicy` and
+`workspace_tool_policy(require_approval_for_side_effects=True)` request
+approval for patch operations before the file is modified.
+
+```text
+approval required: patch requires application approval for `/workspace/notes.txt` before execution
+```
+
 `path` is structured tool input and resolves through `ToolPathResolver`.
 `edits` should contain one or more bare SEARCH/REPLACE blocks without path
 lines:

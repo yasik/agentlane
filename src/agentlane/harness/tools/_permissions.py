@@ -261,8 +261,8 @@ class WorkspaceToolPermissionPolicy:
 
     def __init__(
         self,
-        *,
         root: str | Path,
+        *,
         allowed_operations: Iterable[ToolOperation | str] | None = None,
     ) -> None:
         # Normalize once at construction so every check compares canonical
@@ -314,8 +314,8 @@ class PathScopeToolPermissionPolicy:
 
     def __init__(
         self,
-        *,
         paths: Iterable[str | Path],
+        *,
         allowed_operations: Iterable[ToolOperation | str] | None = None,
     ) -> None:
         # Normalize the declared scope up front. Relative scope entries follow
@@ -392,7 +392,7 @@ def format_tool_permission_result(
     decision: ToolPermissionDecision,
 ) -> str:
     """Render a stable model-facing result for denied or approval-required calls."""
-    if decision.reason is not None and decision.reason.strip() != "":
+    if decision.reason and decision.reason.strip():
         return decision.reason
 
     if decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL:
@@ -459,12 +459,14 @@ def _request_with_context(
 
     # Request fields win over context so custom tools can override framework
     # correlation deliberately, while still getting the standard defaults.
+    metadata = dict(context.metadata)
+    metadata.update(request.metadata)
     return replace(
         request,
         run_id=request.run_id or context.run_id,
         agent_name=request.agent_name or context.agent_name,
         tool_call_id=request.tool_call_id or context.tool_call_id,
-        metadata=(request.metadata if request.metadata else dict(context.metadata)),
+        metadata=metadata,
     )
 
 
@@ -542,15 +544,13 @@ def _coerce_operation(operation: ToolOperation | str) -> ToolOperation:
     return ToolOperation(operation)
 
 
-_PATH_OPERATIONS = frozenset(
-    {
-        ToolOperation.READ_FILE,
-        ToolOperation.SEARCH_FILES,
-        ToolOperation.CREATE_FILE,
-        ToolOperation.OVERWRITE_FILE,
-        ToolOperation.MODIFY_FILE,
-        ToolOperation.CREATE_DIRECTORY,
-    }
+_PATH_OPERATIONS = (
+    ToolOperation.READ_FILE,
+    ToolOperation.SEARCH_FILES,
+    ToolOperation.CREATE_FILE,
+    ToolOperation.OVERWRITE_FILE,
+    ToolOperation.MODIFY_FILE,
+    ToolOperation.CREATE_DIRECTORY,
 )
 
 _PATH_SIDE_EFFECT_OPERATIONS = (
@@ -567,15 +567,6 @@ _SIDE_EFFECT_OPERATIONS = frozenset(
     }
 )
 
-_WORKSPACE_POLICY_PATH_OPERATIONS = (
-    ToolOperation.READ_FILE,
-    ToolOperation.SEARCH_FILES,
-    ToolOperation.CREATE_FILE,
-    ToolOperation.OVERWRITE_FILE,
-    ToolOperation.MODIFY_FILE,
-    ToolOperation.CREATE_DIRECTORY,
-)
-
 
 def _workspace_policy_operations(
     *,
@@ -584,8 +575,8 @@ def _workspace_policy_operations(
     # `bash` is deliberately outside the default path-operation set. The
     # workspace helper includes it only for the `require_bash_approval` path.
     if include_execute_command:
-        return (*_WORKSPACE_POLICY_PATH_OPERATIONS, ToolOperation.EXECUTE_COMMAND)
-    return _WORKSPACE_POLICY_PATH_OPERATIONS
+        return (*_PATH_OPERATIONS, ToolOperation.EXECUTE_COMMAND)
+    return _PATH_OPERATIONS
 
 
 def _workspace_policy_approval_operations(

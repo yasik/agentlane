@@ -8,6 +8,26 @@ Parameters:
 1. `path: str`
 2. `content: str`
 
+## Permissions
+
+`write` resolves `path` through `ToolPathResolver` and may issue two checks:
+`ToolOperation.CREATE_DIRECTORY` for a missing parent directory, then
+`ToolOperation.CREATE_FILE` or `ToolOperation.OVERWRITE_FILE` for the target.
+A denied request returns:
+
+```text
+permission denied: write is not allowed for `/workspace/private.txt`
+```
+
+`SideEffectApprovalToolPermissionPolicy` and
+`workspace_tool_policy(require_approval_for_side_effects=True)` request
+approval for each required write operation before any directory or file is
+created.
+
+```text
+approval required: write requires application approval for `/workspace/notes.txt` before execution
+```
+
 Example tool result:
 
 ```text

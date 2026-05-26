@@ -26,6 +26,21 @@ newlines).
 tool's configured `cwd`. The result header and rendered match paths are
 relative to that `cwd` when possible.
 
+## Permissions
+
+`grep` resolves `path` through `ToolPathResolver` and checks
+`ToolOperation.READ_FILE` when the resolved path is an existing file, otherwise
+`ToolOperation.SEARCH_FILES`. That means missing paths use the search
+operation before the later missing-path error. A denied request returns:
+
+```text
+permission denied: grep is not allowed for `/workspace/private`
+```
+
+The bundled side-effect approval policy does not request approval for grep. A
+custom policy may still return `require_approval`, in which case the tool uses
+the configured `approval_callback=`.
+
 ## Output modes
 
 `content` (default) returns matching lines:

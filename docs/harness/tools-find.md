@@ -8,6 +8,20 @@ Parameters:
 2. `path: str | None = None`
 3. `limit: int = 1000`
 
+## Permissions
+
+`find` resolves `path` through `ToolPathResolver` and checks
+`ToolOperation.SEARCH_FILES` before directory validation or traversal. A denied
+request returns:
+
+```text
+permission denied: find is not allowed for `/workspace/private`
+```
+
+The bundled side-effect approval policy does not request approval for searches.
+A custom policy may still return `require_approval`, in which case the tool
+uses the configured `approval_callback=`.
+
 Example tool result:
 
 ```text

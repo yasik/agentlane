@@ -7,6 +7,23 @@ Parameters:
 1. `command: str`
 2. `timeout: float | None = None`
 
+## Permissions
+
+`bash` checks `ToolOperation.EXECUTE_COMMAND` before the executor starts. A
+workspace policy denies command execution unless it is explicitly included,
+and `workspace_tool_policy(require_bash_approval=True)` makes execution
+approval-required. A denied request returns:
+
+```text
+permission denied: bash is not allowed
+```
+
+An approval-required request returns:
+
+```text
+approval required: bash command requires application approval before execution
+```
+
 Commands run through `bash -lc` in the `cwd` captured when the tool is
 constructed. The result is the combined stdout/stderr output in terminal
 arrival order.

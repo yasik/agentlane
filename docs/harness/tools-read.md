@@ -8,6 +8,19 @@ Parameters:
 2. `offset: int | None = None`
 3. `limit: int | None = None`
 
+## Permissions
+
+`read` resolves `path` through `ToolPathResolver` and checks
+`ToolOperation.READ_FILE` before opening the file. A denied request returns:
+
+```text
+permission denied: read is not allowed for `/workspace/private.txt`
+```
+
+The bundled side-effect approval policy does not request approval for reads.
+A custom policy may still return `require_approval`, in which case the tool
+uses the configured `approval_callback=`.
+
 Example tool result:
 
 ```text

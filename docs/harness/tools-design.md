@@ -71,14 +71,16 @@ The current standard set is `read`, `find`, `grep`, `patch`, `write`,
 include `ls`.
 
 `base_harness_tools()` returns the standard set. By default each local tool
-captures `Path.cwd()` at construction time and remains permissive. Pass `cwd=`,
-`permissions=`, and optionally `approval_callback=` when an agent should
-operate inside a specific workspace boundary:
+captures `Path.cwd()` at construction time and remains permissive. Filesystem
+tools resolve relative paths through `ToolPathResolver`; see
+[Tool permissions](./tools-permissions.md) for path boundaries and approval
+behavior. Pass `cwd=`, `permissions=`, and optionally `approval_callback=`
+when an agent should operate inside a specific workspace boundary:
 
 ```python
 workspace_tools = base_harness_tools(
     cwd=WORKSPACE,
-    permissions=WorkspaceToolPermissionPolicy(root=WORKSPACE),
+    permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
 )
 ```
 

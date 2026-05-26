@@ -13,6 +13,11 @@ Each plan item has:
 1. `step: str`
 2. `status: "pending" | "in_progress" | "completed"`
 
+## Permissions
+
+`write_plan` updates harness shim state only. It does not read local files,
+write local files, start processes, or issue a `ToolPermissionRequest`.
+
 Each call replaces the previous plan. Partial item updates are not part of the
 current public contract. A plan must contain at least one item, each step must
 contain non-whitespace text, and at most one item may be `in_progress`.

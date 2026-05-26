@@ -3,9 +3,9 @@
 ## Path Policy
 
 Filesystem tools use `ToolPathResolver`. Relative paths resolve against the
-`cwd` captured when the tool is constructed. Absolute paths are allowed in
-the current implementation. Paths are normalized with
-`Path.resolve(strict=False)`.
+`cwd` captured when the tool is constructed. Absolute paths are accepted by
+`ToolPathResolver`; workspace and path-scope policies still enforce boundaries
+on the resolved target. Paths are normalized with `Path.resolve(strict=False)`.
 
 AgentLane is a framework, so first-party helpers stay permissive unless an
 application passes an explicit policy. With no `permissions=` argument,
@@ -20,9 +20,14 @@ Applications opt into permissioning at tool construction time. The bundled
 policies are small and composable:
 
 1. `AllowAllToolPermissionPolicy` allows every request. This is the implicit
-   default when no `permissions=` value is passed.
+   default when no `permissions=` value is passed; most callers should use
+   `permissions=None` for this behavior and reserve the class for explicit
+   composition or tests.
 2. `WorkspaceToolPermissionPolicy` is a single-root path boundary. It allows
-   path operations only when the resolved target stays inside `root`.
+   path operations only when the resolved target stays inside `root`. It
+   denies `ToolOperation.EXECUTE_COMMAND` unless that operation is explicitly
+   included in `allowed_operations`, because a path boundary cannot prove shell
+   side effects.
 3. `PathScopeToolPermissionPolicy` is an explicit set of approved files or
    directories. Use it when a coding assistant works from one `cwd` but the
    host has approved files or directories outside that workspace.
@@ -48,7 +53,7 @@ For a path-only workspace boundary, pass `WorkspaceToolPermissionPolicy`:
 ```python
 tools = base_harness_tools(
     cwd=WORKSPACE,
-    permissions=WorkspaceToolPermissionPolicy(root=WORKSPACE),
+    permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
 )
 ```
 
@@ -62,7 +67,7 @@ For workspace plus approved outside files or directories, use
 tools = base_harness_tools(
     cwd=WORKSPACE,
     permissions=PathScopeToolPermissionPolicy(
-        paths=(
+        (
             WORKSPACE,
             EXTERNAL_REVIEW_FILE,
             EXTERNAL_REFERENCE_DIR,
@@ -76,7 +81,12 @@ that exact file. Non-existing scopes allow only that exact future path, which
 keeps a file grant from silently becoming a directory grant. Empty `paths=()`
 denies all path operations. Prefer absolute paths for policy scopes; relative
 scope entries resolve when the policy is constructed, the same as
-`WorkspaceToolPermissionPolicy(root=...)`.
+`WorkspaceToolPermissionPolicy(...)`.
+
+Both path policies resolve symlinks and check the nearest existing parent for
+new paths. This is a framework permission boundary, not a TOCTOU-safe operating
+system sandbox; hosts that need hard filesystem isolation should provide a
+sandboxed executor, container, or remote worker.
 
 For the common application policy "stay inside this workspace, apply a tool
 grant allowlist, and require app approval before side effects", use
@@ -133,7 +143,7 @@ tools = base_harness_tools(
     permissions=AllOfToolPermissionPolicy(
         (
             PathScopeToolPermissionPolicy(
-                paths=(WORKSPACE, EXTERNAL_REVIEW_FILE),
+                (WORKSPACE, EXTERNAL_REVIEW_FILE),
             ),
             ToolPermissionGrantPolicy(grants),
             SideEffectApprovalToolPermissionPolicy(),
@@ -144,7 +154,7 @@ tools = base_harness_tools(
 ```
 
 That composition still denies `bash` by default because path scopes are not
-process sandboxes. To admit command execution into the policy pipeline, pass an
+process sandboxes. To include command execution in this composition, pass an
 explicit `allowed_operations` set that includes `ToolOperation.EXECUTE_COMMAND`
 and any path operations the app also wants to allow.
 
@@ -162,7 +172,15 @@ The exported permission primitives are framework extension points:
    side-effecting operations.
 8. `evaluate_tool_permission()` and `format_tool_permission_result()` are
    reusable helpers for custom tools that want the same deny and
-   approval-required result contract.
+   approval-required result contract. `evaluate_tool_permission()` returns
+   `None` when execution may proceed, or a model-facing block result string
+   when execution must stop.
+
+`parse_tool_permission_grants()` accepts comma-separated whole-tool entries
+such as `read` and operation entries such as `write:create_file`. It returns
+`(grants, invalid_entries)`, preserves duplicates, and does not let later
+entries override earlier ones. Callers should reject or report
+`invalid_entries` before constructing a policy.
 
 Custom policies only need a `check(request)` method:
 
@@ -174,7 +192,7 @@ class DenyBash:
         return ToolPermissionDecision.allow()
 ```
 
-`WorkspaceToolPermissionPolicy(root=...)` resolves existing paths through
+`WorkspaceToolPermissionPolicy(...)` resolves existing paths through
 symlinks. New paths are checked through their nearest existing parent, so
 writing `nested/file.txt` still requires the target parent chain to stay inside
 the workspace. Absolute paths are still accepted, but a workspace policy denies
@@ -182,13 +200,26 @@ absolute targets outside the root.
 
 If an app needs a different scope shape, use one of these explicit choices:
 
-1. Use a broader `WorkspaceToolPermissionPolicy(root=...)` while keeping
+1. Use a broader `WorkspaceToolPermissionPolicy(...)` while keeping
    `cwd=WORKSPACE` narrow for relative path resolution.
-2. Use `PathScopeToolPermissionPolicy(paths=...)` for workspace plus approved
+2. Use `PathScopeToolPermissionPolicy(...)` for workspace plus approved
    outside files or directories.
 3. Pass no policy for a fully trusted local tool set.
 4. Implement `ToolPermissionPolicy.check(...)` for app-specific rules such as
    per-user grants, read-only subtrees, or remote policy decisions.
+
+`ToolPermissionRequest` has three groups of fields. Tool-action fields
+(`tool_name`, `operation`, `cwd`, `path`, `command`) are built by the tool
+after argument validation and path resolution. Framework correlation
+(`run_id`, `agent_name`, `tool_call_id`) comes from `ToolExecutionContext`.
+`metadata` is for app-defined correlation and is merged with context metadata,
+with request metadata winning on key conflicts. `skill_name` and `reason` are
+optional caller hints.
+
+At the execution boundary, a `Tool` handler receives one
+`ToolExecutionContext`. `ToolExecutor.execute(...)` accepts a mapping keyed by
+tool-call id because one executor invocation may run several tool calls in
+parallel and each call needs its own correlation.
 
 Denied calls return stable tool-result text before side effects:
 
@@ -236,10 +267,16 @@ Operations are intentionally small and tool-oriented:
 | --- | --- |
 | `read` | `read_file` |
 | `find` | `search_files` |
-| `grep` | `read_file` for file paths, `search_files` for directories |
+| `grep` | `read_file` for existing file paths, `search_files` for directories and missing paths |
 | `write` | `create_file`, `overwrite_file`, `create_directory` |
 | `patch` | `modify_file` |
 | `bash` | `execute_command` |
+
+`write` may issue two permission requests for one tool call. If the target's
+parent directory does not exist, it checks `create_directory` for that parent
+first. It then checks `create_file` for a missing target or `overwrite_file`
+for an existing target. Policies that audit or log requests should expect this
+one-or-two request shape.
 
 The shared policy can require approval for local `bash` before the process
 starts, but the default local executor is not filesystem-confined after

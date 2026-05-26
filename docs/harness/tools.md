@@ -59,7 +59,7 @@ shims = (
     HarnessToolsShim(
         base_harness_tools(
             cwd=WORKSPACE,
-            permissions=WorkspaceToolPermissionPolicy(root=WORKSPACE),
+            permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
         ),
     ),
 )
