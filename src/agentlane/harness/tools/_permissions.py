@@ -397,7 +397,11 @@ def format_tool_permission_result(
 def parse_tool_permission_grants(
     value: str | None,
 ) -> tuple[tuple[ToolPermissionGrant, ...], tuple[str, ...]]:
-    """Parse comma-separated whole-tool and operation-level permission grants."""
+    """Parse comma-separated whole-tool and operation-level permission grants.
+
+    The parser preserves valid duplicates and does not apply override
+    semantics. Callers that want a unique set should deduplicate explicitly.
+    """
     if value is None or value.strip() == "":
         return (), ()
 

@@ -22,6 +22,10 @@ The bundled side-effect approval policy does not request approval for searches.
 A custom policy may still return `require_approval`, in which case the tool
 uses the configured `approval_callback=`.
 
+```text
+approval required: find requires application approval for `/workspace` before execution
+```
+
 Example tool result:
 
 ```text

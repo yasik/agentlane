@@ -25,6 +25,8 @@ permission denied: patch is not allowed for `/workspace/private.txt`
 `workspace_tool_policy(require_approval_for_side_effects=True)` request
 approval for patch operations before the file is modified.
 
+An approval-required request returns:
+
 ```text
 approval required: patch requires application approval for `/workspace/notes.txt` before execution
 ```

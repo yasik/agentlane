@@ -21,6 +21,10 @@ The bundled side-effect approval policy does not request approval for reads.
 A custom policy may still return `require_approval`, in which case the tool
 uses the configured `approval_callback=`.
 
+```text
+approval required: read requires application approval for `/workspace/notes.txt` before execution
+```
+
 Example tool result:
 
 ```text

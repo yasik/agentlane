@@ -468,6 +468,20 @@ def test_parse_tool_permission_grants_reports_unknown_entries() -> None:
     assert invalid_entries == ("write:read_file", "unknown", "bash:missing")
 
 
+def test_parse_tool_permission_grants_preserves_duplicate_entries() -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "read, read, write:create_file, write:create_file"
+    )
+
+    assert invalid_entries == ()
+    assert [(grant.tool_name, grant.operation) for grant in grants] == [
+        ("read", None),
+        ("read", None),
+        ("write", ToolOperation.CREATE_FILE),
+        ("write", ToolOperation.CREATE_FILE),
+    ]
+
+
 def test_tool_permission_grant_policy_checks_operation_level_grants(
     tmp_path: Path,
 ) -> None:

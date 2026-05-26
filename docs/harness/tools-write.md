@@ -24,6 +24,8 @@ permission denied: write is not allowed for `/workspace/private.txt`
 approval for each required write operation before any directory or file is
 created.
 
+An approval-required request returns:
+
 ```text
 approval required: write requires application approval for `/workspace/notes.txt` before execution
 ```

@@ -57,7 +57,9 @@ tools = base_harness_tools(
 ```
 
 This policy only answers "does the resolved path stay inside this root?" It is
-not an allowlist, approval workflow, or process sandbox.
+not an allowlist, approval workflow, or process sandbox. Used by itself, it
+denies `ToolOperation.EXECUTE_COMMAND`; include that operation explicitly only
+when a separate policy or executor will handle command execution.
 
 For workspace plus approved outside files or directories, use
 `PathScopeToolPermissionPolicy` and include every approved scope explicitly:

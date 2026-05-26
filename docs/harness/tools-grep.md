@@ -41,6 +41,10 @@ The bundled side-effect approval policy does not request approval for grep. A
 custom policy may still return `require_approval`, in which case the tool uses
 the configured `approval_callback=`.
 
+```text
+approval required: grep requires application approval for `/workspace` before execution
+```
+
 ## Output modes
 
 `content` (default) returns matching lines:
