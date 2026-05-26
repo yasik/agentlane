@@ -1,4 +1,4 @@
-"""Permission primitives for first-party harness tools."""
+"""Composable permission primitives for first-party harness tools."""
 
 import inspect
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -23,7 +23,11 @@ class ToolOperation(StrEnum):
 
 
 class ToolPermissionOutcome(StrEnum):
-    """Decision outcomes returned by tool permission policies."""
+    """Decision outcomes returned by tool permission policies.
+
+    `REQUIRE_APPROVAL` means "ask the host application"; the framework only
+    provides the callback boundary and never implements an approval UX itself.
+    """
 
     ALLOW = "allow"
     DENY = "deny"
@@ -37,7 +41,13 @@ def _empty_metadata() -> dict[str, object]:
 
 @dataclass(frozen=True, slots=True)
 class ToolPermissionRequest:
-    """Context for one permission check before a local tool operation."""
+    """Context for one permission check before a local tool operation.
+
+    First-party tools build this after argument validation and path resolution,
+    but before file opens, filesystem writes, process startup, or other side
+    effects. The request is intentionally plain data so host applications can
+    log it, show it in approval UI, or route it through custom policies.
+    """
 
     tool_name: str
     operation: ToolOperation
@@ -54,7 +64,11 @@ class ToolPermissionRequest:
 
 @dataclass(frozen=True, slots=True)
 class ToolPermissionDecision:
-    """One allow, deny, or approval-required decision."""
+    """One allow, deny, or approval-required decision.
+
+    `reason` is model-facing when provided. Policies should only set it when
+    the text is sanitized and useful for the model's next step.
+    """
 
     outcome: ToolPermissionOutcome
     reason: str | None = None
@@ -110,7 +124,11 @@ class AllowAllToolPermissionPolicy:
 
 @dataclass(frozen=True, slots=True)
 class ToolPermissionGrant:
-    """One whole-tool or operation-specific grant."""
+    """One whole-tool or operation-specific capability grant.
+
+    Grants are allowlist entries, not sandboxes. Compose them with a workspace
+    or host policy when the request also needs path or approval checks.
+    """
 
     tool_name: str
     operation: ToolOperation | None = None
@@ -124,7 +142,7 @@ class ToolPermissionGrant:
 
 
 class ToolPermissionGrantPolicy:
-    """Allow requests matching one of the configured operation grants."""
+    """Allow requests matching one of the configured capability grants."""
 
     def __init__(self, grants: Iterable[ToolPermissionGrant]) -> None:
         self._grants = tuple(grants)
@@ -147,6 +165,8 @@ class AllOfToolPermissionPolicy:
         for policy in self._policies:
             decision = await _resolve_permission_result(policy.check(request))
 
+            # Denial is terminal. Approval is remembered, but later policies
+            # can still deny, so approval never widens a stricter policy.
             if decision.outcome == ToolPermissionOutcome.DENY:
                 return decision
 
@@ -168,45 +188,73 @@ def workspace_tool_policy(
     root: str | Path,
     grants: Iterable[ToolPermissionGrant] | None = None,
     require_approval_for_side_effects: bool = False,
-    allow_bash_gate: bool = False,
+    require_bash_approval: bool = False,
 ) -> AllOfToolPermissionPolicy:
     """Build the common workspace policy used by application harnesses.
 
-    The returned policy composes the public low-level primitives:
+    The helper composes the public low-level primitives without hiding them:
+    workspace containment, optional tool or operation grants, and optional
+    approval for side effects. `grants=None` means no grant allowlist is added;
+    pass an empty iterable when every tool should be denied by the grant layer.
 
-    1. workspace containment for path operations,
-    2. optional tool or operation-level grants,
-    3. optional approval gating for side effects, and
-    4. optional command-execution admission so `bash` can reach the approval
-       gate.
+    `require_bash_approval=True` is the only way this helper admits `bash`
+    command execution, and it requires approval before the process can start.
+    It is not process sandboxing.
     """
     policies: list[ToolPermissionPolicy] = [
         WorkspaceToolPermissionPolicy(
             root=root,
             allowed_operations=_workspace_policy_operations(
-                allow_bash_gate=allow_bash_gate,
+                include_execute_command=require_bash_approval,
             ),
         )
     ]
     if grants is not None:
         policies.append(ToolPermissionGrantPolicy(grants))
-    if require_approval_for_side_effects:
-        policies.append(_SideEffectApprovalPolicy())
+    approval_operations = _workspace_policy_approval_operations(
+        require_approval_for_side_effects=require_approval_for_side_effects,
+        require_bash_approval=require_bash_approval,
+    )
+    if approval_operations:
+        policies.append(SideEffectApprovalToolPermissionPolicy(approval_operations))
 
     return AllOfToolPermissionPolicy(policies)
 
 
-class _SideEffectApprovalPolicy:
-    """Require application approval before side-effecting operations."""
+class SideEffectApprovalToolPermissionPolicy:
+    """Ask the host application before side-effecting operations.
+
+    By default this covers all first-party side effects. Pass `operations` for
+    a narrower approval policy. The policy returns `REQUIRE_APPROVAL`;
+    `evaluate_tool_permission()` is the boundary that calls the optional host
+    `approval_callback`.
+    """
+
+    operations: frozenset[ToolOperation]
+
+    def __init__(
+        self,
+        operations: Iterable[ToolOperation | str] | None = None,
+    ) -> None:
+        self.operations = (
+            _SIDE_EFFECT_OPERATIONS
+            if operations is None
+            else frozenset(_coerce_operation(operation) for operation in operations)
+        )
 
     def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
-        if request.operation in _SIDE_EFFECT_OPERATIONS:
+        if request.operation in self.operations:
             return ToolPermissionDecision.require_approval()
         return ToolPermissionDecision.allow()
 
 
 class WorkspaceToolPermissionPolicy:
-    """Allow operations only when path targets stay inside a workspace root."""
+    """Path boundary for local filesystem tools.
+
+    Path operations must resolve inside `root`. Non-path operations, currently
+    command execution, are denied unless `allowed_operations` explicitly opts
+    them in because this policy cannot prove shell side effects.
+    """
 
     root: Path
     allowed_operations: frozenset[ToolOperation] | None
@@ -217,6 +265,8 @@ class WorkspaceToolPermissionPolicy:
         root: str | Path,
         allowed_operations: Iterable[ToolOperation | str] | None = None,
     ) -> None:
+        # Normalize once at construction so every check compares canonical
+        # workspace and operation values without hidden post-init mutation.
         self.root = Path(root).expanduser().resolve(strict=False)
         self.allowed_operations = (
             None
@@ -233,8 +283,9 @@ class WorkspaceToolPermissionPolicy:
         ):
             return ToolPermissionDecision.deny()
         if request.operation not in _PATH_OPERATIONS:
-            # Non-path ops (currently only EXECUTE_COMMAND) require an
-            # explicit grant via `allowed_operations`.
+            # A workspace root is a path boundary, not a command sandbox.
+            # Apps must opt in before command execution can reach later
+            # policies such as grants or approval.
             if self.allowed_operations is None:
                 return ToolPermissionDecision.deny()
 
@@ -248,6 +299,61 @@ class WorkspaceToolPermissionPolicy:
         return ToolPermissionDecision.allow()
 
 
+class PathScopeToolPermissionPolicy:
+    """Path boundary for explicitly approved files or directories.
+
+    Use this when an application works from one `cwd` but has approved extra
+    files or directories outside that workspace. Existing directories allow
+    descendants, existing files allow only that exact file, and non-existing
+    paths allow only that exact future target. Empty `paths` denies path
+    operations.
+    """
+
+    paths: tuple[Path, ...]
+    allowed_operations: frozenset[ToolOperation] | None
+
+    def __init__(
+        self,
+        *,
+        paths: Iterable[str | Path],
+        allowed_operations: Iterable[ToolOperation | str] | None = None,
+    ) -> None:
+        # Normalize the declared scope up front. Relative scope entries follow
+        # pathlib's normal process-cwd behavior, matching the existing
+        # workspace-root policy constructor.
+        self.paths = tuple(_real_path(Path(path)) for path in paths)
+        self.allowed_operations = (
+            None
+            if allowed_operations is None
+            else frozenset(
+                _coerce_operation(operation) for operation in allowed_operations
+            )
+        )
+
+    def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
+        if (
+            self.allowed_operations is not None
+            and request.operation not in self.allowed_operations
+        ):
+            return ToolPermissionDecision.deny()
+
+        if request.operation not in _PATH_OPERATIONS:
+            # Path scopes do not sandbox shell commands. Apps must admit
+            # command execution explicitly before grants or approval can
+            # decide whether the process may start.
+            if self.allowed_operations is None:
+                return ToolPermissionDecision.deny()
+
+            return ToolPermissionDecision.allow()
+
+        if request.path is None or not any(
+            _is_path_inside_scope(request.path, scope=scope) for scope in self.paths
+        ):
+            return ToolPermissionDecision.deny()
+
+        return ToolPermissionDecision.allow()
+
+
 async def evaluate_tool_permission(
     request: ToolPermissionRequest,
     *,
@@ -255,11 +361,12 @@ async def evaluate_tool_permission(
     approval_callback: ToolApprovalCallback | None = None,
     context: ToolExecutionContext | None = None,
 ) -> str | None:
-    """Return a model-facing denial result, or None when execution may proceed."""
+    """Return a model-facing block result, or None when execution may proceed."""
     active_request = _request_with_context(
         request,
         context=context,
     )
+
     active_policy = policy or AllowAllToolPermissionPolicy()
     decision = await _resolve_permission_result(active_policy.check(active_request))
     if (
@@ -272,7 +379,11 @@ async def evaluate_tool_permission(
 
     if decision.allowed:
         return None
-    return format_tool_permission_result(request=active_request, decision=decision)
+
+    return format_tool_permission_result(
+        request=active_request,
+        decision=decision,
+    )
 
 
 def format_tool_permission_result(
@@ -345,6 +456,9 @@ def _request_with_context(
     """Return `request` with explicit tool execution context applied."""
     if context is None:
         return request
+
+    # Request fields win over context so custom tools can override framework
+    # correlation deliberately, while still getting the standard defaults.
     return replace(
         request,
         run_id=request.run_id or context.run_id,
@@ -391,9 +505,21 @@ def _is_path_inside_root(path: Path, *, root: Path) -> bool:
     return _real_path_for_request(path).is_relative_to(_real_path(root))
 
 
+def _is_path_inside_scope(path: Path, *, scope: Path) -> bool:
+    real_path = _real_path_for_request(path)
+    if scope.exists() and not scope.is_dir():
+        return real_path == scope
+    if scope.exists():
+        return real_path.is_relative_to(scope)
+
+    return real_path == scope
+
+
 def _real_path_for_request(path: Path) -> Path:
     if path.exists():
         return _real_path(path)
+    # For new files, resolve the nearest existing parent so a symlinked parent
+    # cannot move the eventual target outside the configured workspace.
     nearest_parent = _nearest_existing_parent(path)
     suffix = path.relative_to(nearest_parent)
     return _real_path(nearest_parent) / suffix
@@ -427,12 +553,16 @@ _PATH_OPERATIONS = frozenset(
     }
 )
 
+_PATH_SIDE_EFFECT_OPERATIONS = (
+    ToolOperation.CREATE_FILE,
+    ToolOperation.OVERWRITE_FILE,
+    ToolOperation.MODIFY_FILE,
+    ToolOperation.CREATE_DIRECTORY,
+)
+
 _SIDE_EFFECT_OPERATIONS = frozenset(
     {
-        ToolOperation.CREATE_FILE,
-        ToolOperation.OVERWRITE_FILE,
-        ToolOperation.MODIFY_FILE,
-        ToolOperation.CREATE_DIRECTORY,
+        *_PATH_SIDE_EFFECT_OPERATIONS,
         ToolOperation.EXECUTE_COMMAND,
     }
 )
@@ -449,11 +579,26 @@ _WORKSPACE_POLICY_PATH_OPERATIONS = (
 
 def _workspace_policy_operations(
     *,
-    allow_bash_gate: bool,
+    include_execute_command: bool,
 ) -> tuple[ToolOperation, ...]:
-    if allow_bash_gate:
+    # `bash` is deliberately outside the default path-operation set. The
+    # workspace helper includes it only for the `require_bash_approval` path.
+    if include_execute_command:
         return (*_WORKSPACE_POLICY_PATH_OPERATIONS, ToolOperation.EXECUTE_COMMAND)
     return _WORKSPACE_POLICY_PATH_OPERATIONS
+
+
+def _workspace_policy_approval_operations(
+    *,
+    require_approval_for_side_effects: bool,
+    require_bash_approval: bool,
+) -> tuple[ToolOperation, ...]:
+    operations: list[ToolOperation] = []
+    if require_approval_for_side_effects:
+        operations.extend(_PATH_SIDE_EFFECT_OPERATIONS)
+    if require_bash_approval:
+        operations.append(ToolOperation.EXECUTE_COMMAND)
+    return tuple(operations)
 
 
 _TOOL_OPERATIONS_BY_TOOL: dict[str, frozenset[ToolOperation]] = {

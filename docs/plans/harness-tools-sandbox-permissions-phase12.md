@@ -59,8 +59,8 @@ Tool-specific behavior today:
    practical.
 6. `bash` executes arbitrary non-interactive `bash -lc` commands in the
    captured `cwd` and returns combined stdout/stderr. The default executor
-   allows all commands and does not sandbox the process; gating is delegated
-   to the shared permission policy.
+   allows all commands and does not sandbox the process; command permission
+   checks are delegated to the shared permission policy.
 
 The important gap is that path tools have structured operations but no policy
 check, while `bash` has a policy check but cannot infer all filesystem effects
@@ -104,7 +104,7 @@ Proposed internal module:
 src/agentlane/harness/tools/_permissions.py
 ```
 
-Public exports should be limited to stable developer-facing pieces that host
+Public exports should include stable developer-facing pieces that host
 applications need to configure policies:
 
 1. `ToolOperation`
@@ -113,6 +113,15 @@ applications need to configure policies:
 4. `ToolPermissionPolicy`
 5. `AllowAllToolPermissionPolicy`
 6. `WorkspaceToolPermissionPolicy`
+7. `PathScopeToolPermissionPolicy`
+8. `ToolPermissionGrant`
+9. `ToolPermissionGrantPolicy`
+10. `SideEffectApprovalToolPermissionPolicy`
+11. `AllOfToolPermissionPolicy`
+12. `workspace_tool_policy`
+13. `parse_tool_permission_grants`
+14. `evaluate_tool_permission`
+15. `format_tool_permission_result`
 
 The policy boundary should be evaluated inside each tool helper before the
 tool performs filesystem or process side effects. The runner and
@@ -133,11 +142,16 @@ class ToolPermissionRequest:
     command: str | None = None
     skill_name: str | None = None
     reason: str | None = None
+    run_id: str | None = None
+    agent_name: str | None = None
+    tool_call_id: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
 ```
 
 `path` is the resolved filesystem target or search root when the operation is
 path-based. `command` is set only for `bash`. `skill_name` is optional context
-for future skill-driven calls.
+for future skill-driven calls. The explicit correlation fields are framework
+owned; `metadata` is reserved for host-application correlation.
 
 ### Operations
 
@@ -209,7 +223,7 @@ Recommended first implementation:
 6. `find` and directory `grep` are allowed when the search root is inside the
    sandbox root. Phase 12 should not implement fine-grained per-entry deny
    lists inside an allowed search root.
-7. `bash` is permission-gated but not path-sandboxed by the default local
+7. `bash` is permission-checked but not path-sandboxed by the default local
    executor. The workspace policy denies `EXECUTE_COMMAND` unless that
    operation is explicitly granted, because a path sandbox cannot prove shell
    side effects. A host that needs real process confinement must provide a
@@ -253,13 +267,13 @@ workspace_tools = base_harness_tools(
 ```
 
 The legacy `bash_tool(policy=...)` hook has been removed during follow-up
-cleanup. Command-level gating now flows through the shared `permissions=`
-policy.
+cleanup. Command-level permission checks now flow through the shared
+`permissions=` policy.
 
 `bash` should remain part of `base_harness_tools()`. AgentLane is the framework,
 not the final harness application, so it should expose the standard tool set
-and let applications decide whether to pass a policy that denies or approval
-gates command execution.
+and let applications decide whether to pass a policy that denies command
+execution or requires approval before it starts.
 
 ## Approval Callback
 
@@ -270,7 +284,7 @@ Add an optional callback contract that host applications can provide:
 
 ```python
 type ToolApprovalCallback = Callable[
-    [ToolPermissionRequest],
+    [ToolPermissionRequest, ToolPermissionDecision],
     ToolPermissionDecision | Awaitable[ToolPermissionDecision],
 ]
 ```
@@ -280,10 +294,11 @@ When a policy decides an operation requires approval:
 1. if no approval callback is configured, the tool returns the stable
    `approval required: ...` result and does not execute,
 2. if a callback is configured, the framework calls it with the same
-   `ToolPermissionRequest`,
+   `ToolPermissionRequest` and the approval-required decision,
 3. the callback can return allow, deny, or require-approval,
-4. the core framework provides only the seam and result handling; CLI, desktop,
-   web, or service-specific approval UX belongs in the host application.
+4. the core framework provides only the callback boundary and result handling;
+   CLI, desktop, web, or service-specific approval UX belongs in the host
+   application.
 
 This gives future harness apps a clean integration point without baking an
 application workflow into the library.
@@ -351,7 +366,7 @@ command may start; the executor decides where and how it runs.
 
 The docs must state this plainly:
 
-1. local `bash` can be denied or approval-gated before start,
+1. local `bash` can be denied or require approval before start,
 2. local `bash` is not filesystem-confined after start,
 3. real process sandboxing requires a host-provided executor, container, or
    remote worker.
@@ -464,9 +479,9 @@ Implemented for review on 2026-05-15.
 2. Threaded `permissions=` and `approval_callback=` through `read`, `find`,
    `grep`, `write`, `patch`, `bash`, and `base_harness_tools()`.
 3. Preserved permissive defaults when no policy is supplied.
-4. Kept `bash` in the base tools set and documented that command gating is not
-   process confinement. The workspace policy denies `execute_command` unless it
-   is explicitly granted.
+4. Kept `bash` in the base tools set and documented that command permission is
+   not process confinement. The workspace policy denies `execute_command`
+   unless it is explicitly granted.
 5. Updated skills parsing and activation so `tools` replaces the visible tool
    pool, `disallowedTools` subtracts before model exposure, and deny wins when
    both fields mention the same tool.
@@ -499,8 +514,41 @@ Tracked follow-up:
 - [x] Add `workspace_tool_policy(...)` as a typed convenience constructor.
 - [x] Keep `WorkspaceToolPermissionPolicy`, `ToolPermissionGrantPolicy`, and
       `AllOfToolPermissionPolicy` public for custom compositions.
-- [x] Require `allow_bash_gate=True` before `bash:execute_command` can pass the
-      workspace policy.
+- [x] Require `require_bash_approval=True` before `bash:execute_command` can
+      pass the workspace policy, and make that path require approval before the
+      process starts.
 - [x] Add tests covering read allow, write approval, bash approval, outside-path
-      denial, and missing bash-gate denial.
+      denial, and missing bash approval denial.
 - [x] Document the helper in `docs/harness/tools.md`.
+
+## Follow-Up: Permission Clarity Pass
+
+Review feedback after the convenience helper asked that the permission system
+be unambiguous, straightforward to use, and documented with high-quality
+inline comments.
+
+Tracked follow-up:
+
+- [x] Clarify permission code comments around approval, grant allowlists,
+      workspace path checks, explicit correlation, and `bash` admission.
+- [x] Document that `grants=None` means no grant allowlist and `grants=()`
+      means an empty allowlist.
+- [x] Add regression tests for omitted grants versus an empty grant list.
+- [x] Update public docs so common workspace policy setup is a direct recipe
+      and low-level primitives remain clear extension points.
+
+## Follow-Up: Approved External Path Scopes
+
+Review feedback after the clarity pass identified a common coding-assistant
+case: the app may run from a workspace `cwd`, but the user may approve
+specific files or directories outside that workspace for review.
+
+Tracked follow-up:
+
+- [x] Keep `WorkspaceToolPermissionPolicy` as a hard single-root boundary.
+- [x] Add `PathScopeToolPermissionPolicy` for explicit files or directories,
+      including approved paths outside the workspace.
+- [x] Make the generic side-effect approval policy public so apps can compose
+      path scopes, grants, and approval directly.
+- [x] Document alternative paths: broader root, path scopes, no policy for
+      trusted tools, or custom policy implementation.

@@ -81,30 +81,44 @@ Use this page when adding or changing first-party tools, especially tools under
   resolution, before filesystem writes, file opens, process startup, or other
   side effects. Also evaluate permissions before existence or type checks that
   would reveal information about paths outside the allowed boundary.
+- Keep the framework default permissive. First-party helpers should preserve
+  trusted local behavior until the application passes `permissions=...`.
 - Policy composition must be conservative. For `AllOfToolPermissionPolicy`,
   deny wins over approval, approval wins over allow, and allow is returned only
   when every nested policy allows the request.
 - If a common application policy shape becomes verbose, add a typed convenience
   constructor that composes the public primitives. Do not replace the low-level
   policies or hide extension points behind an app-specific default.
+- Use `workspace_tool_policy(...)` for the standard workspace-app shape:
+  path containment, optional grants, optional approval for side effects, and
+  explicit command approval through `require_bash_approval=True`. Do not name
+  command-execution options as if they allow execution by themselves.
+- Keep single-root and multi-scope path policies separate. Use
+  `WorkspaceToolPermissionPolicy` for a hard workspace boundary, and
+  `PathScopeToolPermissionPolicy` when an app has explicitly approved files or
+  directories outside the current workspace.
+- Document subtle constructor semantics where they affect safety. For example,
+  `grants=None` should mean no grant allowlist, while `grants=()` should mean
+  an empty allowlist that denies every grant-checked request.
 - Denied and approval-required decisions are normal model-facing tool results,
   not exceptions. Keep the wording stable, for example:
   ```text
   permission denied: read is not allowed for `/path/to/file`
   approval required: bash command requires application approval before execution
   ```
-- `require_approval` is a framework seam. Core tools may call an optional
-  approval callback supplied by the host application with both the
+- `require_approval` is a framework callback boundary. Core tools may call an
+  optional approval callback supplied by the host application with both the
   `ToolPermissionRequest` and the approval-required `ToolPermissionDecision`,
   but the harness library should not implement CLI, desktop, web, or
-  service-specific approval UX.
+  service-specific approval UX. Use `SideEffectApprovalToolPermissionPolicy`
+  when a custom composition needs the standard side-effect approval policy.
 - Framework correlation flows through `ToolExecutionContext`, which
   `ToolExecutor` passes explicitly to tool handlers. First-party permission
   checks copy `run_id`, `agent_name`, and `tool_call_id` from that context onto
   `ToolPermissionRequest`; use `metadata` only for host-application
   correlation data. Do not use ambient context or render correlation metadata
   in model-facing text by default.
-- Be precise about `bash`: command execution can be denied or approval-gated
+- Be precise about `bash`: command execution can be denied or require approval
   before startup, but the default local executor is not filesystem-confined
   after startup. Real process isolation belongs in a host-provided executor,
   container, remote worker, or equivalent sandbox.

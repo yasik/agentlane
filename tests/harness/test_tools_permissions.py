@@ -5,6 +5,8 @@ import pytest
 
 from agentlane.harness.tools import (
     AllOfToolPermissionPolicy,
+    PathScopeToolPermissionPolicy,
+    SideEffectApprovalToolPermissionPolicy,
     ToolOperation,
     ToolPermissionDecision,
     ToolPermissionGrantPolicy,
@@ -218,6 +220,190 @@ def test_workspace_permission_policy_allows_command_with_explicit_grant(
     assert decision.outcome == ToolPermissionOutcome.ALLOW
 
 
+def test_path_scope_permission_policy_allows_workspace_and_outside_file(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside_file = tmp_path / "brief.md"
+    workspace.mkdir()
+    outside_file.write_text("review me", encoding="utf-8")
+    policy = PathScopeToolPermissionPolicy(paths=(workspace, outside_file))
+
+    workspace_decision = policy.check(
+        _request(
+            cwd=workspace,
+            path=workspace / "notes.txt",
+        )
+    )
+    outside_decision = policy.check(
+        _request(
+            cwd=workspace,
+            path=outside_file,
+        )
+    )
+
+    assert workspace_decision.outcome == ToolPermissionOutcome.ALLOW
+    assert outside_decision.outcome == ToolPermissionOutcome.ALLOW
+
+
+def test_path_scope_permission_policy_denies_unapproved_sibling_file(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    approved_file = tmp_path / "approved.md"
+    sibling_file = tmp_path / "private.md"
+    workspace.mkdir()
+    approved_file.write_text("approved", encoding="utf-8")
+    sibling_file.write_text("private", encoding="utf-8")
+    policy = PathScopeToolPermissionPolicy(paths=(workspace, approved_file))
+
+    decision = policy.check(
+        _request(
+            cwd=workspace,
+            path=sibling_file,
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_path_scope_permission_policy_allows_outside_directory_descendants(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside_dir = tmp_path / "approved"
+    workspace.mkdir()
+    outside_dir.mkdir()
+    nested = outside_dir / "nested" / "brief.md"
+    policy = PathScopeToolPermissionPolicy(paths=(workspace, outside_dir))
+
+    decision = policy.check(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=workspace,
+            path=nested,
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.ALLOW
+
+
+def test_path_scope_permission_policy_limits_existing_file_to_exact_path(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    outside_file = tmp_path / "approved.md"
+    workspace.mkdir()
+    outside_file.write_text("approved", encoding="utf-8")
+    policy = PathScopeToolPermissionPolicy(paths=(workspace, outside_file))
+
+    decision = policy.check(
+        _request(
+            cwd=workspace,
+            path=outside_file / "nested.md",
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_path_scope_permission_policy_allows_exact_non_existing_path(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    future_file = tmp_path / "approved.md"
+    workspace.mkdir()
+    policy = PathScopeToolPermissionPolicy(paths=(workspace, future_file))
+
+    exact_decision = policy.check(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=workspace,
+            path=future_file,
+        )
+    )
+    child_decision = policy.check(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=workspace,
+            path=future_file / "nested.md",
+        )
+    )
+
+    assert exact_decision.outcome == ToolPermissionOutcome.ALLOW
+    assert child_decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_path_scope_permission_policy_empty_paths_denies_path_operations(
+    tmp_path: Path,
+) -> None:
+    policy = PathScopeToolPermissionPolicy(paths=())
+
+    decision = policy.check(
+        _request(
+            cwd=tmp_path,
+            path=tmp_path / "notes.txt",
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_path_scope_permission_policy_can_restrict_operations(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = PathScopeToolPermissionPolicy(
+        paths=(workspace,),
+        allowed_operations=(ToolOperation.READ_FILE,),
+    )
+
+    decision = policy.check(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=workspace,
+            path=workspace / "notes.txt",
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_path_scope_permission_policy_requires_explicit_command_grant(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    denied_policy = PathScopeToolPermissionPolicy(paths=(workspace,))
+    allowed_policy = PathScopeToolPermissionPolicy(
+        paths=(workspace,),
+        allowed_operations=(ToolOperation.EXECUTE_COMMAND,),
+    )
+
+    denied_decision = denied_policy.check(
+        _request(
+            tool_name="bash",
+            operation=ToolOperation.EXECUTE_COMMAND,
+            cwd=workspace,
+        )
+    )
+    allowed_decision = allowed_policy.check(
+        _request(
+            tool_name="bash",
+            operation=ToolOperation.EXECUTE_COMMAND,
+            cwd=workspace,
+        )
+    )
+
+    assert denied_decision.outcome == ToolPermissionOutcome.DENY
+    assert allowed_decision.outcome == ToolPermissionOutcome.ALLOW
+
+
 def test_parse_tool_permission_grants_supports_tool_and_operation_entries() -> None:
     grants, invalid_entries = parse_tool_permission_grants(
         "read, write:create_file, write:overwrite_file, bash:execute_command"
@@ -341,7 +527,61 @@ def test_all_of_tool_permission_policy_requires_approval_after_allows(
     assert decision == ToolPermissionDecision.require_approval("approval needed")
 
 
-def test_workspace_tool_policy_allows_reads_and_approval_gates_side_effects(
+def test_side_effect_approval_policy_requires_approval_for_writes(
+    tmp_path: Path,
+) -> None:
+    policy = SideEffectApprovalToolPermissionPolicy()
+
+    read_decision = policy.check(
+        _request(
+            tool_name="read",
+            operation=ToolOperation.READ_FILE,
+            cwd=tmp_path,
+            path=tmp_path / "notes.txt",
+        )
+    )
+    write_decision = policy.check(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=tmp_path,
+            path=tmp_path / "notes.txt",
+        )
+    )
+
+    assert read_decision == ToolPermissionDecision.allow()
+    assert write_decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_side_effect_approval_policy_can_require_specific_operations(
+    tmp_path: Path,
+) -> None:
+    policy = SideEffectApprovalToolPermissionPolicy(
+        operations=(ToolOperation.EXECUTE_COMMAND,)
+    )
+
+    write_decision = policy.check(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=tmp_path,
+            path=tmp_path / "notes.txt",
+        )
+    )
+    bash_decision = policy.check(
+        _request(
+            tool_name="bash",
+            operation=ToolOperation.EXECUTE_COMMAND,
+            cwd=tmp_path,
+            command="printf 'hello\\n'",
+        )
+    )
+
+    assert write_decision == ToolPermissionDecision.allow()
+    assert bash_decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_workspace_tool_policy_allows_reads_and_requires_approval_for_side_effects(
     tmp_path: Path,
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -353,7 +593,7 @@ def test_workspace_tool_policy_allows_reads_and_approval_gates_side_effects(
         root=workspace,
         grants=grants,
         require_approval_for_side_effects=True,
-        allow_bash_gate=True,
+        require_bash_approval=True,
     )
 
     read_decision = asyncio.run(
@@ -393,6 +633,48 @@ def test_workspace_tool_policy_allows_reads_and_approval_gates_side_effects(
     assert bash_decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
 
 
+def test_workspace_tool_policy_without_grants_uses_workspace_only(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = workspace_tool_policy(root=workspace)
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="read",
+                operation=ToolOperation.READ_FILE,
+                cwd=workspace,
+                path=workspace / "notes.txt",
+            )
+        )
+    )
+
+    assert decision == ToolPermissionDecision.allow()
+
+
+def test_workspace_tool_policy_with_empty_grants_denies_all_granted_tools(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    policy = workspace_tool_policy(root=workspace, grants=())
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="read",
+                operation=ToolOperation.READ_FILE,
+                cwd=workspace,
+                path=workspace / "notes.txt",
+            )
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
 def test_workspace_tool_policy_still_denies_outside_paths_before_approval(
     tmp_path: Path,
 ) -> None:
@@ -420,7 +702,7 @@ def test_workspace_tool_policy_still_denies_outside_paths_before_approval(
     assert decision.outcome == ToolPermissionOutcome.DENY
 
 
-def test_workspace_tool_policy_requires_explicit_bash_gate(
+def test_workspace_tool_policy_denies_bash_without_required_approval(
     tmp_path: Path,
 ) -> None:
     grants, _ = parse_tool_permission_grants("bash:execute_command")
@@ -442,3 +724,27 @@ def test_workspace_tool_policy_requires_explicit_bash_gate(
     )
 
     assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_workspace_tool_policy_requires_bash_approval_without_other_side_effects(
+    tmp_path: Path,
+) -> None:
+    grants, _ = parse_tool_permission_grants("bash:execute_command")
+    policy = workspace_tool_policy(
+        root=tmp_path,
+        grants=grants,
+        require_bash_approval=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="bash",
+                operation=ToolOperation.EXECUTE_COMMAND,
+                cwd=tmp_path,
+                command="printf 'hello\\n'",
+            )
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL

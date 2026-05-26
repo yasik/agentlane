@@ -30,6 +30,8 @@ from ._paths import ToolPathResolver
 from ._permissions import (
     AllOfToolPermissionPolicy,
     AllowAllToolPermissionPolicy,
+    PathScopeToolPermissionPolicy,
+    SideEffectApprovalToolPermissionPolicy,
     ToolApprovalCallback,
     ToolOperation,
     ToolPermissionDecision,
@@ -69,6 +71,8 @@ __all__ = [
     "TEXT_MAX_LINES",
     "AllOfToolPermissionPolicy",
     "AllowAllToolPermissionPolicy",
+    "PathScopeToolPermissionPolicy",
+    "SideEffectApprovalToolPermissionPolicy",
     "ToolPathResolver",
     "ToolApprovalCallback",
     "ToolOperation",
