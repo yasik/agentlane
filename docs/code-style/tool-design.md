@@ -160,7 +160,10 @@ Use this page when adding or changing first-party tools, especially tools under
 
 ## Documentation and examples
 
-- Update `docs/harness/tools.md` when public tool behavior changes.
+- Update the focused harness tool docs when public tool behavior changes:
+  `docs/harness/tools.md` for the index, `docs/harness/tools-design.md` for
+  shared design, `docs/harness/tools-permissions.md` for permission behavior,
+  and `docs/harness/tools-<tool>.md` for individual tool contracts.
 - Add or update a runnable example when introducing a new public tool or a new
   common workflow.
 - Keep public docs focused on current behavior and supported boundaries. Keep
