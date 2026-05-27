@@ -7,7 +7,8 @@ Use it when you want to:
 
 1. define an agent with `AgentDescriptor`,
 2. call `run(...)` directly, and
-3. let the framework manage the local runtime and default runner for you.
+3. optionally observe live model or high-level run events, and
+4. let the framework manage the local runtime and default runner for you.
 
 This is the primary local agent-building interface. Internally it uses the
 lower-level addressed `agentlane.harness.Agent`, but from the developer standpoint it
@@ -51,6 +52,10 @@ types. It defines four shared execution controls:
 2. `run_stream(...)`
 3. `fork(...)`
 4. `reset()`
+
+`DefaultAgent` also exposes `run_events(...)` for high-level lifecycle
+streaming without requiring every future `AgentBase` implementation to support
+that broader event surface immediately.
 
 ## Two Authoring Styles
 
@@ -110,7 +115,8 @@ result = await agent.run("Review semiconductor exposure before rebalancing.")
 3. optional runner provisioning
 4. persisted `RunState` between repeated `run(...)` calls
 5. live streaming through `run_stream(...)`
-6. binding and reuse of any configured harness shims
+6. high-level lifecycle streaming through `run_events(...)`
+7. binding and reuse of any configured harness shims
 
 It delegates the real orchestration to the existing runtime-facing harness
 stack:
@@ -166,6 +172,9 @@ itself so its saved conversation state stays coherent.
 serialization rule. A streamed run commits the updated `RunState` only after
 the stream completes successfully.
 
+`run_events(...)` follows the same state and serialization rule while yielding
+high-level run events instead of only model stream events.
+
 If the descriptor declares shims, `DefaultAgent` binds them once for that
 concrete agent instance and reuses those bound sessions across repeated runs.
 
@@ -187,6 +196,52 @@ Important details:
 3. early close or cancellation does not commit partial `RunState`
 4. first-class handoff continues the outer stream because control transfers
 5. agent-as-tool stays internal in the current streaming contract
+
+## Run Events
+
+`run_events(...)` returns a
+[`RunEventStream`](../../src/agentlane/harness/_events.py). It is the broader
+streaming surface for applications that need to drive dashboards, logs, or
+debug UIs from one ordered event feed.
+
+Use it like this:
+
+```python
+from agentlane.harness import RunEventKind
+
+stream = await agent.run_events("Plan the documentation update.")
+
+async for event in stream:
+    if event.kind == RunEventKind.TOOL_START:
+        ...
+
+result = await stream.result()
+```
+
+The stream includes:
+
+1. wrapped `ModelStreamEvent` values, preserving the existing model stream
+   payload
+2. agent start and end events
+3. LLM request start and end events
+4. tool call start and end events
+5. brokered approval requested/resolved events when `approval_events=` is
+   provided
+6. first-class handoff start and end events
+7. compact full `RunState` snapshots at stable boundaries
+
+State snapshots are emitted at run start, after each prepared turn, after each
+tool round, and at run end. Each snapshot contains the current turn count,
+history length, response count, and a copied `shim_state`. It intentionally
+does not include full conversation history or raw responses.
+
+`run_stream(...)` remains unchanged and continues to yield only
+`ModelStreamEvent` values. Use `run_events(...)` only when the caller wants the
+broader lifecycle feed.
+
+Pass `approval_events=broker.events()` when a host wants approval
+requested/resolved events from `ToolApprovalBroker` merged into the same
+ordered stream.
 
 ## Fork
 

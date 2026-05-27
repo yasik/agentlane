@@ -10,8 +10,11 @@ from agentlane.harness.tools import (
     HarnessToolDefinition,
     HarnessToolsShim,
     ToolPathResolver,
+    ToolPermissionDecision,
+    ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
     base_harness_tools,
+    bash_tool,
     truncate_output,
 )
 from agentlane.models import Tools
@@ -32,6 +35,84 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
         "bash",
         "agent",
     ]
+
+
+def test_base_harness_tools_selects_included_names_in_standard_order() -> None:
+    definitions = base_harness_tools(include=("bash", "read", "grep"))
+
+    assert [definition.tool.name for definition in definitions] == [
+        "read",
+        "grep",
+        "bash",
+    ]
+
+
+def test_base_harness_tools_excludes_selected_names() -> None:
+    definitions = base_harness_tools(exclude=("bash", "agent"))
+
+    assert [definition.tool.name for definition in definitions] == [
+        "read",
+        "find",
+        "grep",
+        "patch",
+        "write",
+        "write_plan",
+    ]
+
+
+@pytest.mark.parametrize("selector", ["include", "exclude"])
+def test_base_harness_tools_rejects_unknown_selector_name(selector: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Unknown base_harness_tools "
+            f"{selector} selector\\(s\\): ls\\. Expected one of:"
+        ),
+    ):
+        if selector == "include":
+            base_harness_tools(include=("ls",))
+        else:
+            base_harness_tools(exclude=("ls",))
+
+
+def test_base_harness_tools_rejects_overlapping_include_exclude() -> None:
+    with pytest.raises(ValueError, match="include/exclude selectors overlap: read"):
+        base_harness_tools(include=("read", "grep"), exclude=("read",))
+
+
+def test_base_harness_tools_constructs_current_tool_set_with_common_options(
+    tmp_path: Path,
+) -> None:
+    definitions = base_harness_tools(
+        cwd=tmp_path,
+        permissions=WorkspaceToolPermissionPolicy(tmp_path),
+        approval_callback=_approval_callback,
+    )
+
+    assert [definition.tool.name for definition in definitions] == [
+        "read",
+        "find",
+        "grep",
+        "patch",
+        "write",
+        "write_plan",
+        "bash",
+        "agent",
+    ]
+    bash_definition = next(
+        definition for definition in definitions if definition.tool.name == "bash"
+    )
+    assert bash_definition.tool.name == "bash"
+
+
+def test_bash_tool_constructs_with_optional_cwd_regression(tmp_path: Path) -> None:
+    definition = bash_tool(
+        cwd=tmp_path,
+        permissions=WorkspaceToolPermissionPolicy(tmp_path),
+        approval_callback=_approval_callback,
+    )
+
+    assert definition.tool.name == "bash"
 
 
 def test_base_harness_tools_threads_cwd_and_permissions(tmp_path: Path) -> None:
@@ -106,6 +187,52 @@ def test_harness_tools_shim_merges_tools_and_appends_prompt_once() -> None:
     asyncio.run(scenario())
 
 
+def test_harness_tools_shim_renders_shim_level_prompt_guidelines() -> None:
+    async def scenario() -> None:
+        definition = HarnessToolDefinition(
+            tool=echo_tool("read"),
+            prompt_snippet="Read file contents",
+            prompt_guidelines=(
+                "Use workspace-relative paths.",
+                "Use read to examine files instead of cat or sed.",
+            ),
+        )
+        shim = HarnessToolsShim(
+            (definition,),
+            prompt_guidelines=(
+                "Tool paths are relative to the workspace root.",
+                "Use workspace-relative paths.",
+            ),
+        )
+        bound = await shim.bind(cast(ShimBindingContext, object()))
+        state = run_state()
+        turn = PreparedTurn(
+            run_state=state,
+            tools=None,
+            model_args=None,
+        )
+
+        await bound.prepare_turn(turn)
+
+        assert definition.prompt_guidelines == (
+            "Use workspace-relative paths.",
+            "Use read to examine files instead of cat or sed.",
+        )
+        assert state.instructions == (
+            "Base\n\n"
+            "<default_tools>\n"
+            "Available tools:\n"
+            "- read: Read file contents\n\n"
+            "Guidelines:\n"
+            "- Tool paths are relative to the workspace root.\n"
+            "- Use workspace-relative paths.\n"
+            "- Use read to examine files instead of cat or sed.\n"
+            "</default_tools>"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_harness_tools_shim_rejects_duplicate_tool_names() -> None:
     with pytest.raises(ValueError, match="Duplicate harness tool name: read"):
         HarnessToolsShim(
@@ -135,7 +262,7 @@ def test_truncate_output_limits_head_by_line_count() -> None:
 
     assert output.truncated is True
     assert output.text == (
-        "[output truncated: showing first 2 lines or 100 bytes]\n" "a\nb\n"
+        "[output truncated: showing first 2 lines or 100 bytes]\na\nb\n"
     )
 
 
@@ -146,7 +273,7 @@ def test_truncate_output_limits_tail_by_byte_count() -> None:
 
     assert output.truncated is True
     assert output.text == (
-        "[output truncated: showing last 10 lines or 8 bytes]\n" "charlie\n"
+        "[output truncated: showing last 10 lines or 8 bytes]\ncharlie\n"
     )
 
 
@@ -181,3 +308,11 @@ def test_gitignore_matcher_respects_root_rules_and_git_directory(
     assert matcher.is_ignored(tmp_path / "debug.log") is True
     assert matcher.is_ignored(tmp_path / ".git" / "config") is True
     assert matcher.is_ignored(tmp_path / "visible.txt") is False
+
+
+def _approval_callback(
+    request: ToolPermissionRequest,
+    decision: ToolPermissionDecision,
+) -> ToolPermissionDecision:
+    del request
+    return decision

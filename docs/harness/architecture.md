@@ -13,7 +13,8 @@ code a home above the runtime. The lower-level
 bind to a runtime and address by `AgentId`. It binds addressed runs to one
 descriptor, one lifecycle, and one runner. The local
 [`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
-provides the smaller high-level `run(...)` and `run_stream(...)` surface. The
+provides the smaller high-level `run(...)`, `run_stream(...)`, and
+`run_events(...)` surface. The
 [`agentlane.harness.shims`](../../src/agentlane/harness/shims/__init__.py)
 package provides the mutating extension seam for instructions, tools, and
 per-run context shaping. The [`Runner`](../../src/agentlane/harness/_runner.py)
@@ -32,10 +33,13 @@ harness adds a higher-level story on top of that:
    straightforward usage
 4. `DefaultAgent` also provides `run_stream(...)` for live model events on that
    same primary conversation line
-5. shims can adjust effective instructions, tools, and transient turn context
+5. `DefaultAgent.run_events(...)` provides a broader ordered event feed for
+   model events, agent and LLM lifecycle, tools, handoffs, and compact state
+   snapshots
+6. shims can adjust effective instructions, tools, and transient turn context
    without widening the core harness types
-6. `Runner` executes the model loop for one run
-7. tools and handoffs become first-class parts of that loop
+7. `Runner` executes the model loop for one run
+8. tools and handoffs become first-class parts of that loop
 
 That separation matters because queueing and persistence are different problems
 from model reasoning. The harness keeps them apart.
@@ -48,7 +52,8 @@ At a high level, a run moves like this:
 Application / caller
         |
         | run(...), run_stream(...),
-        | or send_message(run_input)
+        | run_events(...), or
+        | send_message(run_input)
         v
 +---------------------------+
 | DefaultAgent             |
@@ -119,7 +124,7 @@ current turn.
 [`agentlane.harness.agents.DefaultAgent`](../../src/agentlane/harness/agents/__init__.py)
 sits one level above that lower-level path. It provisions a local runtime when
 needed, keeps a primary `RunState` between repeated `run(...)` and
-`run_stream(...)` calls, and still routes through the same lower-level
+`run_stream(...)` or `run_events(...)` calls, and still routes through the same lower-level
 `Agent` plus `Runner` stack underneath.
 
 ## Request Ownership
@@ -138,12 +143,22 @@ Instead:
 
 That keeps raw provider wire formats out of application code.
 
-The same boundary applies to streaming. `DefaultAgent.run_stream(...)` is a
-local harness path built on top of the same lifecycle and runner ownership
-model. When you use `runtime.send_message(...)`, you still get one final result
-after the run finishes. Live per-event streaming is currently available through
-the local harness streaming APIs instead. Distributed transport streaming is a
-later concern.
+The same boundary applies to streaming. `DefaultAgent.run_stream(...)` remains
+the model-event-only primitive, and `DefaultAgent.run_events(...)` is the
+higher-level lifecycle stream built from the same runner loop. Run events wrap
+model stream events and add agent start/end, LLM start/end, tool start/end,
+first-class handoff start/end, and compact state snapshots at run start,
+prepared-turn, tool-round, and run-end boundaries.
+
+When you use `runtime.send_message(...)`, you still get one final result after
+the run finishes. Live per-event streaming is currently available through the
+local harness streaming APIs instead. Distributed transport streaming is a later
+concern.
+
+Approval requested/resolved events are exposed by `ToolApprovalBroker.events()`.
+Hosts can pass that async event source to `run_events(approval_events=...)` to
+merge brokered approval lifecycle events into the same ordered run-event stream
+without adding a second approval path to the runner.
 
 ## Where To Read Next
 

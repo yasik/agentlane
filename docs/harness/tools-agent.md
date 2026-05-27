@@ -30,13 +30,23 @@ Example tool call:
 `agent` is agent-as-tool, not handoff. The caller waits for the helper result
 and then continues its own loop. The spawned helper treats the explicit `task`
 as its assigned work, not the generated `name`. Generic spawned helpers do not
-inherit the parent's system prompt or conversation history. They do inherit the
-parent's direct tool configuration by default, and they inherit the parent's
-descriptor shims. When the parent exposes `base_harness_tools(cwd=...,
-permissions=..., approval_callback=...)` through `HarnessToolsShim`, spawned
-helpers get the same configured base tools through normal shim inheritance.
+inherit the parent's system prompt or conversation history.
+
+Tool visibility has two inheritance paths that are easy to conflate:
+
+1. Direct descriptor tools are resolved through `AgentDescriptor.tools` and
+   `ToolConfig`. These are the tools inherited, replaced, or filtered by
+   `INHERIT_TOOLS`, `OVERRIDE_TOOLS`, and `RESTRICT_TOOLS.only(...)`.
+2. Shim-contributed tools are added later by inherited descriptor shims during
+   `prepare_turn(...)`. When the parent exposes
+   `base_harness_tools(cwd=..., permissions=..., approval_callback=...)`
+   through `HarnessToolsShim`, spawned helpers get those same configured base
+   tools and prompt guidance through this shim path.
+
 Inherited direct tools and shim-contributed tools are merged by tool name so
-duplicate definitions are exposed only once.
+duplicate definitions are exposed only once. Predefined handoffs are separate:
+the model sees them as schemas, but the runner handles them as control
+transfers rather than normal agent-as-tool calls.
 
 Tool inheritance is controlled by the same `ToolConfig` policy used by
 `AgentDescriptor.tools`:

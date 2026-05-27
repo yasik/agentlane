@@ -64,9 +64,9 @@ of the resumable state for that concrete agent instance.
 
 An agent's model-visible tool surface is built from three sources:
 
-1. its ordinary tool set
-2. predefined handoff targets
-3. an optional generic handoff path
+1. direct descriptor tools resolved from `AgentDescriptor.tools`
+2. tools contributed by bound shims such as `HarnessToolsShim`
+3. predefined handoff targets and an optional generic handoff path
 
 That design matters because handoffs are intentionally model-visible. From the
 model's point of view, a handoff looks like a tool choice. From the framework's
@@ -81,11 +81,20 @@ The base `agent` tool is the generic spawned-helper version of agent-as-tool.
 It lets the model create a fresh helper for a delegated task without inheriting
 the parent conversation or parent system prompt. The helper name is used for
 logging and tracing; the task text is the instruction the helper receives.
-Default spawned helpers inherit parent direct tools and parent descriptor
-shims. If those shims include `HarnessToolsShim(base_harness_tools(...))`, the
-helper gets the same configured base tools and prompt guidance through the
-normal prepared-turn path. `ToolConfig` can override or restrict inherited
-direct tools by name.
+
+Default spawned helpers inherit two things through different paths. Direct
+descriptor tools are resolved by `ToolConfig`: `INHERIT_TOOLS` keeps parent
+tools, `OVERRIDE_TOOLS` replaces them, and `RESTRICT_TOOLS.only(...)` filters
+them by name before adding child-local tools. Descriptor shims are inherited as
+shim definitions and then bind for the child agent. If those inherited shims
+include `HarnessToolsShim(base_harness_tools(...))`, the helper gets the same
+configured first-party tools and prompt guidance through the normal
+prepared-turn path. Those shim-contributed tools are not direct descriptor
+tools, but they still become model-visible for the prepared turn.
+
+Predefined handoffs are another category again. The model sees a handoff schema
+like a tool, but the runner intercepts the call and transfers control instead
+of executing a normal tool handler.
 
 ## Concurrency Per Agent
 

@@ -15,9 +15,9 @@ control within one run.
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
-from typing import Any, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
 
@@ -44,6 +44,12 @@ from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken, RuntimeEngine
 
 from ._cancellation import cancel_task_callback
+from ._events import (
+    RunEventEmitter,
+    RunEventStream,
+    RunStateSnapshotBoundary,
+    forward_tool_approval_events,
+)
 from ._handoff import (
     DefaultAgentToolInput,
     DelegatedTaskInput,
@@ -75,6 +81,9 @@ from ._stream import RunStream
 from ._task import Task
 from .shims import PreparedTurn, Shim
 from .shims._manager import BoundShimManager
+
+if TYPE_CHECKING:
+    from .tools import ToolApprovalEvent
 
 _AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
 _AGENT_THREAD_LIMIT_REACHED = "Agent thread limit reached. Solve the task yourself."
@@ -375,6 +384,47 @@ class Runner:
         stream.add_cleanup(cancel_task_callback(stream_task))
         return stream
 
+    def run_events(
+        self,
+        agent: Task,
+        state: RunState,
+        *,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
+        approval_events: AsyncIterator["ToolApprovalEvent"] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunEventStream:
+        """Execute the generic harness loop with high-level run events."""
+        stream = RunEventStream(
+            on_close=(
+                cancellation_token.cancel if cancellation_token is not None else None
+            )
+        )
+
+        event_emitter = RunEventEmitter(stream.emit)
+        if approval_events is not None:
+            approval_task = asyncio.create_task(
+                forward_tool_approval_events(
+                    approval_events,
+                    event_emitter=event_emitter,
+                )
+            )
+            stream.add_cleanup(cancel_task_callback(approval_task))
+
+        resolved_hooks = coerce_runner_hooks(hooks, event_emitter.hooks)
+
+        stream_task = asyncio.create_task(
+            self._run_events_task(
+                agent=agent,
+                state=state,
+                stream=stream,
+                event_emitter=event_emitter,
+                hooks=resolved_hooks,
+                cancellation_token=cancellation_token,
+            )
+        )
+        stream.add_cleanup(cancel_task_callback(stream_task))
+        return stream
+
     async def _run_stream_task(
         self,
         *,
@@ -401,6 +451,34 @@ class Runner:
         else:
             stream.finish(result)
 
+    async def _run_events_task(
+        self,
+        *,
+        agent: Task,
+        state: RunState,
+        stream: RunEventStream,
+        event_emitter: RunEventEmitter,
+        hooks: RunnerHooks,
+        cancellation_token: CancellationToken | None,
+    ) -> None:
+        """Drive one high-level event run and resolve the stream handle."""
+        try:
+            result = await self._run_stream_internal(
+                agent=agent,
+                state=state,
+                emit=event_emitter.model_stream_event,
+                hooks=hooks,
+                cancellation_token=cancellation_token,
+                run_events=event_emitter,
+            )
+        except Exception as exc:
+            stream.fail(exc)
+        except BaseException as exc:
+            stream.fail(exc)
+            raise
+        else:
+            stream.finish(result)
+
     async def _run_stream_internal(
         self,
         *,
@@ -409,6 +487,7 @@ class Runner:
         emit: Callable[[ModelStreamEvent], None],
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None = None,
+        run_events: RunEventEmitter | None = None,
     ) -> RunResult:
         """Execute the generic harness loop while forwarding model events."""
         result: RunResult | None = None
@@ -421,6 +500,8 @@ class Runner:
         await hooks.on_agent_start(agent, state)
         if shim_manager is not None:
             await shim_manager.on_run_start(state, transient_state)
+        if run_events is not None:
+            run_events.state_snapshot(RunStateSnapshotBoundary.RUN_START, state)
         try:
             while True:
                 state.turn_count += 1
@@ -435,6 +516,11 @@ class Runner:
                 )
                 if shim_manager is not None:
                     await shim_manager.prepare_turn(prepared_turn)
+                if run_events is not None:
+                    run_events.state_snapshot(
+                        RunStateSnapshotBoundary.TURN_PREPARED,
+                        state,
+                    )
 
                 messages = _build_request(prepared_turn)
                 if shim_manager is not None:
@@ -473,6 +559,7 @@ class Runner:
                             emit=emit,
                             hooks=hooks,
                             cancellation_token=cancellation_token,
+                            run_events=run_events,
                         )
 
                     state.history.append(response)
@@ -491,6 +578,11 @@ class Runner:
                     for tc in tool_calls:
                         name = tc.function.name or ""
                         tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+                    if run_events is not None:
+                        run_events.state_snapshot(
+                            RunStateSnapshotBoundary.TOOL_ROUND_END,
+                            state,
+                        )
 
                     continue
 
@@ -506,6 +598,8 @@ class Runner:
         finally:
             if shim_manager is not None:
                 await shim_manager.on_run_end(result, transient_state)
+            if run_events is not None:
+                run_events.state_snapshot(RunStateSnapshotBoundary.RUN_END, state)
             await hooks.on_agent_end(agent, result)
 
     async def _run_with_retry(
@@ -878,6 +972,7 @@ class Runner:
         emit: Callable[[ModelStreamEvent], None],
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
+        run_events: RunEventEmitter | None = None,
     ) -> RunResult:
         """Transfer control to another agent and continue streaming there."""
         if tools is None:
@@ -895,7 +990,17 @@ class Runner:
             tool_call=handoff_call,
             args_model=tool_definition.args_type(),
         )
+        handoff_descriptor = _resolved_handoff_descriptor(
+            runner_task=runner_task,
+            tool_definition=tool_definition,
+        )
         await hooks.on_tool_call_start(agent, handoff_call)
+        if run_events is not None:
+            run_events.handoff_start(
+                task=agent,
+                tool_call=handoff_call,
+                target_name=handoff_descriptor.name,
+            )
 
         transferred_state = replace(
             state,
@@ -914,10 +1019,6 @@ class Runner:
             parsed_input.task or default_handoff_task_message()
         )
 
-        handoff_descriptor = _resolved_handoff_descriptor(
-            runner_task=runner_task,
-            tool_definition=tool_definition,
-        )
         transferred_state.instructions = copy_instructions(
             handoff_descriptor.instructions
         )
@@ -934,6 +1035,13 @@ class Runner:
         if handoff_result.run_state is not None:
             _overwrite_run_state(state, handoff_result.run_state)
 
+        if run_events is not None:
+            run_events.handoff_end(
+                task=agent,
+                tool_call=handoff_call,
+                target_name=handoff_descriptor.name,
+                result=handoff_result,
+            )
         await hooks.on_tool_call_end(agent, handoff_call, handoff_result.final_output)
         return handoff_result
 
