@@ -179,7 +179,11 @@ The exported permission primitives are framework extension points:
    helpers for operation-level allowlists.
 7. `SideEffectApprovalToolPermissionPolicy` is the generic approval policy for
    side-effecting operations.
-8. `evaluate_tool_permission()` and `format_tool_permission_result()` are
+8. `ToolApprovalBroker` is the optional host-facing approval lifecycle helper.
+   It tracks pending approval records and exposes a callback compatible with
+   first-party tools without owning any UI. Related event, record, and status
+   types are exported alongside it.
+9. `evaluate_tool_permission()` and `format_tool_permission_result()` are
    reusable helpers for custom tools that want the same deny and
    approval-required result contract. `evaluate_tool_permission()` returns
    `None` when execution may proceed, or a model-facing block result string
@@ -260,6 +264,81 @@ async def approve(
 
 If no callback is configured, the tool returns a stable approval-required
 result and does not execute.
+
+Hosts that need pending-state tracking can use `ToolApprovalBroker` instead
+of writing their own request id, event, and future glue:
+
+```python
+broker = ToolApprovalBroker()
+
+tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=workspace_tool_policy(
+        WORKSPACE,
+        require_approval_for_side_effects=True,
+    ),
+    approval_callback=broker.callback,
+)
+```
+
+Each brokered request receives a stable `request_id` and a
+`ToolApprovalRecord` containing the original `ToolPermissionRequest`, the
+approval-required `ToolPermissionDecision`, current status, and final decision
+when complete. Hosts can use `broker.pending()` for a tuple snapshot and
+`broker.events()` for async lifecycle events emitted after the subscription
+starts:
+
+```python
+async for event in broker.events():
+    if event.status == ToolApprovalStatus.PENDING:
+        record = event.record
+        await render_host_approval_prompt(record.request_id, record.request)
+```
+
+Use `broker.pending()` to seed UI state before consuming the live event stream.
+Call `broker.close()` when the host is shutting down broker event observation;
+this unblocks active `broker.events()` subscribers and makes future event
+subscriptions end immediately. Closing event observation does not resolve
+pending approvals or synthesize a permission decision.
+
+The host resolves a pending request with a normal permission decision:
+
+```python
+await broker.resolve(request_id, ToolPermissionDecision.allow())
+await broker.resolve(request_id, ToolPermissionDecision.deny())
+await broker.resolve(request_id, original_approval_required_decision)
+```
+
+The broker does not own timeout, deadline, or cancellation policy. A host that
+needs those behaviors should implement them at the application boundary and
+resolve the request with an existing `ToolPermissionDecision`. For example, a
+host-side timeout can preserve the normal approval-required tool output by
+resolving with the original approval-required decision.
+
+Custom tools use the same callback by delegating permission evaluation through
+`evaluate_tool_permission(...)`:
+
+```python
+async def run_custom_tool(
+    request: CustomArgs,
+    *,
+    permissions: ToolPermissionPolicy | None,
+    approval_callback: ToolApprovalCallback | None,
+) -> str:
+    blocked = await evaluate_tool_permission(
+        ToolPermissionRequest(
+            tool_name="custom_tool",
+            operation=ToolOperation.EXECUTE_COMMAND,
+            cwd=WORKSPACE,
+        ),
+        policy=permissions,
+        approval_callback=approval_callback,
+    )
+    if blocked is not None:
+        return blocked
+
+    return await perform_custom_side_effect(request)
+```
 
 When a first-party tool runs through the default runner, permission requests
 also receive framework correlation from an explicit

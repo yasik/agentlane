@@ -30,12 +30,18 @@ from agentlane.harness.tools import (
     HarnessToolsShim,
     PathScopeToolPermissionPolicy,
     SideEffectApprovalToolPermissionPolicy,
+    ToolApprovalBroker,
+    ToolApprovalCallback,
+    ToolApprovalEvent,
+    ToolApprovalRecord,
+    ToolApprovalStatus,
     ToolPermissionGrant,
     ToolPermissionGrantPolicy,
     ToolPermissionPolicy,
     ToolOperation,
     ToolPermissionDecision,
     ToolPermissionRequest,
+    WorkspaceToolsShim,
     WorkspaceToolPermissionPolicy,
     agent_tool,
     base_harness_tools,
@@ -84,6 +90,29 @@ workspace_tools = base_harness_tools(
 )
 ```
 
+Use `include=` or `exclude=` to derive a smaller set without manually
+constructing each tool. Selectors are the model-visible names from the standard
+set: `read`, `find`, `grep`, `patch`, `write`, `write_plan`, `bash`, and
+`agent`. Returned tools keep standard order, even when `include` names are
+listed in a different order:
+
+```python
+search_tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
+    include=("grep", "read"),
+)
+
+no_shell_tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
+    exclude=("bash",),
+)
+```
+
+Unknown selector names raise `ValueError`. Passing an overlapping name in both
+`include` and `exclude` also raises `ValueError`.
+
 You can also construct tools individually when an agent needs a custom tool
 set:
 
@@ -103,7 +132,9 @@ workspace_tools = (
 ## HarnessToolsShim
 
 `HarnessToolsShim` merges tool schemas into each prepared turn and appends the
-definitions' prompt metadata to the first turn's system instructions:
+definitions' prompt metadata to the first turn's system instructions. Pass
+`prompt_guidelines=` for guidance that belongs to the shim configuration rather
+than to one tool definition, such as workspace-level path rules:
 
 ```python
 from agentlane.harness import AgentDescriptor
@@ -144,7 +175,10 @@ descriptor = AgentDescriptor(
                 write_tool(cwd=WORKSPACE),
                 bash_tool(cwd=WORKSPACE),
                 agent_tool(),
-            )
+            ),
+            prompt_guidelines=(
+                "Tool paths are relative to the workspace root.",
+            ),
         ),
     ),
 )

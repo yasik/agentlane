@@ -6,7 +6,8 @@ branch execution on top of the runtime-facing harness ``Agent``.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
@@ -19,12 +20,17 @@ from agentlane.runtime import (
 
 from .._agent import Agent as RuntimeAgent
 from .._cancellation import cancel_task_callback, cancellation_relay_task
+from .._events import RunEventStream
 from .._hooks import RunnerHooks
 from .._lifecycle import AgentDescriptor
 from .._run import RunInput, RunResult, RunState, copy_run_state
 from .._runner import Runner
 from .._stream import RunStream
+from .._stream_base import close_stream_callback
 from ._base import AgentBase
+
+if TYPE_CHECKING:
+    from ..tools import ToolApprovalEvent
 
 
 class DefaultAgent(AgentBase):
@@ -238,6 +244,34 @@ class DefaultAgent(AgentBase):
         stream.add_cleanup(cancel_task_callback(stream_task))
         return stream
 
+    async def run_events(
+        self,
+        input: RunInput,
+        *,
+        approval_events: AsyncIterator["ToolApprovalEvent"] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunEventStream:
+        """Execute one primary-line run with high-level run events."""
+        stream_token = CancellationToken()
+        relay_task = cancellation_relay_task(
+            source=cancellation_token,
+            target=stream_token,
+        )
+        stream = RunEventStream(on_close=stream_token.cancel)
+        if relay_task is not None:
+            stream.add_cleanup(cancel_task_callback(relay_task))
+
+        stream_task = asyncio.create_task(
+            self._run_events_task(
+                input=input,
+                stream=stream,
+                approval_events=approval_events,
+                cancellation_token=stream_token,
+            )
+        )
+        stream.add_cleanup(cancel_task_callback(stream_task))
+        return stream
+
     def _resolved_runner(self) -> Runner:
         """Return the configured runner, provisioning one lazily if needed."""
         if self._runner is None:
@@ -326,6 +360,54 @@ class DefaultAgent(AgentBase):
         else:
             stream.finish(result)
 
+    async def _run_events_task(
+        self,
+        *,
+        input: RunInput,
+        stream: RunEventStream,
+        approval_events: AsyncIterator["ToolApprovalEvent"] | None,
+        cancellation_token: CancellationToken,
+    ) -> None:
+        """Drive one high-level event run and commit final state on success."""
+        try:
+            async with self._run_lock:
+                effective_runner = self._resolved_runner()
+                initial_state = None if isinstance(input, RunState) else self._run_state
+
+                if self._runtime is None:
+                    async with single_threaded_runtime() as runtime:
+                        result = await self._run_events_once(
+                            runtime=runtime,
+                            runner=effective_runner,
+                            input=input,
+                            initial_state=initial_state,
+                            agent_id=self._agent_id,
+                            stream=stream,
+                            approval_events=approval_events,
+                            cancellation_token=cancellation_token,
+                        )
+                else:
+                    async with runtime_scope(self._runtime) as runtime:
+                        result = await self._run_events_once(
+                            runtime=runtime,
+                            runner=effective_runner,
+                            input=input,
+                            initial_state=initial_state,
+                            agent_id=self._agent_id,
+                            stream=stream,
+                            approval_events=approval_events,
+                            cancellation_token=cancellation_token,
+                        )
+
+                self._run_state = copy_run_state(result.run_state)
+        except Exception as exc:
+            stream.fail(exc)
+        except BaseException as exc:
+            stream.fail(exc)
+            raise
+        else:
+            stream.finish(result)
+
     async def _run_stream_once(
         self,
         *,
@@ -350,10 +432,62 @@ class DefaultAgent(AgentBase):
             input,
             cancellation_token=cancellation_token,
         )
-        async for event in low_level_stream:
-            stream.emit(event)
+        stream.add_cleanup(close_stream_callback(low_level_stream))
 
-        result = await low_level_stream.result()
+        try:
+            async for event in low_level_stream:
+                stream.emit(event)
+
+            result = await low_level_stream.result()
+        finally:
+            await low_level_stream.aclose()
+
+        if result.run_state is not None:
+            return result
+
+        return RunResult(
+            final_output=result.final_output,
+            responses=list(result.responses),
+            turn_count=result.turn_count,
+            run_state=runtime_agent.run_state,
+        )
+
+    async def _run_events_once(
+        self,
+        *,
+        runtime: RuntimeEngine,
+        runner: Runner,
+        input: RunInput,
+        initial_state: RunState | None,
+        agent_id: AgentId,
+        stream: RunEventStream,
+        approval_events: AsyncIterator["ToolApprovalEvent"] | None,
+        cancellation_token: CancellationToken,
+    ) -> RunResult:
+        """Bind the low-level harness agent and stream high-level run events."""
+        runtime_agent = RuntimeAgent.bind(
+            runtime,
+            agent_id,
+            runner=runner,
+            descriptor=self._descriptor,
+            run_state=initial_state,
+            hooks=self._hooks,
+        )
+        low_level_stream = await runtime_agent.enqueue_input_events(
+            input,
+            approval_events=approval_events,
+            cancellation_token=cancellation_token,
+        )
+        stream.add_cleanup(close_stream_callback(low_level_stream))
+
+        try:
+            async for event in low_level_stream:
+                stream.emit(event)
+
+            result = await low_level_stream.result()
+        finally:
+            await low_level_stream.aclose()
+
         if result.run_state is not None:
             return result
 

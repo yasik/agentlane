@@ -1,6 +1,12 @@
 """First-party harness tool definitions and integration helpers."""
 
 from ._agent import agent_tool
+from ._approvals import (
+    ToolApprovalBroker,
+    ToolApprovalEvent,
+    ToolApprovalRecord,
+    ToolApprovalStatus,
+)
 from ._bash import bash_tool
 from ._bash_executor import (
     BashExecutionRequest,
@@ -49,6 +55,7 @@ from ._plan import plan_tool
 from ._read import read_tool
 from ._shim import HarnessToolsShim, base_harness_tools
 from ._types import HarnessToolDefinition
+from ._workspace import WorkspaceToolsShim
 from ._write import write_tool
 
 __all__ = [
@@ -64,6 +71,7 @@ __all__ = [
     "GitignoreMatcher",
     "HarnessToolDefinition",
     "HarnessToolsShim",
+    "WorkspaceToolsShim",
     "LS_DEFAULT_LIMIT",
     "LocalBashExecutor",
     "TEXT_MAX_BYTES",
@@ -71,8 +79,12 @@ __all__ = [
     "AllOfToolPermissionPolicy",
     "PathScopeToolPermissionPolicy",
     "SideEffectApprovalToolPermissionPolicy",
+    "ToolApprovalBroker",
     "ToolPathResolver",
     "ToolApprovalCallback",
+    "ToolApprovalEvent",
+    "ToolApprovalRecord",
+    "ToolApprovalStatus",
     "ToolOperation",
     "ToolPermissionDecision",
     "ToolPermissionGrant",

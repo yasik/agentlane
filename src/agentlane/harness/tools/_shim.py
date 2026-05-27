@@ -1,8 +1,9 @@
 """Shim integration for first-party harness tool definitions."""
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from itertools import chain
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from agentlane.models.run import RunContext
 
@@ -22,6 +23,18 @@ from ._write import write_tool
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
 _PLAN_TOOL_NAME = "write_plan"
+_BASE_TOOL_NAMES = (
+    "read",
+    "find",
+    "grep",
+    "patch",
+    "write",
+    _PLAN_TOOL_NAME,
+    "bash",
+    "agent",
+)
+_BASE_TOOL_NAME_SET = frozenset(_BASE_TOOL_NAMES)
+type _BaseToolFactory = Callable[[], HarnessToolDefinition]
 
 
 class _BoundHarnessToolsShim(BoundShim):
@@ -99,9 +112,11 @@ class HarnessToolsShim(Shim):
         definitions: Sequence[HarnessToolDefinition],
         *,
         name: str = "harness-tools",
+        prompt_guidelines: Sequence[str] = (),
     ) -> None:
         self._definitions = tuple(definitions)
         self._name = name
+        self._prompt_guidelines = tuple(prompt_guidelines)
         _validate_unique_tool_names(self._definitions)
 
     @property
@@ -115,6 +130,7 @@ class HarnessToolsShim(Shim):
             definitions=self._definitions,
             prompt_block=render_harness_tools_prompt(
                 definitions=self._definitions,
+                prompt_guidelines=self._prompt_guidelines,
             ),
         )
 
@@ -124,47 +140,53 @@ def base_harness_tools(
     cwd: str | Path | None = None,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
+    include: Iterable[str] | None = None,
+    exclude: Iterable[str] | None = None,
 ) -> tuple[HarnessToolDefinition, ...]:
     """Return currently implemented first-party base harness tools."""
-    return (
-        read_tool(
+    selected_names = _select_base_tool_names(include=include, exclude=exclude)
+    factories: dict[str, _BaseToolFactory] = {
+        "read": lambda: read_tool(
             cwd=cwd,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        find_tool(
+        "find": lambda: find_tool(
             cwd=cwd,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        grep_tool(
+        "grep": lambda: grep_tool(
             cwd=cwd,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        patch_tool(
+        "patch": lambda: patch_tool(
             cwd=cwd,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        write_tool(
+        "write": lambda: write_tool(
             cwd=cwd,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        plan_tool(),
-        bash_tool(
+        _PLAN_TOOL_NAME: plan_tool,
+        "bash": lambda: bash_tool(
             cwd=cwd,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        agent_tool(),
-    )
+        "agent": agent_tool,
+    }
+
+    return tuple(factories[name]() for name in selected_names)
 
 
 def render_harness_tools_prompt(
     *,
     definitions: Sequence[HarnessToolDefinition],
+    prompt_guidelines: Sequence[str] = (),
 ) -> str | None:
     """Render the compact system-prompt block for harness tool metadata."""
     snippets = [
@@ -173,9 +195,14 @@ def render_harness_tools_prompt(
         if definition.prompt_snippet is not None
     ]
     guidelines = _dedupe_preserving_order(
-        guideline
-        for definition in definitions
-        for guideline in definition.prompt_guidelines
+        chain(
+            prompt_guidelines,
+            (
+                guideline
+                for definition in definitions
+                for guideline in definition.prompt_guidelines
+            ),
+        )
     )
 
     sections: list[str] = []
@@ -200,6 +227,49 @@ def _validate_unique_tool_names(
         seen.add(tool_name)
 
 
+def _select_base_tool_names(
+    *,
+    include: Iterable[str] | None,
+    exclude: Iterable[str] | None,
+) -> tuple[str, ...]:
+    """Return the requested standard tool names in stable base-tool order."""
+    include_names = _validate_base_tool_selector(include, label="include")
+    exclude_names = _validate_base_tool_selector(exclude, label="exclude")
+
+    overlap = include_names & exclude_names
+    if overlap:
+        raise ValueError(
+            "base_harness_tools include/exclude selectors overlap: "
+            f"{_format_tool_names(overlap)}"
+        )
+
+    return tuple(
+        name
+        for name in _BASE_TOOL_NAMES
+        if (include is None or name in include_names) and name not in exclude_names
+    )
+
+
+def _validate_base_tool_selector(
+    selector: Iterable[str] | None,
+    *,
+    label: Literal["include", "exclude"],
+) -> set[str]:
+    """Validate one base-tool selector collection."""
+    if selector is None:
+        return set()
+
+    selected = {selector} if isinstance(selector, str) else set(selector)
+    unknown = selected - _BASE_TOOL_NAME_SET
+    if unknown:
+        raise ValueError(
+            f"Unknown base_harness_tools {label} selector(s): "
+            f"{_format_tool_names(unknown)}. Expected one of: "
+            f"{_format_tool_names(_BASE_TOOL_NAMES)}"
+        )
+    return selected
+
+
 def _dedupe_preserving_order(items: Iterable[str]) -> tuple[str, ...]:
     """Return non-empty strings once, preserving first occurrence order."""
     seen: set[str] = set()
@@ -216,3 +286,11 @@ def _dedupe_preserving_order(items: Iterable[str]) -> tuple[str, ...]:
 def _prompt_marker_key(shim_name: str) -> str:
     """Return the persisted shim-state key for prompt append deduplication."""
     return f"{shim_name}:{_PROMPT_MARKER_KEY_SUFFIX}"
+
+
+def _format_tool_names(names: Iterable[str]) -> str:
+    """Return names in deterministic comma-separated form."""
+    name_set = set(names)
+    ordered = [name for name in _BASE_TOOL_NAMES if name in name_set]
+    ordered.extend(sorted(name_set - _BASE_TOOL_NAME_SET))
+    return ", ".join(ordered)

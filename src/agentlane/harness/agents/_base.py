@@ -5,8 +5,8 @@ types that sit above the runtime-facing harness agent. Concrete agents may add
 their own configuration or lifecycle conveniences, but they should preserve
 the same core execution paths:
 
-1. continue the primary conversation line with ``run(...)``, and
-2. continue it with live events through ``run_stream(...)``, and
+1. continue the primary conversation line with ``run(...)``,
+2. continue it with live model events through ``run_stream(...)``, and
 3. create a non-mutating branch with ``fork(...)``.
 
 Stateful agents also need one shared lifecycle control:
@@ -32,8 +32,8 @@ class AgentBase(abc.ABC):
     Future high-level agent types should expose at least three execution
     paths:
 
-    1. ``run(...)`` for the main stateful conversation line, and
-    2. ``run_stream(...)`` for live events on that same line, and
+    1. ``run(...)`` for the main stateful conversation line,
+    2. ``run_stream(...)`` for live model events on that same line, and
     3. ``fork(...)`` for a one-off branch that does not mutate that line.
 
     Stateful agents should also expose ``reset()`` so callers can discard

@@ -12,8 +12,8 @@ Core docs:
 1. [Tool design](./tools-design.md): construction model, imports,
    `HarnessToolsShim`, base tool sets, and shared output limits.
 2. [Tool permissions](./tools-permissions.md): permissive defaults, path
-   policy, bundled permission policies, approval callbacks, and `bash`
-   boundaries.
+   policy, bundled permission policies, approval callbacks and brokers, and
+   `bash` boundaries.
 
 Tool reference:
 
@@ -29,8 +29,22 @@ Tool reference:
 
 ## Quick Start
 
-For a trusted local prototype, use the standard tools directly. A specific
-`cwd` controls relative path resolution; it is not a sandbox.
+For common local-agent apps, use `WorkspaceToolsShim` so the standard tools
+share one workspace root and the model sees workspace-relative path guidance.
+
+```python
+from pathlib import Path
+
+from agentlane.harness.tools import WorkspaceToolsShim
+
+WORKSPACE = Path.cwd()
+
+shims = (WorkspaceToolsShim(WORKSPACE),)
+```
+
+For a trusted local prototype that needs direct control over the tool set, use
+the standard tools directly. A specific `cwd` controls relative path
+resolution; it is not a sandbox.
 
 ```python
 from pathlib import Path
@@ -50,17 +64,14 @@ For a workspace-bounded coding assistant, pass an explicit permission policy:
 
 ```python
 from agentlane.harness.tools import (
-    HarnessToolsShim,
+    WorkspaceToolsShim,
     WorkspaceToolPermissionPolicy,
-    base_harness_tools,
 )
 
 shims = (
-    HarnessToolsShim(
-        base_harness_tools(
-            cwd=WORKSPACE,
-            permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
-        ),
+    WorkspaceToolsShim(
+        WORKSPACE,
+        permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
     ),
 )
 ```
@@ -73,6 +84,25 @@ behavior, see [Tool permissions](./tools-permissions.md).
 `base_harness_tools()` returns `read`, `find`, `grep`, `patch`, `write`,
 `write_plan`, `bash`, and `agent`. The public base-tools set currently does
 not include `ls`.
+
+Pass `include=` or `exclude=` when an application needs the standard set with
+only selected tools. Selectors use the model-visible tool names above, and
+returned tools keep the standard order:
+
+```python
+search_tools = base_harness_tools(
+    cwd=WORKSPACE,
+    include=("read", "find", "grep"),
+)
+
+no_shell_tools = base_harness_tools(
+    cwd=WORKSPACE,
+    exclude=("bash",),
+)
+```
+
+Unknown selector names raise `ValueError`. Passing the same name in both
+`include` and `exclude` also raises `ValueError`.
 
 You can also construct tools individually when an agent needs a custom tool set:
 

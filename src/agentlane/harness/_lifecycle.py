@@ -19,9 +19,9 @@ import asyncio
 import re
 from asyncio import Future, get_running_loop
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 from faker import Faker
 from pydantic import BaseModel
@@ -36,6 +36,7 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 
 from ._cancellation import cancel_task_callback, cancellation_relay_task
+from ._events import RunEventStream
 from ._handoff import (
     DefaultAgentToolInput,
     DelegatedTaskInput,
@@ -57,10 +58,14 @@ from ._run import (
     copy_run_state,
 )
 from ._stream import RunStream
+from ._stream_base import close_stream_callback
 from ._task import Task
 from ._tooling import INHERIT_TOOLS, ToolConfig
 from .shims import Shim, ShimBindingContext
 from .shims._manager import BoundShimManager
+
+if TYPE_CHECKING:
+    from .tools._approvals import ToolApprovalEvent
 
 
 class _EmptyAgentToolArgs(BaseModel):
@@ -298,6 +303,16 @@ class LifecycleRunner(Protocol):
         cancellation_token: CancellationToken | None = None,
     ) -> RunStream: ...
 
+    def run_events(
+        self,
+        agent: Task,
+        state: RunState,
+        *,
+        hooks: RunnerHooks | None = None,
+        approval_events: AsyncIterator["ToolApprovalEvent"] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunEventStream: ...
+
 
 @dataclass(slots=True)
 class _QueuedRunInput:
@@ -313,11 +328,14 @@ class _QueuedRunInput:
     future: Future[RunResult] | None
     """Future resolved with the final run result for terminal inputs."""
 
-    stream: RunStream | None
+    stream: RunStream | RunEventStream | None
     """Live stream handle for streamed inputs."""
 
     cancellation_token: CancellationToken | None
     """Optional cancellation token for the runner turn."""
+
+    approval_events: AsyncIterator["ToolApprovalEvent"] | None = None
+    """Optional brokered approval event source for event-streamed inputs."""
 
 
 class AgentLifecycle:
@@ -462,6 +480,49 @@ class AgentLifecycle:
 
         return stream
 
+    async def enqueue_input_events(
+        self,
+        *,
+        agent: Task,
+        runner: LifecycleRunner,
+        run_input: RunInput,
+        approval_events: AsyncIterator["ToolApprovalEvent"] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunEventStream:
+        """Queue one event-streamed run input and return its live stream handle."""
+        await self._ensure_bound_extensions(agent=agent)
+        internal_token = CancellationToken()
+        stream = RunEventStream(on_close=internal_token.cancel)
+        relay_task = cancellation_relay_task(
+            source=cancellation_token,
+            target=internal_token,
+        )
+        if relay_task is not None:
+            stream.add_cleanup(cancel_task_callback(relay_task))
+
+        queued_input = _QueuedRunInput(
+            run_input=run_input,
+            future=None,
+            stream=stream,
+            cancellation_token=internal_token,
+            approval_events=approval_events,
+        )
+        should_drain = False
+
+        async with self._lock:
+            self._pending_inputs.append(queued_input)
+            if not self._is_running:
+                self._is_running = True
+                should_drain = True
+
+        if should_drain:
+            drain_task = asyncio.create_task(
+                self._drain_pending_inputs(agent=agent, runner=runner)
+            )
+            drain_task.add_done_callback(_consume_drain_task_result)
+
+        return stream
+
     async def _ensure_bound_extensions(self, *, agent: Task) -> None:
         """Bind shims and resolve the cached hook composition once."""
         if self._bound_shim_manager is not None:
@@ -537,6 +598,23 @@ class AgentLifecycle:
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
+                    elif isinstance(active_input.stream, RunEventStream):
+                        runner_stream = runner.run_events(
+                            agent=agent,
+                            state=working_state,
+                            hooks=hooks,
+                            approval_events=active_input.approval_events,
+                            cancellation_token=active_input.cancellation_token,
+                        )
+                        active_input.stream.add_cleanup(
+                            close_stream_callback(runner_stream)
+                        )
+                        try:
+                            async for event in runner_stream:
+                                active_input.stream.emit(event)
+                            result = await runner_stream.result()
+                        finally:
+                            await runner_stream.aclose()
                     else:
                         runner_stream = runner.run_stream(
                             agent=agent,
@@ -544,9 +622,15 @@ class AgentLifecycle:
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
-                        async for event in runner_stream:
-                            active_input.stream.emit(event)
-                        result = await runner_stream.result()
+                        active_input.stream.add_cleanup(
+                            close_stream_callback(runner_stream)
+                        )
+                        try:
+                            async for event in runner_stream:
+                                active_input.stream.emit(event)
+                            result = await runner_stream.result()
+                        finally:
+                            await runner_stream.aclose()
                 except Exception as exc:  # noqa: BLE001
                     # Runner failures are contained: only this input's
                     # future is failed. The persisted baseline is unchanged,

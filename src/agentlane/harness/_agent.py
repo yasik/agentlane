@@ -1,7 +1,7 @@
 """Default harness agent primitive."""
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import AsyncIterator, Sequence
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -17,6 +17,7 @@ from agentlane.models import (
 )
 from agentlane.runtime import CancellationToken, Engine, on_message
 
+from ._events import RunEventStream
 from ._hooks import RunnerHooks
 from ._lifecycle import (
     AgentDescriptor,
@@ -32,6 +33,9 @@ from ._task import Task
 from ._tooling import merge_tools, resolve_tools
 from .shims import Shim
 from .shims._manager import BoundShimManager
+
+if TYPE_CHECKING:
+    from .tools._approvals import ToolApprovalEvent
 
 
 class Agent(Task):
@@ -201,6 +205,22 @@ class Agent(Task):
             agent=self,
             runner=self._runner,
             run_input=run_input,
+            cancellation_token=cancellation_token,
+        )
+
+    async def enqueue_input_events(
+        self,
+        run_input: RunInput,
+        *,
+        approval_events: AsyncIterator["ToolApprovalEvent"] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> RunEventStream:
+        """Queue one internal run input for high-level run events."""
+        return await self._lifecycle.enqueue_input_events(
+            agent=self,
+            runner=self._runner,
+            run_input=run_input,
+            approval_events=approval_events,
             cancellation_token=cancellation_token,
         )
 
