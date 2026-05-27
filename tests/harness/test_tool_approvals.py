@@ -74,6 +74,7 @@ def test_tool_approval_broker_resolves_pending_request(tmp_path: Path) -> None:
         assert resolved is True
         assert result == allowed
         assert broker.pending() == ()
+        assert broker.__dict__["_records"] == {}
         assert resolved_event.request_id == requested_event.request_id
         assert resolved_event.status == ToolApprovalStatus.RESOLVED
         assert resolved_event.record.final_decision == allowed

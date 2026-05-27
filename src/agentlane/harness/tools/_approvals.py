@@ -136,12 +136,8 @@ class ToolApprovalBroker:
         try:
             while True:
                 item = await queue.get()
-
-                # Sentinel value indicating the end of the event stream
                 if item is _TOOL_APPROVAL_EVENT_STREAM_END:
                     return
-
-                # Yield the event to the caller
                 yield cast(ToolApprovalEvent, item)
         finally:
             self._event_queues.discard(queue)
@@ -173,7 +169,7 @@ class ToolApprovalBroker:
             final_decision=decision,
         )
 
-        self._records[request_id] = completed_record
+        self._records.pop(request_id, None)
         waiter = self._waiters.pop(request_id, None)
         if waiter is not None and not waiter.done():
             waiter.set_result(decision)

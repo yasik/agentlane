@@ -211,6 +211,16 @@ async def _collect_run_events(stream: Any) -> list[RunEvent]:
     return events
 
 
+async def _wait_until_no_pending_approvals(
+    broker: ToolApprovalBroker,
+) -> None:
+    for _ in range(100):
+        if broker.pending() == ():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("Expected pending approvals to be discarded.")
+
+
 def _state_snapshots(events: list[RunEvent]) -> list[RunStateSnapshotEvent]:
     return [event for event in events if isinstance(event, RunStateSnapshotEvent)]
 
@@ -475,5 +485,73 @@ def test_default_agent_run_events_can_merge_tool_approval_events(
             ToolApprovalStatus.RESOLVED,
         ]
         assert approval_events[0].event.record.request.tool_name == "read"
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_run_events_close_cancels_without_committing_state_or_approval(
+    tmp_path: Path,
+) -> None:
+    class RequireApprovalPolicy:
+        def check(
+            self,
+            request: ToolPermissionRequest,
+        ) -> ToolPermissionDecision:
+            del request
+            return ToolPermissionDecision.require_approval()
+
+    async def scenario() -> None:
+        target = tmp_path / "notes.txt"
+        target.write_text("approved notes", encoding="utf-8")
+        broker = ToolApprovalBroker()
+        read_definition = read_tool(
+            cwd=tmp_path,
+            permissions=RequireApprovalPolicy(),
+            approval_callback=broker.callback,
+        )
+        model = _StreamingSequenceModel(
+            [
+                _make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="approval_cancel_1",
+                            name="read",
+                            arguments='{"path":"notes.txt"}',
+                        )
+                    ],
+                )
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="ApprovalCancelEvents",
+                model=model,
+                tools=Tools(tools=[read_definition.tool]),
+            )
+        )
+
+        stream = await agent.run_events(
+            "read the note",
+            approval_events=broker.events(),
+        )
+        async for event in stream:
+            if (
+                isinstance(event, RunToolApprovalEvent)
+                and event.event.status == ToolApprovalStatus.PENDING
+            ):
+                assert len(broker.pending()) == 1
+                await stream.aclose()
+                break
+
+        try:
+            await stream.result()
+        except asyncio.CancelledError:
+            pass
+        else:
+            raise AssertionError("Expected cancelled run-events result.")
+
+        await _wait_until_no_pending_approvals(broker)
+        assert agent.run_state is None
 
     asyncio.run(scenario())

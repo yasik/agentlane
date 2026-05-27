@@ -26,10 +26,11 @@ from .._lifecycle import AgentDescriptor
 from .._run import RunInput, RunResult, RunState, copy_run_state
 from .._runner import Runner
 from .._stream import RunStream
+from .._stream_base import close_stream_callback
 from ._base import AgentBase
 
 if TYPE_CHECKING:
-    from ..tools._approvals import ToolApprovalEvent
+    from ..tools import ToolApprovalEvent
 
 
 class DefaultAgent(AgentBase):
@@ -431,10 +432,16 @@ class DefaultAgent(AgentBase):
             input,
             cancellation_token=cancellation_token,
         )
-        async for event in low_level_stream:
-            stream.emit(event)
+        stream.add_cleanup(close_stream_callback(low_level_stream))
 
-        result = await low_level_stream.result()
+        try:
+            async for event in low_level_stream:
+                stream.emit(event)
+
+            result = await low_level_stream.result()
+        finally:
+            await low_level_stream.aclose()
+
         if result.run_state is not None:
             return result
 
@@ -471,10 +478,16 @@ class DefaultAgent(AgentBase):
             approval_events=approval_events,
             cancellation_token=cancellation_token,
         )
-        async for event in low_level_stream:
-            stream.emit(event)
+        stream.add_cleanup(close_stream_callback(low_level_stream))
 
-        result = await low_level_stream.result()
+        try:
+            async for event in low_level_stream:
+                stream.emit(event)
+
+            result = await low_level_stream.result()
+        finally:
+            await low_level_stream.aclose()
+
         if result.run_state is not None:
             return result
 

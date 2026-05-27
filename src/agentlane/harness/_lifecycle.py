@@ -58,6 +58,7 @@ from ._run import (
     copy_run_state,
 )
 from ._stream import RunStream
+from ._stream_base import close_stream_callback
 from ._task import Task
 from ._tooling import INHERIT_TOOLS, ToolConfig
 from .shims import Shim, ShimBindingContext
@@ -605,9 +606,15 @@ class AgentLifecycle:
                             approval_events=active_input.approval_events,
                             cancellation_token=active_input.cancellation_token,
                         )
-                        async for event in runner_stream:
-                            active_input.stream.emit(event)
-                        result = await runner_stream.result()
+                        active_input.stream.add_cleanup(
+                            close_stream_callback(runner_stream)
+                        )
+                        try:
+                            async for event in runner_stream:
+                                active_input.stream.emit(event)
+                            result = await runner_stream.result()
+                        finally:
+                            await runner_stream.aclose()
                     else:
                         runner_stream = runner.run_stream(
                             agent=agent,
@@ -615,9 +622,15 @@ class AgentLifecycle:
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
-                        async for event in runner_stream:
-                            active_input.stream.emit(event)
-                        result = await runner_stream.result()
+                        active_input.stream.add_cleanup(
+                            close_stream_callback(runner_stream)
+                        )
+                        try:
+                            async for event in runner_stream:
+                                active_input.stream.emit(event)
+                            result = await runner_stream.result()
+                        finally:
+                            await runner_stream.aclose()
                 except Exception as exc:  # noqa: BLE001
                     # Runner failures are contained: only this input's
                     # future is failed. The persisted baseline is unchanged,
