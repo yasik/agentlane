@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from agentlane.util import CancellationToken
+
 from ._identity import AgentId, CorrelationId, MessageId, TopicId
 
 
@@ -29,3 +31,6 @@ class MessageContext:
 
     attempt: int
     """Delivery attempt number (1-based)."""
+
+    cancellation_token: CancellationToken
+    """Cooperative cancellation token for this delivery; forward to outbound sends."""

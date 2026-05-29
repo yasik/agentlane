@@ -44,7 +44,8 @@ from agentlane.models import (
     Tools,
     get_content_or_none,
 )
-from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.runtime import SingleThreadedRuntimeEngine
+from agentlane.util import CancellationToken
 
 
 def _make_assistant_response(

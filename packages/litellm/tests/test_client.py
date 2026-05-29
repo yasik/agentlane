@@ -21,7 +21,6 @@ from agentlane.models import (
     ToolExecutionContext,
     Tools,
 )
-from agentlane.runtime import CancellationToken
 from agentlane.tracing import (
     DefaultTraceProvider,
     TracingProcessor,
@@ -29,6 +28,7 @@ from agentlane.tracing import (
     set_trace_provider,
     trace,
 )
+from agentlane.util import CancellationToken
 
 
 class EchoArgs(BaseModel):

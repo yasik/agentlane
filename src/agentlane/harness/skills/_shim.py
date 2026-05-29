@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from agentlane.models import Tool, ToolExecutionContext, Tools
 from agentlane.models.run import RunContext
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 from .._run import RunState, ShimState
 from .._tooling import exclude_tools, filter_tools, merge_tools

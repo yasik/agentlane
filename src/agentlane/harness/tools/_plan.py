@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from agentlane.models import Tool, ToolExecutionContext
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 from ._types import HarnessToolDefinition
 

@@ -2,7 +2,7 @@
 
 import asyncio
 
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 
 def test_cancellation_token_cancels_linked_future() -> None:

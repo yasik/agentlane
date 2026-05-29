@@ -22,11 +22,11 @@ from agentlane.messaging import (
     MessageContext,
 )
 from agentlane.runtime import (
-    CancellationToken,
     Engine,
     SingleThreadedRuntimeEngine,
     on_message,
 )
+from agentlane.util import CancellationToken
 
 
 class _CounterTask(Task):

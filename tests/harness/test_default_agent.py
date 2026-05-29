@@ -20,7 +20,8 @@ from agentlane.models import (
     ModelStreamEvent,
     ModelStreamEventKind,
 )
-from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.runtime import SingleThreadedRuntimeEngine
+from agentlane.util import CancellationToken
 
 
 def make_assistant_response(content: str) -> ModelResponse:

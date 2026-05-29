@@ -44,7 +44,8 @@ from agentlane.models import (
     ToolSpec,
     get_content_or_none,
 )
-from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.runtime import SingleThreadedRuntimeEngine
+from agentlane.util import CancellationToken
 
 
 def _message(role: str, content: object) -> MessageDict:

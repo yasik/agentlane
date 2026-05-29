@@ -14,7 +14,8 @@ from agentlane.harness._run import RunHistoryItem, copy_run_state
 from agentlane.harness.shims import Shim
 from agentlane.messaging import AgentId, DeliveryStatus
 from agentlane.models import ModelResponse
-from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.runtime import SingleThreadedRuntimeEngine
+from agentlane.util import CancellationToken
 
 
 def make_assistant_response(content: str) -> ModelResponse:

@@ -37,7 +37,8 @@ from agentlane.models import (
     ToolExecutor,
     Tools,
 )
-from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.runtime import SingleThreadedRuntimeEngine
+from agentlane.util import CancellationToken
 
 
 def _full_output_path_from_output(output: str) -> Path:

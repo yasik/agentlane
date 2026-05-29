@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable
 
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 
 def cancellation_relay_task(

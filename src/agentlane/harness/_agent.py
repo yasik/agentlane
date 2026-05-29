@@ -15,7 +15,8 @@ from agentlane.models import (
     Tools,
     ToolSpec,
 )
-from agentlane.runtime import CancellationToken, Engine, on_message
+from agentlane.runtime import Engine, on_message
+from agentlane.util import CancellationToken
 
 from ._events import RunEventStream
 from ._hooks import RunnerHooks

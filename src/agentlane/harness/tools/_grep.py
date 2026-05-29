@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ripgrepy import RipGrepNotFound, Ripgrepy
 
 from agentlane.models import Tool, ToolExecutionContext
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 from ._gitignore import GitignoreMatcher
 from ._output import (

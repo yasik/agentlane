@@ -12,11 +12,11 @@ from uuid import uuid4
 
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
 from agentlane.runtime import (
-    CancellationToken,
     RuntimeEngine,
     runtime_scope,
     single_threaded_runtime,
 )
+from agentlane.util import CancellationToken
 
 from .._agent import Agent as RuntimeAgent
 from .._cancellation import cancel_task_callback, cancellation_relay_task

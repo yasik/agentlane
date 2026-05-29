@@ -9,7 +9,7 @@ from wcmatch import glob as wcmatch_glob
 from wcmatch.glob import WcMatcher
 
 from agentlane.models import Tool, ToolExecutionContext
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 from ._gitignore import GitignoreMatcher
 from ._output import FIND_DEFAULT_LIMIT, TEXT_MAX_BYTES

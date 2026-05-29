@@ -41,7 +41,8 @@ from agentlane.models import (
     retry_on_errors,
 )
 from agentlane.models.run import DefaultRunContext
-from agentlane.runtime import CancellationToken, RuntimeEngine
+from agentlane.runtime import RuntimeEngine
+from agentlane.util import CancellationToken
 
 from ._cancellation import cancel_task_callback
 from ._events import (

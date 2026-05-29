@@ -42,9 +42,8 @@ from agentlane.transport import (
     payload_to_wire_payload,
     wire_payload_to_payload,
 )
-from agentlane.util import utc_now_ms
+from agentlane.util import CancellationToken, utc_now_ms
 
-from ._cancellation import CancellationToken
 from ._dispatcher import Dispatcher
 from ._engine import Engine
 from ._message_helpers import payload_from_value, recipient_for_publish_route

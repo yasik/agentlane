@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import WorkspaceToolsShim
 from agentlane.models import Tool
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 from .tools_test_utils import run_state
 

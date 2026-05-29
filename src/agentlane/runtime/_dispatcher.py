@@ -68,6 +68,7 @@ class Dispatcher:
             message_id=task.envelope.message_id,
             correlation_id=task.envelope.correlation_id,
             attempt=task.attempt,
+            cancellation_token=task.cancellation_token,
         )
 
         try:

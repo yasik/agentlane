@@ -9,8 +9,8 @@ from agentlane.messaging import (
     PublishAck,
     TopicId,
 )
+from agentlane.util import CancellationToken
 
-from ._cancellation import CancellationToken
 from ._engine import Engine
 
 

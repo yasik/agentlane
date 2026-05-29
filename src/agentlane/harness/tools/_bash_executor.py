@@ -14,7 +14,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any, Protocol
 
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 from ._output import BASH_MAX_BYTES, BASH_MAX_LINES, TruncatedOutput, truncate_output
 

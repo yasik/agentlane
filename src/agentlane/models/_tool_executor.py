@@ -14,7 +14,8 @@ from typing import Any
 import structlog
 from pydantic import ValidationError
 
-from ..runtime import CancellationToken
+from agentlane.util import CancellationToken
+
 from ..tracing import Span, function_span
 from ._exceptions import ModelBehaviorError
 from ._interface import ModelTracing, Tools

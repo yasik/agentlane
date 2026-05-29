@@ -16,7 +16,7 @@ Stateful agents also need one shared lifecycle control:
 
 import abc
 
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 from .._run import RunInput, RunResult
 from .._stream import RunStream

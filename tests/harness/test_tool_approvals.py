@@ -17,7 +17,7 @@ from agentlane.harness.tools import (
     read_tool,
 )
 from agentlane.models import Tool
-from agentlane.runtime import CancellationToken
+from agentlane.util import CancellationToken
 
 
 def _request(tmp_path: Path) -> ToolPermissionRequest:

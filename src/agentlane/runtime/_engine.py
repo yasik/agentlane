@@ -11,8 +11,7 @@ from agentlane.messaging import (
     PublishAck,
     TopicId,
 )
-
-from ._cancellation import CancellationToken
+from agentlane.util import CancellationToken
 
 
 class Engine(abc.ABC):

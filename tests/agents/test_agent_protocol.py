@@ -16,11 +16,11 @@ from agentlane.messaging import (
 from agentlane.runtime import (
     Agent,
     BaseAgent,
-    CancellationToken,
     Engine,
     is_on_message_handler,
     on_message,
 )
+from agentlane.util import CancellationToken
 
 
 class _EchoAgent:

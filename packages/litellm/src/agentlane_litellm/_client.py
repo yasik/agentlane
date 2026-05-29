@@ -31,8 +31,8 @@ from agentlane.models import (
     resolve_output_schema,
     retry_on_errors,
 )
-from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span, generation_span
+from agentlane.util import CancellationToken
 
 from .types import (
     APIConnectionError,

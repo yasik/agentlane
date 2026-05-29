@@ -4,8 +4,7 @@ from asyncio import Future
 from dataclasses import dataclass, field
 
 from agentlane.messaging import AgentId, MessageEnvelope
-
-from ._cancellation import CancellationToken
+from agentlane.util import CancellationToken
 
 
 @dataclass(slots=True)

@@ -10,7 +10,8 @@ from typing import Annotated, Any, get_args, get_origin, get_type_hints, overloa
 
 from pydantic import BaseModel, Field, create_model
 
-from ..runtime import CancellationToken
+from agentlane.util import CancellationToken
+
 from ._strict_schema import ensure_strict_json_schema
 
 _FRAMEWORK_TOOL_PARAMETERS = frozenset(("cancellation_token", "context"))
