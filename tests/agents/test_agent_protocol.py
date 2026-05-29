@@ -54,6 +54,7 @@ class _SendCapture:
     sender: AgentId | None
     correlation_id: CorrelationId | None
     cancellation_token: CancellationToken | None
+    message_id: MessageId | None
 
 
 @dataclass(slots=True)
@@ -79,6 +80,7 @@ class _StubEngine(Engine):
         correlation_id: CorrelationId | None = None,
         cancellation_token: CancellationToken | None = None,
         idempotency_key: IdempotencyKey | None = None,
+        message_id: MessageId | None = None,
     ) -> DeliveryOutcome:
         _ = idempotency_key
         self.last_send = _SendCapture(
@@ -87,6 +89,7 @@ class _StubEngine(Engine):
             sender=sender,
             correlation_id=correlation_id,
             cancellation_token=cancellation_token,
+            message_id=message_id,
         )
         return DeliveryOutcome.delivered(
             message_id=MessageId.new(),
@@ -136,12 +139,14 @@ def test_base_agent_uses_bound_id_as_sender() -> None:
         agent.bind_agent_id(agent_id)
         correlation_id = CorrelationId.new()
         cancellation_token = CancellationToken()
+        message_id = MessageId.new()
 
         await agent.send_message(
             "work",
             recipient="worker",
             correlation_id=correlation_id,
             cancellation_token=cancellation_token,
+            message_id=message_id,
         )
         await agent.publish_message(
             "event",
@@ -156,6 +161,7 @@ def test_base_agent_uses_bound_id_as_sender() -> None:
         assert engine.last_send.sender == agent_id
         assert engine.last_send.correlation_id == correlation_id
         assert engine.last_send.cancellation_token is cancellation_token
+        assert engine.last_send.message_id == message_id
         assert engine.last_publish.sender == agent_id
         assert engine.last_publish.correlation_id == correlation_id
         assert engine.last_publish.cancellation_token is cancellation_token

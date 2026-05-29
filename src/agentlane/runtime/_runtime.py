@@ -419,6 +419,7 @@ class RuntimeEngine(Engine, abc.ABC):
         correlation_id: CorrelationId | None = None,
         cancellation_token: CancellationToken | None = None,
         idempotency_key: IdempotencyKey | None = None,
+        message_id: MessageId | None = None,
     ) -> DeliveryOutcome:
         """Send one direct RPC-style message and await terminal delivery outcome.
 
@@ -436,6 +437,7 @@ class RuntimeEngine(Engine, abc.ABC):
             correlation_id: Optional causal chain id.
             cancellation_token: Optional shared cancellation token.
             idempotency_key: Optional deduplication key.
+            message_id: Optional caller-provided envelope id.
 
         Returns:
             DeliveryOutcome: Terminal delivery outcome.
@@ -446,22 +448,25 @@ class RuntimeEngine(Engine, abc.ABC):
             # Recipient may be explicit AgentId or type lookup.
             recipient_id = self._resolve_recipient(recipient=recipient)
         except LookupError as exc:
-            # Unresolvable targets are rejected before enqueue.
+            # Unresolvable targets are rejected before enqueue. Honor a
+            # caller-provided id so the rejection outcome still carries it.
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.POLICY_REJECTED,
-                message_id=MessageId.new(),
+                message_id=message_id or MessageId.new(),
                 correlation_id=correlation,
                 message=str(exc),
                 retryable=False,
             )
 
         # RPC request envelope carries fixed recipient and shared correlation id.
+        # A caller-provided message_id lets the sender and receiver agree on the id.
         envelope = MessageEnvelope.new_rpc_request(
             sender=sender,
             recipient=recipient_id,
             payload=payload_from_value(message),
             correlation_id=correlation,
             idempotency_key=idempotency_key,
+            message_id=message_id,
         )
         return await self._submit_rpc_task(
             envelope=envelope,

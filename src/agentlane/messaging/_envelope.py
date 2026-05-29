@@ -96,6 +96,7 @@ class MessageEnvelope:
         deadline_ms: int | None = None,
         trace_id: str | None = None,
         idempotency_key: IdempotencyKey | None = None,
+        message_id: MessageId | None = None,
     ) -> Self:
         """Create a normalized RPC request envelope.
 
@@ -107,12 +108,13 @@ class MessageEnvelope:
             deadline_ms: Optional absolute deadline in epoch milliseconds.
             trace_id: Optional tracing id.
             idempotency_key: Optional deduplication key.
+            message_id: Optional caller-provided envelope id.
 
         Returns:
             Self: New RPC request envelope instance.
         """
         return cls(
-            message_id=MessageId.new(),
+            message_id=message_id or MessageId.new(),
             correlation_id=correlation_id,
             kind=MessageKind.RPC_REQUEST,
             sender=sender,
