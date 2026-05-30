@@ -16,6 +16,7 @@ from agentlane.messaging import (
     TopicId,
 )
 from agentlane.runtime import (
+    CancellationToken,
     MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
@@ -135,6 +136,51 @@ def test_worker_runtime_routes_direct_rpc_across_workers() -> None:
             await host.stop_when_idle()
 
     asyncio.run(scenario())
+
+
+def test_handler_receives_cancellation_token_across_workers() -> None:
+    """A handler gets a live cancellation_token after a cross-worker delivery.
+
+    Only the MessageEnvelope is serialized over the wire; the MessageContext is rebuilt
+    on the receiving worker, so the token arrives as a live local object.
+    """
+    captured: list[CancellationToken] = []
+
+    class TokenCapturingAgent(_ProtocolAgentMixin):
+        @on_message
+        async def handle(self, payload: str, context: MessageContext) -> object:
+            _ = payload
+            captured.append(context.cancellation_token)
+            return {"cancelled": context.cancellation_token.is_cancelled}
+
+    async def scenario() -> None:
+        host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
+        await host.start()
+
+        sender_worker = WorkerAgentRuntime(host_address=host.address)
+        receiver_worker = WorkerAgentRuntime(host_address=host.address)
+        receiver_worker.register_factory("token", lambda _engine: TokenCapturingAgent())
+
+        await sender_worker.start()
+        await receiver_worker.start()
+
+        try:
+            outcome = await sender_worker.send_message(
+                "ping",
+                recipient=AgentId.from_values("token", "remote-1"),
+            )
+            assert outcome.status == DeliveryStatus.DELIVERED
+            assert outcome.response_payload == {"cancelled": False}
+        finally:
+            await sender_worker.stop_when_idle()
+            await receiver_worker.stop_when_idle()
+            await host.stop_when_idle()
+
+    asyncio.run(scenario())
+
+    assert len(captured) == 1
+    assert isinstance(captured[0], CancellationToken)
+    assert not captured[0].is_cancelled
 
 
 def test_worker_runtime_routes_publish_across_workers() -> None:
