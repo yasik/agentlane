@@ -185,12 +185,15 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
             raise RuntimeError("Worker runtime is not connected to a host.")
 
         correlation = correlation_id or CorrelationId.new()
+        # Resolve once and propagate so the rejection outcome and the envelope
+        # share one id and a caller-provided id is never overridden.
+        message_id = message_id or MessageId.new()
         try:
             recipient_id = self._resolve_recipient(recipient=recipient)
         except LookupError as exc:
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.POLICY_REJECTED,
-                message_id=message_id or MessageId.new(),
+                message_id=message_id,
                 correlation_id=correlation,
                 message=str(exc),
                 retryable=False,

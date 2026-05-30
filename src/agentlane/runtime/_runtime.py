@@ -444,22 +444,23 @@ class RuntimeEngine(Engine, abc.ABC):
         """
         await self.start()
         correlation = correlation_id or CorrelationId.new()
+        # Resolve the id once and propagate it, so the rejection outcome and the
+        # envelope share one id and a caller-provided id is never overridden.
+        message_id = message_id or MessageId.new()
         try:
             # Recipient may be explicit AgentId or type lookup.
             recipient_id = self._resolve_recipient(recipient=recipient)
         except LookupError as exc:
-            # Unresolvable targets are rejected before enqueue. Honor a
-            # caller-provided id so the rejection outcome still carries it.
+            # Unresolvable targets are rejected before enqueue.
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.POLICY_REJECTED,
-                message_id=message_id or MessageId.new(),
+                message_id=message_id,
                 correlation_id=correlation,
                 message=str(exc),
                 retryable=False,
             )
 
         # RPC request envelope carries fixed recipient and shared correlation id.
-        # A caller-provided message_id lets the sender and receiver agree on the id.
         envelope = MessageEnvelope.new_rpc_request(
             sender=sender,
             recipient=recipient_id,

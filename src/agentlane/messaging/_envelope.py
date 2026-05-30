@@ -92,11 +92,11 @@ class MessageEnvelope:
         sender: AgentId | None,
         recipient: AgentId,
         payload: Payload,
+        message_id: MessageId,
         correlation_id: CorrelationId | None = None,
         deadline_ms: int | None = None,
         trace_id: str | None = None,
         idempotency_key: IdempotencyKey | None = None,
-        message_id: MessageId | None = None,
     ) -> Self:
         """Create a normalized RPC request envelope.
 
@@ -104,17 +104,17 @@ class MessageEnvelope:
             sender: Optional sender identity.
             recipient: Direct RPC recipient identity.
             payload: Canonical payload container.
+            message_id: Unique envelope identifier supplied by the caller.
             correlation_id: Optional causal chain id.
             deadline_ms: Optional absolute deadline in epoch milliseconds.
             trace_id: Optional tracing id.
             idempotency_key: Optional deduplication key.
-            message_id: Optional caller-provided envelope id.
 
         Returns:
             Self: New RPC request envelope instance.
         """
         return cls(
-            message_id=message_id or MessageId.new(),
+            message_id=message_id,
             correlation_id=correlation_id,
             kind=MessageKind.RPC_REQUEST,
             sender=sender,
