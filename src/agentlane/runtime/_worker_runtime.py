@@ -25,8 +25,9 @@ from agentlane.messaging import (
     Subscription,
     TopicId,
 )
-from agentlane.util import CancellationToken, utc_now_ms
+from agentlane.util import utc_now_ms
 
+from ._cancellation import CancellationToken
 from ._distributed_grpc import (
     HostServiceStub,
     JsonObject,

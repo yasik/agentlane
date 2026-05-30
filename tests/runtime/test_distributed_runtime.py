@@ -9,7 +9,6 @@ from agentlane.messaging import (
     CorrelationId,
     DeliveryMode,
     DeliveryStatus,
-    MessageContext,
     MessageId,
     MessageKind,
     Payload,
@@ -17,6 +16,7 @@ from agentlane.messaging import (
     TopicId,
 )
 from agentlane.runtime import (
+    MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     distributed_runtime,

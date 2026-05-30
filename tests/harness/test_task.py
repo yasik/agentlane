@@ -19,14 +19,14 @@ from agentlane.messaging import (
     AgentType,
     CorrelationId,
     DeliveryStatus,
-    MessageContext,
 )
 from agentlane.runtime import (
+    CancellationToken,
     Engine,
+    MessageContext,
     SingleThreadedRuntimeEngine,
     on_message,
 )
-from agentlane.util import CancellationToken
 
 
 class _CounterTask(Task):

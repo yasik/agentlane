@@ -8,7 +8,6 @@ from agentlane.messaging import (
     CorrelationId,
     DeliveryOutcome,
     IdempotencyKey,
-    MessageContext,
     MessageId,
     PublishAck,
     TopicId,
@@ -16,11 +15,12 @@ from agentlane.messaging import (
 from agentlane.runtime import (
     Agent,
     BaseAgent,
+    CancellationToken,
     Engine,
+    MessageContext,
     is_on_message_handler,
     on_message,
 )
-from agentlane.util import CancellationToken
 
 
 class _EchoAgent:

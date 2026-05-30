@@ -6,7 +6,7 @@ from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import HarnessToolsShim, plan_tool
 from agentlane.models.run import DefaultRunContext
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken
 
 from .tools_test_utils import (
     SequenceModel,

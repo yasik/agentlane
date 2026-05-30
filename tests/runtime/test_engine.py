@@ -11,12 +11,12 @@ from agentlane.messaging import (
     DeliveryMode,
     DeliveryOutcome,
     DeliveryStatus,
-    MessageContext,
     TopicId,
 )
 from agentlane.runtime import (
     BaseAgent,
     DistributedRuntimeEngine,
+    MessageContext,
     SingleThreadedRuntimeEngine,
     distributed_runtime,
     on_message,

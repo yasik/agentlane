@@ -15,7 +15,7 @@ from agentlane.models import (
     Tools,
     as_tool,
 )
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken
 
 MODEL_NAME = "gpt-5.4-mini"
 QUESTION = (

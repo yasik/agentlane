@@ -21,8 +21,7 @@ from agentlane.harness.tools import (
 from agentlane.harness.tools._shim import render_harness_tools_prompt
 from agentlane.messaging import DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import MessageDict, ModelResponse, Tools
-from agentlane.runtime import SingleThreadedRuntimeEngine
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
 from .tools_test_utils import (
     SequenceModel,

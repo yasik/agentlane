@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from agentlane.models import Tool, ToolExecutionContext
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken
 
 from ._output import TEXT_MAX_BYTES, TEXT_MAX_LINES
 from ._paths import ToolPathResolver

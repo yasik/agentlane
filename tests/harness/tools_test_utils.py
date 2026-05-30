@@ -16,7 +16,7 @@ from agentlane.models import (
     ToolExecutionContext,
     Tools,
 )
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken
 
 
 class EchoArgs(BaseModel):

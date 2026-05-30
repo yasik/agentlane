@@ -1,11 +1,11 @@
-"""Cooperative cancellation primitive shared across messaging, runtime, and extensions."""
+"""Cooperative cancellation primitive shared by runtime and extensions."""
 
 import asyncio
 from typing import Any
 
 
 class CancellationToken:
-    """Cooperative cancellation token for message delivery, model, and tool execution."""
+    """Cooperative cancellation token for runtime, model, and tool execution."""
 
     def __init__(self) -> None:
         """Create a token in non-cancelled state."""

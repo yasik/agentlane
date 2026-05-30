@@ -41,7 +41,7 @@ from agentlane.harness.tools import (
     write_tool,
 )
 from agentlane.models import MessageDict, Model, ModelResponse, ToolCall, Tools
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken
 
 
 def _make_tool_call(

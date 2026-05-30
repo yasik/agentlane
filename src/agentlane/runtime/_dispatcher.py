@@ -9,11 +9,11 @@ from typing import Union, cast, get_origin, get_type_hints
 from agentlane.messaging import (
     DeliveryOutcome,
     DeliveryStatus,
-    MessageContext,
     MessageKind,
 )
 
 from ._engine import Engine
+from ._message_context import MessageContext
 from ._protocol import Agent, is_on_message_handler
 from ._registry import AgentRegistry
 from ._types import DeliveryTask

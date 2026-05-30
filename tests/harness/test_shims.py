@@ -22,8 +22,7 @@ from agentlane.models import (
     ToolExecutionContext,
     Tools,
 )
-from agentlane.runtime import SingleThreadedRuntimeEngine
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
 
 def make_assistant_response(

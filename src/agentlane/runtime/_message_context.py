@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass
 
-from agentlane.util import CancellationToken
+from agentlane.messaging import AgentId, CorrelationId, MessageId, TopicId
 
-from ._identity import AgentId, CorrelationId, MessageId, TopicId
+from ._cancellation import CancellationToken
 
 
 @dataclass(slots=True)

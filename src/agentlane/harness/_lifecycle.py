@@ -33,7 +33,7 @@ from agentlane.models import (
     PromptSpec,
     ToolSpec,
 )
-from agentlane.util import CancellationToken
+from agentlane.runtime import CancellationToken
 
 from ._cancellation import cancel_task_callback, cancellation_relay_task
 from ._events import RunEventStream

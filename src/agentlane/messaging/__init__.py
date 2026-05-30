@@ -1,6 +1,5 @@
 """Messaging primitives for envelopes, routing, and outcomes."""
 
-from ._context import MessageContext
 from ._envelope import (
     MessageEnvelope,
     MessageKind,
@@ -45,7 +44,6 @@ __all__ = [
     "DeliveryOutcome",
     "DeliveryStatus",
     "IdempotencyKey",
-    "MessageContext",
     "MessageEnvelope",
     "MessageId",
     "MessageKind",
