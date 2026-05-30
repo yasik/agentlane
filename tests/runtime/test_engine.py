@@ -15,6 +15,7 @@ from agentlane.messaging import (
 )
 from agentlane.runtime import (
     BaseAgent,
+    CancellationToken,
     DistributedRuntimeEngine,
     MessageContext,
     SingleThreadedRuntimeEngine,
@@ -121,6 +122,32 @@ def test_runtime_reuses_registered_instance_by_agent_id() -> None:
         assert second.status == DeliveryStatus.DELIVERED
         assert second.response_payload == {"count": 2}
         assert agent.calls == ["one", "two"]
+
+    asyncio.run(scenario())
+
+
+def test_handler_receives_the_delivery_cancellation_token() -> None:
+    """The token a handler reads off MessageContext is the one passed to send_message."""
+    captured: list[CancellationToken] = []
+
+    class TokenAgent(_ProtocolAgentMixin):
+        @on_message
+        async def handle(self, payload: str, context: MessageContext) -> object:
+            _ = payload
+            captured.append(context.cancellation_token)
+            return None
+
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        agent_id = AgentId.from_values("token", "t1")
+        runtime.register_instance(agent_id, TokenAgent())
+        token = CancellationToken()
+
+        await runtime.send_message("ping", recipient=agent_id, cancellation_token=token)
+        await runtime.stop_when_idle()
+
+        assert len(captured) == 1
+        assert captured[0] is token
 
     asyncio.run(scenario())
 
