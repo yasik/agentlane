@@ -11,6 +11,7 @@ from agentlane.messaging import (
     DeliveryMode,
     DeliveryOutcome,
     DeliveryStatus,
+    MessageId,
     TopicId,
 )
 from agentlane.runtime import (
@@ -182,11 +183,16 @@ def test_runtime_rejects_ambiguous_keyless_target() -> None:
         runtime.register_instance(AgentId.from_values("worker", "a"), CounterAgent())
         runtime.register_instance(AgentId.from_values("worker", "b"), CounterAgent())
 
-        outcome = await runtime.send_message("ping", recipient="worker")
+        message_id = MessageId.new()
+        outcome = await runtime.send_message(
+            "ping", recipient="worker", message_id=message_id
+        )
 
         await runtime.stop_when_idle()
 
         assert outcome.status == DeliveryStatus.POLICY_REJECTED
+        # A caller-provided id is preserved even on pre-enqueue rejection.
+        assert outcome.message_id == message_id
 
     asyncio.run(scenario())
 
@@ -295,6 +301,46 @@ def test_base_agent_can_publish_message_with_runtime_capability() -> None:
         assert received == [{"event": "ready"}]
         assert observed_senders == [publisher_id]
         assert observed_correlations == [correlation_id]
+
+    asyncio.run(scenario())
+
+
+def test_send_message_with_caller_message_id_reaches_receiver() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        forwarded_id = MessageId.new()
+        observed_ids: list[MessageId] = []
+
+        class Sink(_ProtocolAgentMixin):
+            @on_message
+            async def handle(self, payload: str, context: MessageContext) -> object:
+                observed_ids.append(context.message_id)
+                return f"sink:{payload}"
+
+        class Relay(BaseAgent):
+            @on_message
+            async def handle(self, payload: str, context: MessageContext) -> object:
+                _ = context
+                outcome = await self.send_message(
+                    payload.upper(),
+                    recipient=AgentId.from_values("sink", "s1"),
+                    message_id=forwarded_id,
+                )
+                return outcome.message_id.value
+
+        runtime.register_instance(AgentId.from_values("sink", "s1"), Sink())
+        runtime.register_factory("relay", Relay)
+
+        outcome = await runtime.send_message(
+            "ping", recipient=AgentId.from_values("relay", "r1")
+        )
+        await runtime.stop_when_idle()
+
+        assert outcome.status == DeliveryStatus.DELIVERED
+        # The caller-provided id is echoed back to the sender via DeliveryOutcome
+        # and observed unchanged by the receiver via MessageContext.
+        assert outcome.response_payload == forwarded_id.value
+        assert observed_ids == [forwarded_id]
 
     asyncio.run(scenario())
 

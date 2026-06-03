@@ -10,7 +10,7 @@ from ._context import (
 from ._engine import Engine
 from ._message_context import MessageContext
 from ._protocol import Agent, is_on_message_handler, on_message
-from ._registry import AgentRegistry
+from ._registry import AgentFactory, AgentRegistry
 from ._runtime import RuntimeEngine, SingleThreadedRuntimeEngine
 from ._scheduler import (
     PerAgentMailboxScheduler,
@@ -20,6 +20,7 @@ from ._worker_runtime import DistributedRuntimeEngine, WorkerAgentRuntime
 from ._worker_runtime_host import WorkerAgentRuntimeHost
 
 __all__ = [
+    "AgentFactory",
     "AgentRegistry",
     "Agent",
     "BaseAgent",
