@@ -80,6 +80,12 @@ Correlation is a separate concern. Preserve `correlation_id` when work should be
 traceable across multiple hops. Use `idempotency_key` when retries need
 deduplication semantics at the transport or runtime boundary.
 
+By default the runtime generates the envelope `message_id`. Pass an explicit
+`message_id` to `send_message(...)` when the sender must know the id before
+delivery — for example to bridge trace context across a hop, where the sender
+keys a snapshot under the id and the receiver looks the same id up via
+`MessageContext.message_id`.
+
 ## Example
 
 ```python

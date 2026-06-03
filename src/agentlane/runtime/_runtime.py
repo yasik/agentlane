@@ -419,6 +419,7 @@ class RuntimeEngine(Engine, abc.ABC):
         correlation_id: CorrelationId | None = None,
         cancellation_token: CancellationToken | None = None,
         idempotency_key: IdempotencyKey | None = None,
+        message_id: MessageId | None = None,
     ) -> DeliveryOutcome:
         """Send one direct RPC-style message and await terminal delivery outcome.
 
@@ -436,12 +437,16 @@ class RuntimeEngine(Engine, abc.ABC):
             correlation_id: Optional causal chain id.
             cancellation_token: Optional shared cancellation token.
             idempotency_key: Optional deduplication key.
+            message_id: Optional caller-provided envelope id.
 
         Returns:
             DeliveryOutcome: Terminal delivery outcome.
         """
         await self.start()
         correlation = correlation_id or CorrelationId.new()
+        # Resolve the id once and propagate it, so the rejection outcome and the
+        # envelope share one id and a caller-provided id is never overridden.
+        message_id = message_id or MessageId.new()
         try:
             # Recipient may be explicit AgentId or type lookup.
             recipient_id = self._resolve_recipient(recipient=recipient)
@@ -449,7 +454,7 @@ class RuntimeEngine(Engine, abc.ABC):
             # Unresolvable targets are rejected before enqueue.
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.POLICY_REJECTED,
-                message_id=MessageId.new(),
+                message_id=message_id,
                 correlation_id=correlation,
                 message=str(exc),
                 retryable=False,
@@ -462,6 +467,7 @@ class RuntimeEngine(Engine, abc.ABC):
             payload=payload_from_value(message),
             correlation_id=correlation,
             idempotency_key=idempotency_key,
+            message_id=message_id,
         )
         return await self._submit_rpc_task(
             envelope=envelope,

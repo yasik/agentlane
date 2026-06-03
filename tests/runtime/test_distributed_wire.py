@@ -103,6 +103,7 @@ def test_wire_envelope_roundtrip_restores_runtime_envelope() -> None:
         sender=sender,
         recipient=recipient,
         payload=_payload_for({"event": "ready"}),
+        message_id=MessageId("msg-1"),
         correlation_id=CorrelationId("corr-1"),
         deadline_ms=123456,
         trace_id="trace-1",

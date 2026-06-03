@@ -137,6 +137,48 @@ def test_worker_runtime_routes_direct_rpc_across_workers() -> None:
     asyncio.run(scenario())
 
 
+def test_worker_runtime_send_message_preserves_caller_message_id_across_workers() -> (
+    None
+):
+    async def scenario() -> None:
+        host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
+        await host.start()
+
+        observed_ids: list[MessageId] = []
+
+        class RecordingAgent(_ProtocolAgentMixin):
+            @on_message
+            async def handle(self, payload: str, context: MessageContext) -> object:
+                observed_ids.append(context.message_id)
+                return payload
+
+        sender_worker = WorkerAgentRuntime(host_address=host.address)
+        receiver_worker = WorkerAgentRuntime(host_address=host.address)
+        receiver_worker.register_factory("recorder", lambda _engine: RecordingAgent())
+
+        await sender_worker.start()
+        await receiver_worker.start()
+
+        message_id = MessageId.new()
+        try:
+            outcome = await sender_worker.send_message(
+                "ping",
+                recipient=AgentId.from_values("recorder", "remote-1"),
+                message_id=message_id,
+            )
+            assert outcome.status == DeliveryStatus.DELIVERED
+            # The caller-provided id survives the wire round-trip: the remote
+            # receiver observes it and the returned outcome echoes it.
+            assert outcome.message_id == message_id
+            assert observed_ids == [message_id]
+        finally:
+            await sender_worker.stop_when_idle()
+            await receiver_worker.stop_when_idle()
+            await host.stop_when_idle()
+
+    asyncio.run(scenario())
+
+
 def test_worker_runtime_routes_publish_across_workers() -> None:
     async def scenario() -> None:
         host = WorkerAgentRuntimeHost(address="127.0.0.1:0")

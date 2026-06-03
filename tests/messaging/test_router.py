@@ -6,6 +6,7 @@ from agentlane.messaging import (
     DeliveryMode,
     IdempotencyKey,
     MessageEnvelope,
+    MessageId,
     Payload,
     PayloadFormat,
     RoutingEngine,
@@ -129,6 +130,7 @@ def test_message_envelope_uses_typed_idempotency_key() -> None:
             format=PayloadFormat.JSON,
             data="hello",
         ),
+        message_id=MessageId.new(),
         idempotency_key=key,
     )
     publish_envelope = MessageEnvelope.new_publish_event(

@@ -170,6 +170,7 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
         correlation_id: CorrelationId | None = None,
         cancellation_token: CancellationToken | None = None,
         idempotency_key: IdempotencyKey | None = None,
+        message_id: MessageId | None = None,
     ) -> DeliveryOutcome:
         """Send one direct RPC through the host after catalog state is synchronized.
 
@@ -184,12 +185,15 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
             raise RuntimeError("Worker runtime is not connected to a host.")
 
         correlation = correlation_id or CorrelationId.new()
+        # Resolve once and propagate so the rejection outcome and the envelope
+        # share one id and a caller-provided id is never overridden.
+        message_id = message_id or MessageId.new()
         try:
             recipient_id = self._resolve_recipient(recipient=recipient)
         except LookupError as exc:
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.POLICY_REJECTED,
-                message_id=MessageId.new(),
+                message_id=message_id,
                 correlation_id=correlation,
                 message=str(exc),
                 retryable=False,
@@ -201,6 +205,7 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
             payload=payload_from_value(message),
             correlation_id=correlation,
             idempotency_key=idempotency_key,
+            message_id=message_id,
         )
         try:
             # The host remains the single routing authority even for worker-originated

@@ -6,6 +6,7 @@ from agentlane.messaging import (
     CorrelationId,
     DeliveryOutcome,
     IdempotencyKey,
+    MessageId,
     PublishAck,
     TopicId,
 )
@@ -63,6 +64,7 @@ class BaseAgent:
         correlation_id: CorrelationId | None = None,
         cancellation_token: CancellationToken | None = None,
         idempotency_key: IdempotencyKey | None = None,
+        message_id: MessageId | None = None,
     ) -> DeliveryOutcome:
         """Send a message through this agent's engine capability.
 
@@ -72,6 +74,7 @@ class BaseAgent:
             correlation_id: Optional causal chain id.
             cancellation_token: Optional shared cancellation token.
             idempotency_key: Optional deduplication key.
+            message_id: Optional caller-provided envelope id.
 
         Returns:
             DeliveryOutcome: Terminal delivery outcome for the RPC-style call.
@@ -83,6 +86,7 @@ class BaseAgent:
             correlation_id=correlation_id,
             cancellation_token=cancellation_token,
             idempotency_key=idempotency_key,
+            message_id=message_id,
         )
 
     async def publish_message(
