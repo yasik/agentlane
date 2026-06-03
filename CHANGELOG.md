@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-06-03
+
+AgentLane `0.9.0` turns the harness into a more practical host-app surface: generic sub-agents, first-party tool permission policies, approval/run-event streaming, and distributed example docs are now paired with runtime message identity and cancellation improvements.
+
+### Added
+
+- Added the generic spawned `agent` tool with inherited base tools, depth/thread guards, policy modes, and sanitized delegation failures ([`b3e62ec`](https://github.com/yasik/agentlane/commit/b3e62ec), [`fe60246`](https://github.com/yasik/agentlane/commit/fe60246), [`f55558a`](https://github.com/yasik/agentlane/commit/f55558a), [`f38eb6d`](https://github.com/yasik/agentlane/commit/f38eb6d), [`8186b08`](https://github.com/yasik/agentlane/commit/8186b08))
+- Added first-party tool permission grants, workspace/path-scope policies, approval-required decisions, approval events, and docs for composing local file and command access ([`8bd7353`](https://github.com/yasik/agentlane/commit/8bd7353), [`92f9f42`](https://github.com/yasik/agentlane/commit/92f9f42), [`a26092c`](https://github.com/yasik/agentlane/commit/a26092c), [`4daa279`](https://github.com/yasik/agentlane/commit/4daa279), [`fb75688`](https://github.com/yasik/agentlane/commit/fb75688), [`c6a335d`](https://github.com/yasik/agentlane/commit/c6a335d))
+- Added high-level harness run events and approval broker lifecycle support so hosts can observe run state, tool calls, approvals, and stream teardown through one event surface ([`c5a7e91`](https://github.com/yasik/agentlane/commit/c5a7e91), [`1ccc46d`](https://github.com/yasik/agentlane/commit/1ccc46d))
+- Added distributed harness agents documentation and a multi-process clinical inbox copilot example that demonstrates host/worker execution from the harness layer ([`57b5b31`](https://github.com/yasik/agentlane/commit/57b5b31), [`eeba50f`](https://github.com/yasik/agentlane/commit/eeba50f), [`b3ab07f`](https://github.com/yasik/agentlane/commit/b3ab07f))
+
+### Changed
+
+- Exported `AgentFactory` from the runtime public API and moved `MessageContext` to `agentlane.runtime` for clearer runtime-facing imports ([`689ac51`](https://github.com/yasik/agentlane/commit/689ac51), [`d33c59d`](https://github.com/yasik/agentlane/commit/d33c59d))
+- Let runtime callers provide a `message_id` to `send_message(...)` and propagated the resolved id through rejection outcomes and envelopes ([`a9d0224`](https://github.com/yasik/agentlane/commit/a9d0224), [`e48259a`](https://github.com/yasik/agentlane/commit/e48259a))
+- Split first-party harness tool docs into focused pages and refined README/doc examples around current distributed and tool-permission behavior ([`5d2b14a`](https://github.com/yasik/agentlane/commit/5d2b14a), [`4d9e72d`](https://github.com/yasik/agentlane/commit/4d9e72d), [`e862772`](https://github.com/yasik/agentlane/commit/e862772), [`927461b`](https://github.com/yasik/agentlane/commit/927461b))
+
+### Fixed
+
+- Fixed `MessageContext` cancellation propagation and covered it across in-process and cross-worker runtime paths ([`43f95ac`](https://github.com/yasik/agentlane/commit/43f95ac), [`6e50131`](https://github.com/yasik/agentlane/commit/6e50131), [`ad0221b`](https://github.com/yasik/agentlane/commit/ad0221b), [`6596ecd`](https://github.com/yasik/agentlane/commit/6596ecd))
+- Fixed the read base tool's model-facing output and tightened path resolution, allow-all policy boundaries, grep/search docs, and related tool docs consistency ([`5d69a9c`](https://github.com/yasik/agentlane/commit/5d69a9c), [`bf2704b`](https://github.com/yasik/agentlane/commit/bf2704b), [`35047ac`](https://github.com/yasik/agentlane/commit/35047ac), [`fd44746`](https://github.com/yasik/agentlane/commit/fd44746), [`d43400a`](https://github.com/yasik/agentlane/commit/d43400a))
+
 ## [0.8.0] - 2026-05-02
 
 AgentLane `0.8.0` expands the first-party harness base tools with patch editing and bash execution, then tightens their model-facing output and examples. This release also fixes repeated skill activation so active skills stay stable across turns.
@@ -140,6 +162,7 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
+[0.9.0]: https://github.com/yasik/agentlane/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/yasik/agentlane/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/yasik/agentlane/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/yasik/agentlane/compare/v0.6.0...v0.6.1
