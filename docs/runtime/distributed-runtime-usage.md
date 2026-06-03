@@ -24,8 +24,14 @@ other normal runtime APIs. The difference is that a host and a primary worker
 are created for you behind the scenes.
 
 ```python
-from agentlane.messaging import AgentId, MessageContext
-from agentlane.runtime import BaseAgent, Engine, distributed_runtime, on_message
+from agentlane.messaging import AgentId
+from agentlane.runtime import (
+    BaseAgent,
+    Engine,
+    MessageContext,
+    distributed_runtime,
+    on_message,
+)
 
 
 class CounterAgent(BaseAgent):
@@ -77,9 +83,10 @@ scheduler, and agent instances.
 ### Direct Send Across Workers
 
 ```python
-from agentlane.messaging import AgentId, MessageContext
+from agentlane.messaging import AgentId
 from agentlane.runtime import (
     BaseAgent,
+    MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     on_message,
@@ -125,9 +132,10 @@ Publish follows the same high-level pattern, but the host resolves all matching
 subscriptions before it forwards concrete deliveries to workers.
 
 ```python
-from agentlane.messaging import MessageContext, TopicId
+from agentlane.messaging import TopicId
 from agentlane.runtime import (
     BaseAgent,
+    MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     on_message,

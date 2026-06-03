@@ -34,7 +34,6 @@ from agentlane.messaging import (
     AgentId,
     DeliveryMode,
     DeliveryStatus,
-    MessageContext,
     TopicId,
 )
 from agentlane.models import (
@@ -47,7 +46,13 @@ from agentlane.models import (
     Tools,
     as_tool,
 )
-from agentlane.runtime import BaseAgent, Engine, SingleThreadedRuntimeEngine, on_message
+from agentlane.runtime import (
+    BaseAgent,
+    Engine,
+    MessageContext,
+    SingleThreadedRuntimeEngine,
+    on_message,
+)
 
 MODEL_NAME = "gpt-5.4-mini"
 

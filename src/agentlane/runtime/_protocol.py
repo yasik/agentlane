@@ -3,7 +3,9 @@
 from collections.abc import Awaitable, Callable
 from typing import Protocol, runtime_checkable
 
-from agentlane.messaging import AgentId, MessageContext
+from agentlane.messaging import AgentId
+
+from ._message_context import MessageContext
 
 _ON_MESSAGE_ATTR = "__agentlane_on_message__"
 

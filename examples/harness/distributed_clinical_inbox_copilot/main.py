@@ -27,11 +27,12 @@ if __package__ in {None, ""}:
 
 from agentlane.harness import AgentDescriptor, RunResult  # noqa: E402
 from agentlane.harness.agents import DefaultAgent  # noqa: E402
-from agentlane.messaging import DeliveryMode, MessageContext, TopicId  # noqa: E402
+from agentlane.messaging import DeliveryMode, TopicId  # noqa: E402
 from agentlane.models import Config, Tools, as_tool  # noqa: E402
 from agentlane.runtime import (  # noqa: E402
     BaseAgent,
     Engine,
+    MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     on_message,

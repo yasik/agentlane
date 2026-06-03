@@ -123,9 +123,9 @@ send focused work to another addressed agent:
 ```python
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
-from agentlane.messaging import AgentId, MessageContext
+from agentlane.messaging import AgentId
 from agentlane.models import Tools
-from agentlane.runtime import BaseAgent, distributed_runtime, on_message
+from agentlane.runtime import BaseAgent, MessageContext, distributed_runtime, on_message
 
 
 class SafetyReviewAgent(BaseAgent):

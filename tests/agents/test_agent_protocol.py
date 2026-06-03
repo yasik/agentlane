@@ -8,7 +8,6 @@ from agentlane.messaging import (
     CorrelationId,
     DeliveryOutcome,
     IdempotencyKey,
-    MessageContext,
     MessageId,
     PublishAck,
     TopicId,
@@ -18,6 +17,7 @@ from agentlane.runtime import (
     BaseAgent,
     CancellationToken,
     Engine,
+    MessageContext,
     is_on_message_handler,
     on_message,
 )

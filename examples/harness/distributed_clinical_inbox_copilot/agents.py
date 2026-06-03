@@ -5,8 +5,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from agentlane.messaging import CorrelationId, DeliveryMode, MessageContext, TopicId
-from agentlane.runtime import BaseAgent, Engine, WorkerAgentRuntime, on_message
+from agentlane.messaging import CorrelationId, DeliveryMode, TopicId
+from agentlane.runtime import (
+    BaseAgent,
+    Engine,
+    MessageContext,
+    WorkerAgentRuntime,
+    on_message,
+)
 from examples.harness.distributed_clinical_inbox_copilot.messages import (
     AGGREGATOR_AGENT_TYPE,
     CHART_HISTORY_AGENT_TYPE,

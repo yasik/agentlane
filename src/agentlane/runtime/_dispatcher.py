@@ -9,11 +9,11 @@ from typing import Union, cast, get_origin, get_type_hints
 from agentlane.messaging import (
     DeliveryOutcome,
     DeliveryStatus,
-    MessageContext,
     MessageKind,
 )
 
 from ._engine import Engine
+from ._message_context import MessageContext
 from ._protocol import Agent, is_on_message_handler
 from ._registry import AgentRegistry
 from ._types import DeliveryTask
@@ -68,6 +68,7 @@ class Dispatcher:
             message_id=task.envelope.message_id,
             correlation_id=task.envelope.correlation_id,
             attempt=task.attempt,
+            cancellation_token=task.cancellation_token,
         )
 
         try:

@@ -87,8 +87,8 @@ async def single_threaded_runtime(
     Example:
         ```python
         from agentlane.runtime import on_message
-        from agentlane.messaging import AgentId, MessageContext
-        from agentlane.runtime import single_threaded_runtime
+        from agentlane.messaging import AgentId
+        from agentlane.runtime import MessageContext, single_threaded_runtime
 
         class WorkerAgent:
             @on_message

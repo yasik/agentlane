@@ -91,8 +91,13 @@ when you want the host and worker responsibilities in more detail.
 ```python
 from dataclasses import dataclass
 
-from agentlane.messaging import AgentId, MessageContext
-from agentlane.runtime import BaseAgent, SingleThreadedRuntimeEngine, on_message
+from agentlane.messaging import AgentId
+from agentlane.runtime import (
+    BaseAgent,
+    MessageContext,
+    SingleThreadedRuntimeEngine,
+    on_message,
+)
 
 
 @dataclass(slots=True)

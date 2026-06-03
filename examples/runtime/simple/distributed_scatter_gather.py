@@ -4,10 +4,11 @@ import asyncio
 from collections.abc import Mapping
 from typing import cast
 
-from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus, MessageContext
+from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
 from agentlane.runtime import (
     BaseAgent,
     Engine,
+    MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     on_message,

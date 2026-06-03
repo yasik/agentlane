@@ -11,10 +11,11 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus, MessageContext
+from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
 from agentlane.runtime import (
     BaseAgent,
     Engine,
+    MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     on_message,

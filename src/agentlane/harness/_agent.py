@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from agentlane.messaging import AgentId, MessageContext
+from agentlane.messaging import AgentId
 from agentlane.models import (
     Model,
     ModelResponse,
@@ -15,7 +15,7 @@ from agentlane.models import (
     Tools,
     ToolSpec,
 )
-from agentlane.runtime import CancellationToken, Engine, on_message
+from agentlane.runtime import CancellationToken, Engine, MessageContext, on_message
 
 from ._events import RunEventStream
 from ._hooks import RunnerHooks

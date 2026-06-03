@@ -6,12 +6,12 @@ from agentlane.messaging import (
     AgentId,
     DeliveryMode,
     DeliveryStatus,
-    MessageContext,
     TopicId,
 )
 from agentlane.runtime import (
     BaseAgent,
     Engine,
+    MessageContext,
     WorkerAgentRuntime,
     WorkerAgentRuntimeHost,
     on_message,
