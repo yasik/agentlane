@@ -58,10 +58,11 @@ an explicit tool value in code.
 
 [`Tools(...)`](../../src/agentlane/models/_interface.py) is the higher-level
 piece. It combines the visible tool set with request policy such as
-`tool_choice`, `parallel_tool_calls`, per-tool call limits, and the overall
-round-trip safety limit. That policy belongs in the models layer because it
-describes what the model is allowed to ask for. The harness then decides how
-those tool calls are executed inside a run.
+`tool_choice`, `parallel_tool_calls`, per-tool call limits, per-call timeout
+and retry-on-timeout (`tool_call_timeout`, `tool_call_max_retries`), and the
+overall round-trip safety limit. That policy belongs in the models layer
+because it describes what the model is allowed to ask for. The harness then
+decides how those tool calls are executed inside a run.
 
 ## Provider Boundary
 
@@ -97,6 +98,11 @@ normalized event kinds stay small on purpose:
 6. `provider`
 
 That split matters because providers do not all stream the same way.
+
+The base `Model.stream_response(...)` is a non-streaming fallback: it delegates
+to `get_response(...)` and emits a single terminal `completed` event (or an
+`error` event on failure). Real incremental streaming requires a provider
+override.
 
 `agentlane-openai` can preserve semantic Responses API events, including output
 deltas and reasoning-related events. `agentlane-litellm` preserves the chunk

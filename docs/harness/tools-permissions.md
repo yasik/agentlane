@@ -170,7 +170,10 @@ and any path operations the app also wants to allow.
 The exported permission primitives are framework extension points:
 
 1. `ToolPermissionRequest` describes one operation before a side effect.
-2. `ToolPermissionDecision` returns `allow`, `deny`, or `require_approval`.
+2. `ToolPermissionDecision` returns `allow`, `deny`, or `require_approval`. Its
+   `outcome` field is a `ToolPermissionOutcome` enum (`ALLOW`, `DENY`,
+   `REQUIRE_APPROVAL`), and `ToolApprovalCallback` is the callback type that
+   resolves `require_approval` decisions.
 3. `WorkspaceToolPermissionPolicy` is the built-in single-root path policy.
 4. `PathScopeToolPermissionPolicy` is the built-in multi-scope path policy.
 5. `AllOfToolPermissionPolicy` composes policies conservatively: deny wins,

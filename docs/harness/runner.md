@@ -25,8 +25,8 @@ The runner is used both by:
 
 1. the runtime-facing `agentlane.harness.Agent`
 2. the higher-level local `agentlane.harness.agents.DefaultAgent`, which uses
-   that lower-level agent for the simpler `run(...)` and `run_stream(...)`
-   surfaces
+   that lower-level agent for the simpler `run(...)`, `run_stream(...)`, and
+   `run_events(...)` surfaces
 
 ## The Loop
 
@@ -101,14 +101,18 @@ the loop itself.
 Before each model call, the runner works from one
 [`PreparedTurn`](../../src/agentlane/harness/shims/_types.py).
 
-That object carries the effective:
+That object carries:
 
-1. instructions
-2. tools
-3. model arguments
-4. working `RunState`
-5. one-turn context items
-6. per-run transient state
+1. the working `RunState` (which itself holds the persisted instructions and
+   history)
+2. the effective visible tools for the turn
+3. the effective model arguments for the turn
+4. per-run transient state shared across shim callbacks
+
+Instructions are not a separate top-level field. They live inside the run state
+and are read or mutated through the run state, including the
+`set_system_instruction(...)` and `append_system_instruction(...)` helpers on
+the prepared turn.
 
 If bound shims exist, they are called in descriptor order to adjust that
 prepared turn before the runner builds the canonical message list. They may
@@ -119,10 +123,12 @@ also replace that final message list for one model call when
 
 The runner also owns live model streaming for one run.
 
-The harness does not define a second event model here. It reuses
-[`ModelStreamEvent`](../../src/agentlane/models/_streaming.py) directly and
-adds one small harness handle:
-[`RunStream`](../../src/agentlane/harness/_stream.py).
+At the lowest streaming level the harness does not define a second event model.
+It reuses [`ModelStreamEvent`](../../src/agentlane/models/_streaming.py)
+directly and adds one small harness handle:
+[`RunStream`](../../src/agentlane/harness/_stream.py). A higher-level harness
+event model is layered on top of these raw model events through
+`run_events(...)`; see [Run Events](#run-events) below.
 
 That split is deliberate:
 
@@ -152,6 +158,48 @@ The streamed runner behavior has a few important boundaries:
    final result after the run finishes
 5. live per-event streaming is available through the local harness streaming
    APIs such as `DefaultAgent.run_stream(...)`
+
+## Run Events
+
+Alongside `run(...)` and `run_stream(...)`, the runner exposes a third entry
+point: `run_events(...)`, which returns a
+[`RunEventStream`](../../src/agentlane/harness/_events.py). This is a
+higher-level harness event model layered over the raw `ModelStreamEvent`
+stream.
+
+`run_events(...)` accepts an optional `approval_events` async iterator. When
+provided, brokered tool-approval lifecycle events are forwarded into the same
+stream as `RunToolApprovalEvent`.
+
+Each emitted item is a `RunEvent`, a union tagged by `RunEventKind`:
+
+1. `RunModelStreamEvent` wraps one underlying `ModelStreamEvent`
+2. `RunAgentStartEvent` / `RunAgentEndEvent` mark agent run boundaries
+3. `RunLLMStartEvent` / `RunLLMEndEvent` mark model requests
+4. `RunToolStartEvent` / `RunToolEndEvent` mark tool calls
+5. `RunToolApprovalEvent` wraps one brokered approval event
+6. `RunHandoffStartEvent` / `RunHandoffEndEvent` mark first-class handoff
+   control transfers
+7. `RunStateSnapshotEvent` carries a compact `RunStateSnapshot` at stable run
+   boundaries
+
+`RunStateSnapshotEvent` boundaries are named by `RunStateSnapshotBoundary`:
+`run_start`, `turn_prepared`, `tool_round_end`, and `run_end`. The snapshot
+itself is compact (`turn_count`, `history_length`, `response_count`, and a copy
+of `shim_state`) rather than the full working state.
+
+## Run Result And State
+
+[`RunResult`](../../src/agentlane/harness/_run.py) records what came out of the
+loop. Its fields are `final_output`, `responses`, `turn_count`, and an optional
+`run_state`.
+
+[`RunState`](../../src/agentlane/harness/_run.py) is the resumable shape. It
+holds `instructions`, `history`, `responses`, persisted `shim_state`
+([`ShimState`](../../src/agentlane/harness/_run.py)), and `turn_count`. It is
+also one of the accepted `RunInput` forms (alongside a plain `str` and a
+`list[RunHistoryItem]`), so a completed run's `run_state` can be passed back in
+to resume the conversation. The persisted `shim_state` survives across resumes.
 
 ## Request Ownership
 

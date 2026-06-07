@@ -64,12 +64,12 @@ worker decides how that work runs locally.
 
 For `send_message(...)`, the flow is:
 
-1. the origin worker builds and serializes the request
-2. the host records a pending RPC session
-3. the host resolves the target worker from the recipient type
-4. the host forwards the request to that worker
-5. the destination worker runs the delivery through its normal local runtime
-6. the resulting [`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py)
+1. the origin worker builds and serializes the request, then calls the host
+2. the host, under one lock, resolves the owning worker from the recipient type
+   and records a pending RPC session
+3. the host forwards the request to that worker and awaits the session future
+4. the destination worker runs the delivery through its normal local runtime
+5. the resulting [`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py)
    is returned to the origin
 
 The important point is that distributed send does not invent a new execution
@@ -109,6 +109,24 @@ That is why the shutdown order matters:
 1. stop routing new traffic first
 2. drain or fail pending work
 3. close transport resources last
+
+## Worker Health And Eviction
+
+The host owns liveness, not just routing. A background health loop probes every
+registered worker on an interval and tracks consecutive failures:
+
+1. each worker is polled every `health_check_interval_seconds` (default 5.0)
+2. a failed probe increments that worker's failure counter; a successful probe
+   resets it
+3. once failures reach `health_check_failure_threshold` (default 2), the worker
+   is evicted
+4. an outbound RPC that exceeds `rpc_timeout_seconds` (default 30.0) also marks
+   the target worker unhealthy
+
+Evicting a worker drops the agent types and subscriptions it owned and fails any
+pending RPC sessions bound to it (resolved as `UNDELIVERABLE`); an RPC that
+timed out before eviction resolves as `TIMEOUT`. All three knobs are
+constructor arguments on `WorkerAgentRuntimeHost`.
 
 ## Current Boundaries
 

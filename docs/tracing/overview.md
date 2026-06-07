@@ -65,8 +65,22 @@ That is why the package exposes explicit propagation helpers.
 Use:
 
 1. `capture_parent_context(message_id)` before handing work off
-2. `adopt_parent_context(message_id)` while processing that work
+2. `with adopt_parent_context(message_id):` while processing that work
 3. `discard_parent_context(message_id)` when stored context should be dropped
+
+`adopt_parent_context` is a context manager: the captured trace/span is active
+only inside the `with` block. Adopting is single-shot — it pops the stored
+snapshot, so the first adopt consumes it and any later reuse needs a fresh
+`capture_parent_context`. Call `discard_parent_context` only when a captured
+context is never adopted, to avoid leaking the stored snapshot.
+
+```python
+capture_parent_context(message_id)
+# ... hand work off ...
+with adopt_parent_context(message_id):
+    with generation_span(model="gpt-5.4-mini"):
+        emit_metric("llm_calls", 1)
+```
 
 Those helpers are especially useful for runtime-driven message flows where the
 producer and consumer do not share the same synchronous call stack.
@@ -78,7 +92,20 @@ the metric story close to the trace story: one workflow can contain many metric
 events, but the final result can still be summarized once the workflow ends.
 
 [`MetricsProcessor`](../../src/agentlane/tracing/_metrics_processor.py) is the
-default building block for that aggregation path.
+default building block for that aggregation path. Aggregated metrics leave the
+processor through an optional `on_trace_metrics` callback, invoked when a trace
+ends with the `trace_id` and a `dict[str, AggregatedMetric]`.
+
+```python
+from agentlane.tracing import AggregatedMetric, MetricsProcessor
+
+
+def on_metrics(trace_id: str, metrics: dict[str, AggregatedMetric]) -> None:
+    ...  # forward aggregated metrics to your sink
+
+
+provider.register_processor(MetricsProcessor(on_trace_metrics=on_metrics))
+```
 
 ## Exporters And Processors
 

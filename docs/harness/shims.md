@@ -21,8 +21,16 @@ First-party examples include [Harness Tools](./tools.md) and
 ## Import Path
 
 ```python
-from agentlane.harness.shims import PreparedTurn, Shim
+from agentlane.harness.shims import (
+    BoundShim,
+    PreparedTurn,
+    Shim,
+    ShimBindingContext,
+)
 ```
+
+The public surface is `Shim`, `BoundShim`, `PreparedTurn`, and
+`ShimBindingContext`.
 
 ## Mental Model
 
@@ -124,7 +132,7 @@ Shims have two state buckets.
 discarded when the run ends.
 
 It is typed as
-[`RunContext`](../../src/agentlane/models/run/_context.py) and uses
+[`RunContext[Any]`](../../src/agentlane/models/run/_context.py) and uses
 [`DefaultRunContext`](../../src/agentlane/models/run/_context.py) by default.
 
 Use it for temporary cached values or other in-memory state that should not
@@ -171,12 +179,18 @@ on_run_end(...)
 
 The normal mutation points are:
 
-1. `prepare_turn(...)` for instruction updates, tool changes, and history
+1. `on_run_start(...)` for per-run setup that mutates the working state before
+   the first turn. It receives the working `RunState` and `transient_state`.
+2. `prepare_turn(...)` for instruction updates, tool changes, and history
    appends before the next model call,
-2. `on_model_response(...)` for updating shim-owned state from the completed
+3. `on_model_response(...)` for updating shim-owned state from the completed
    response,
-3. `transform_messages(...)` only when you need one-call message surgery after
+4. `transform_messages(...)` only when you need one-call message surgery after
    the runner has already built the canonical request.
+
+`on_run_end(...)` is the teardown callback. It receives the final
+`RunResult | None` and the same `transient_state`, and runs once after the
+last turn.
 
 ## Minimal Example
 
@@ -218,12 +232,21 @@ custom setup when the shim is attached to one concrete agent instance.
 
 In that case, override `Shim.bind(...)` and return a custom `BoundShim`
 session. One `Shim` definition may then be reused across many agents without
-leaking mutable state between them.
+leaking mutable state between them. The bind signature is:
 
-Bound shims may also contribute additional runner hooks through
-`runner_hooks()`. That is useful when a shim should register tracing, logging,
-database writes, script execution, or other lifecycle-triggered actions
-automatically with the bound agent runtime.
+```python
+async def bind(self, context: ShimBindingContext) -> BoundShim: ...
+```
+
+`ShimBindingContext` exposes a single field, `context.task`, the bound
+harness task or agent that owns this shim session.
+
+Shims may also contribute additional runner hooks through `runner_hooks()`.
+This is useful when a shim should register tracing, logging, database writes,
+script execution, or other lifecycle-triggered actions automatically with the
+bound agent runtime. A plain `Shim` subclass can override `runner_hooks()`
+directly; the default bound session forwards it automatically. Reserve a custom
+`BoundShim` for cases that also need private per-agent in-memory state.
 
 For a runnable example, see
 [examples/harness/default_agent_shims_quickstart](../../examples/harness/default_agent_shims_quickstart/README.md).

@@ -11,7 +11,9 @@ That vocabulary is represented directly in code:
 work, and [`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py) or
 [`PublishAck`](../../src/agentlane/messaging/_outcome.py) tell the caller what
 happened. Subscription matching is governed by
-[`DeliveryMode`](../../src/agentlane/messaging/_subscription.py).
+[`SubscriptionKind`](../../src/agentlane/messaging/_subscription.py)
+(`TYPE_EXACT` / `TYPE_PREFIX`), and the post-match delivery lifecycle is
+governed by [`DeliveryMode`](../../src/agentlane/messaging/_subscription.py).
 
 ## Two Delivery Patterns
 
@@ -29,14 +31,29 @@ An [`AgentId`](../../src/agentlane/messaging/_identity.py) points at one
 runtime recipient. It is made from an `AgentType` and an `AgentKey`.
 
 A [`TopicId`](../../src/agentlane/messaging/_identity.py) describes a publish
-target instead. It has a topic type and a route key. The route key is what
-later lets publish deliveries preserve stateful affinity for the same logical
-stream of work.
+target instead. It stores a topic `type` and a `source`, where `route_key` is
+exposed as a read-only property aliasing `source`. The route key is what later
+lets publish deliveries preserve stateful affinity for the same logical stream
+of work. Build one with `TopicId.from_values(type_value=..., route_key=...)` or
+the [`Topics`](../../src/agentlane/messaging/_identity.py) convenience
+constructor `Topics.id(type_value, route_key)`.
 
 Once a delivery is created, it travels as a
 [`MessageEnvelope`](../../src/agentlane/messaging/_envelope.py). The envelope
-holds the sender, recipient or topic, payload metadata, and correlation data
-that must survive transport.
+holds the sender, recipient or topic, the
+[`Payload`](../../src/agentlane/messaging/_envelope.py), and correlation data
+that must survive transport. A `Payload` carries a `schema_name`,
+`content_type`, a [`PayloadFormat`](../../src/agentlane/messaging/_envelope.py)
+(`JSON` / `PROTOBUF` / `BYTES`), and the application `data`. The envelope's
+[`MessageKind`](../../src/agentlane/messaging/_envelope.py)
+(`RPC_REQUEST` / `RPC_RESPONSE` / `PUBLISH_EVENT`) records whether it is a
+direct send or a published event.
+
+Correlation and identity primitives are typed value wrappers:
+[`CorrelationId`](../../src/agentlane/messaging/_identity.py),
+[`IdempotencyKey`](../../src/agentlane/messaging/_identity.py), and
+[`MessageId`](../../src/agentlane/messaging/_identity.py) each expose a `.new()`
+factory that mints a fresh identifier.
 
 ## Direct Send
 
@@ -44,8 +61,21 @@ that must survive transport.
 one terminal
 [`DeliveryOutcome`](../../src/agentlane/messaging/_outcome.py).
 
-That outcome is where the caller learns whether the message was delivered,
-rejected by policy, failed in the handler, or could not be delivered at all.
+That outcome is where the caller learns how the message resolved. The status is
+a [`DeliveryStatus`](../../src/agentlane/messaging/_outcome.py), which has eight
+terminal states:
+
+- `DELIVERED` — handler completed successfully.
+- `DROPPED` — message was intentionally discarded by runtime policy.
+- `UNDELIVERABLE` — recipient could not be resolved/created, so dispatch never
+  reached a handler.
+- `TIMEOUT` — delivery exceeded the configured processing deadline.
+- `CANCELED` — delivery was canceled (for example during shutdown or cooperative
+  cancellation).
+- `HANDLER_ERROR` — handler resolution or execution raised an exception.
+- `SERIALIZATION_ERROR` — payload serialization/deserialization failed before
+  the handler ran.
+- `POLICY_REJECTED` — runtime policy rejected dispatch before execution.
 
 ## Publish
 
@@ -60,8 +90,28 @@ mechanism, not a multi-recipient RPC.
 
 ## Subscriptions And Delivery Modes
 
-Subscriptions map a topic match to an agent type. The main choice is whether
-publish deliveries should reuse a stateful recipient or create a fresh one.
+A [`Subscription`](../../src/agentlane/messaging/_subscription.py) maps a topic
+match to an agent type. Two decisions shape it: how a topic is matched, and how
+matched deliveries reuse recipients.
+
+### Matching: SubscriptionKind
+
+[`SubscriptionKind`](../../src/agentlane/messaging/_subscription.py) selects the
+matching strategy:
+
+- `TYPE_EXACT` matches only when `topic.type` exactly equals the pattern.
+- `TYPE_PREFIX` matches when `topic.type` starts with the pattern.
+
+Create subscriptions through the convenience constructors `Subscription.exact`
+and `Subscription.prefix`, or register them directly on the runtime with
+`runtime.subscribe_exact(topic_type=..., agent_type=...)` and
+`runtime.subscribe_prefix(topic_prefix=..., agent_type=...)`.
+
+### Delivery: DeliveryMode
+
+After a subscription matches, `DeliveryMode` controls the delivery lifecycle.
+The main choice is whether publish deliveries should reuse a stateful recipient
+or create a fresh one.
 
 [`DeliveryMode.STATEFUL`](../../src/agentlane/messaging/_subscription.py) uses
 the topic route key to derive a stable recipient key. That means repeated events
@@ -70,6 +120,18 @@ for the same route key reach the same cached agent instance.
 [`DeliveryMode.STATELESS`](../../src/agentlane/messaging/_subscription.py)
 creates a unique recipient key per delivery. That is useful for fan-out work
 where instance reuse is not part of the contract.
+
+### Routing Policy
+
+The [`RoutingEngine`](../../src/agentlane/messaging/_routing.py) evaluates active
+subscriptions against a published topic through a
+[`RoutingPolicy`](../../src/agentlane/messaging/_routing_policy.py). The default
+[`SourceKeyAffinityRoutingPolicy`](../../src/agentlane/messaging/_routing_policy.py)
+maps each matched topic's route key onto the recipient agent key, then dedups
+and orders the resulting `PublishRoute` list deterministically: stateful routes
+are deduped by concrete recipient id, stateless routes by subscription plus
+recipient type, and both are stably sorted so fan-out is reproducible across
+runs.
 
 ## Ordering And Correlation
 
@@ -87,6 +149,12 @@ keys a snapshot under the id and the receiver looks the same id up via
 `MessageContext.message_id`.
 
 ## Example
+
+This snippet shows the API shape. It registers a subscription but no agent
+factory for the `worker` type, so the stateful-affinity behavior described above
+is not exercised here — a real run requires a registered agent factory for the
+recipient type. The status assertion therefore lists a representative subset of
+the `DeliveryStatus` states rather than asserting a single result.
 
 ```python
 from agentlane.messaging import AgentId, DeliveryMode, TopicId

@@ -100,6 +100,9 @@ reached and more entries remain, the result appends:
 Showing first 100 matches; more remain.
 ```
 
+Both `files_with_matches` and `count` modes share the same overflow message
+(`count` does not emit a distinct rows-oriented notice):
+
 ```text
 Showing first 100 files; more remain.
 ```

@@ -56,6 +56,7 @@ If the first requested line exceeds the byte cap by itself, the result reports:
 ```
 
 The tool returns clear text errors for directories, missing files, likely binary
-files, invalid offsets, invalid limits, and unreadable paths. Invalid UTF-8 byte
-sequences are decoded with replacement characters so the model can still use
-the surrounding text.
+files, invalid offsets, invalid limits, and unreadable paths. A file is flagged
+as binary when a NUL byte appears in its first 4096 bytes (not a full-file
+scan). Invalid UTF-8 byte sequences are decoded with replacement characters so
+the model can still use the surrounding text.

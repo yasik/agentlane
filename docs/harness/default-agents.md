@@ -126,6 +126,21 @@ stack:
 3. bound shims, when configured
 4. `Runner`
 
+### Reading The Result
+
+`run(...)`, `fork(...)`, and `stream.result()` all return a
+[`RunResult`](../../src/agentlane/harness/_run.py) with four fields:
+
+1. `final_output` is the answer extracted from the terminal run turn
+2. `responses` is the raw `ModelResponse` list accumulated across the run
+3. `turn_count` is the number of model turns completed
+4. `run_state` is the final resumable `RunState` when available
+
+```python
+result = await agent.run("I feel dizzy after starting a new medication.")
+print(result.final_output)
+```
+
 ## Runtime Behavior
 
 If no runtime is supplied:

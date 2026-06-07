@@ -14,6 +14,11 @@ Both build on
 [`PerAgentMailboxScheduler`](../../src/agentlane/runtime/_scheduler.py) to
 reuse instances and preserve fair FIFO execution.
 
+The restricted capability that factories receive is
+[`Engine`](../../src/agentlane/runtime/_engine.py). It intentionally exposes
+only messaging operations (`send_message` and `publish_message`), keeping
+runtime control-plane operations outside the agent-facing contract.
+
 ## The Delivery Model
 
 There are two caller-facing paths:
@@ -45,6 +50,24 @@ when the runtime should create instances lazily. `register_instance(...)` is
 useful when you want to bind an already-created stateful instance to one
 identity.
 
+## Subscriptions And Registration
+
+`publish_message(...)` only reaches recipients that have a matching
+subscription, so subscriptions are how you wire the publish path:
+
+1. `subscribe_exact(topic_type=..., agent_type=...)` matches one exact topic
+   type
+2. `subscribe_prefix(topic_prefix=..., agent_type=...)` matches every topic
+   type that starts with the prefix
+3. `add_subscription(...)` registers a pre-built `Subscription`; `unsubscribe(...)`
+   (alias for `remove_subscription(...)`) removes one by id, and
+   `list_subscriptions()` returns the current snapshot
+
+For transport, the engine also owns a `serializer_registry`. Common
+dataclass/Pydantic/protobuf payloads are inferred automatically, but
+`register_serializer(...)` and `register_message_type(...)` are available as
+escape hatches when you need explicit control.
+
 ## Ordering And Concurrency
 
 The runtime guarantees FIFO delivery per recipient. Two deliveries for the same
@@ -61,6 +84,11 @@ This is why concurrency in AgentLane is easier to reason about than a general
 task pool. Parallelism comes from using different recipients, not from
 re-entering the same one.
 
+Mailboxes are bounded (default capacity 2048 per recipient). Over-capacity
+enqueue is rejected with `SchedulerRejectedError`: `send_message(...)` converts
+that into a `POLICY_REJECTED` `DeliveryOutcome`, while `publish_message(...)`
+surfaces it as a raised `SchedulerRejectedError`.
+
 ## Lifecycle And Shutdown
 
 [`RuntimeEngine`](../../src/agentlane/runtime/_runtime.py) has three lifecycle
@@ -73,6 +101,22 @@ operations:
 Most application code uses the async context helpers
 `single_threaded_runtime(...)`, `distributed_runtime(...)`, or
 `runtime_scope(...)` instead of calling lifecycle methods directly.
+
+## Cancellation
+
+Cancellation is cooperative through a `CancellationToken`. `send_message(...)`
+and `publish_message(...)` accept an optional token, and the same token reaches
+the handler as `context.cancellation_token`:
+
+1. handlers read `context.cancellation_token.is_cancelled` (or await
+   `wait_cancelled()`) to stop long work early
+2. `stop()` cancels the tokens of all in-flight deliveries to request
+   cooperative termination
+3. forward `context.cancellation_token` to nested outbound sends so one cancel
+   propagates down a call chain
+
+In distributed mode the token is not propagated across the process boundary, so
+cooperative cancellation applies within the worker that runs the delivery.
 
 ## Where Distributed Mode Fits
 
@@ -112,6 +156,7 @@ class WorkerAgent(BaseAgent):
         return {"reply": payload.value.upper()}
 
 
+# worker_count controls cross-recipient concurrency and defaults to 10.
 runtime = SingleThreadedRuntimeEngine(worker_count=4)
 runtime.register_factory("worker", WorkerAgent)
 
