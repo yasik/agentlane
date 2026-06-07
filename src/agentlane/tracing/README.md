@@ -21,21 +21,21 @@ with trace("my_workflow"):
 ```python
 from agentlane.tracing import (
     agent_span,
-    custom_span
+    custom_span,
     function_span,
     generation_span,
+    trace,
 )
 
 with trace("example_workflow"):
     # Agent span - for agent-based operations
     with agent_span(name="planner", tools=["search", "calculate"]):
-        pass
-
-        # Function span - for function calls
+        # Function span - child of the agent span; spans auto-parent to the
+        # current span/trace, so no explicit parent is needed.
         with function_span(name="process_data", inputs="raw_data"):
             pass
 
-    # Generation span - for LLM generations
+    # Generation span - sibling of the agent span
     with generation_span(model="gpt-5.2", usage={"input_tokens": 50}):
         pass
 
@@ -135,6 +135,103 @@ registry.register("search_count", "count")
 
 # Create a collector with the custom registry
 collector = MetricsCollector(trace_id="trace_123", registry=registry)
+```
+
+### Custom Aggregators
+
+The seven built-in aggregation types map to aggregator classes (`SumAggregator`,
+`CountAggregator`, `AvgAggregator`, `MinAggregator`, `MaxAggregator`,
+`FirstAggregator`, `LastAggregator`). To add your own strategy, implement the
+`MetricAggregator` protocol and register it under a new aggregation type:
+
+```python
+from agentlane.tracing import (
+    AggregatedMetric,
+    MetricAggregator,
+    add_aggregator,
+    get_aggregator,
+    get_aggregators,
+)
+
+
+class MedianAggregator:
+    @property
+    def aggregation_type(self) -> str:
+        return "median"
+
+    def aggregate(self, name, values):
+        ordered = sorted(values)
+        mid = ordered[len(ordered) // 2]
+        return AggregatedMetric(
+            name=name,
+            aggregation="median",
+            value=mid,
+            count=len(values),
+            raw_values=list(values),
+        )
+
+
+add_aggregator("median", MedianAggregator())
+aggregator = get_aggregator("median")  # look up a single aggregator
+all_aggregators = get_aggregators()    # the full type -> aggregator map
+```
+
+### Registry And Collector Lifecycle
+
+The global registry and per-trace collectors can be swapped or cleared, which is
+mainly useful for tests and isolated domains:
+
+```python
+from agentlane.tracing import (
+    MetricsRegistry,
+    clear_all_collectors,
+    get_collector,
+    peek_collector,
+    remove_collector,
+    reset_metrics_registry,
+    set_metrics_registry,
+)
+
+# Replace the global registry, then reset it back to the default later
+set_metrics_registry(MetricsRegistry(default_aggregation="avg"))
+reset_metrics_registry()
+
+# Collector helpers, keyed by trace_id
+get_collector("trace_123")      # get or create a collector
+peek_collector("trace_123")     # get without creating (None if absent)
+remove_collector("trace_123")   # remove and return a collector
+clear_all_collectors()          # drop every collector
+```
+
+### Span Errors
+
+When a span exits with an exception, the failure is attached as a `SpanError`
+(a `dict` subclass holding `message` and optional `data`). You can also set one
+explicitly via `span.set_error(...)`:
+
+```python
+from agentlane.tracing import SpanError, custom_span
+
+with custom_span(name="risky_step") as span:
+    span.set_error(SpanError(message="validation failed", data={"code": 422}))
+```
+
+### Integrating With Other Processors
+
+`MetricsProcessor` aggregates trace metrics and, when given an `on_trace_metrics`
+callback, hands the aggregated result to that callback when a trace ends. The
+callback receives `(trace_id, metrics)` where `metrics` is a
+`dict[str, AggregatedMetric]`:
+
+```python
+from agentlane.tracing import AggregatedMetric, MetricsProcessor
+
+
+def on_metrics(trace_id: str, metrics: dict[str, AggregatedMetric]) -> None:
+    print(f"Trace {trace_id} metrics: {metrics}")
+
+
+provider.register_processor(MetricsProcessor(on_trace_metrics=on_metrics))
 ```
 
 ### How It Works

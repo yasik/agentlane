@@ -2,7 +2,14 @@
 
 `agent_tool()` exposes an `agent` tool for generic spawned helpers.
 
-Parameters:
+Constructor parameters configure spawned helpers and are not visible to the
+model:
+
+1. `model: Model[ModelResponse] | None = None`
+2. `model_args: dict[str, Any] | None = None`
+3. `output_schema: type[BaseModel] | OutputSchema[Any] | None = None`
+
+Model-facing call parameters (the arguments the model sets per call):
 
 1. `name: str`
 2. `task: str`

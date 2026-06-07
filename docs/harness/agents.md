@@ -82,6 +82,36 @@ It lets the model create a fresh helper for a delegated task without inheriting
 the parent conversation or parent system prompt. The helper name is used for
 logging and tracing; the task text is the instruction the helper receives.
 
+That generic helper tool is
+[`DefaultAgentTool`](../../src/agentlane/harness/_lifecycle.py), exported from
+`agentlane.harness`. It defaults to the name `agent` and lets you configure the
+helper's `description`, `instructions`, `model`, `model_args`, `output_schema`,
+and `tools`. It is normally wired through the tools shim rather than constructed
+directly: `base_harness_tools(...)` (via `HarnessToolsShim`) contributes it as a
+model-visible tool with prompt guidance.
+
+The generic handoff path is configured with
+[`DefaultHandoff`](../../src/agentlane/harness/_lifecycle.py), also exported from
+`agentlane.harness`, and enabled through `AgentDescriptor.default_handoff`. It
+defaults to the name `handoff` and exposes `description`, `instructions`,
+`model`, `model_args`, `schema`, and `tools` for the spawned transfer agent.
+
+```python
+from agentlane.harness import AgentDescriptor, DefaultHandoff
+
+descriptor = AgentDescriptor(
+    name="Care Navigation",
+    model=model,
+    instructions="You are a patient care navigation agent.",
+    default_handoff=DefaultHandoff(
+        instructions="You are a focused follow-up agent.",
+    ),
+)
+```
+
+The configured handoff is surfaced at runtime through the
+`Agent.default_handoff` property.
+
 Default spawned helpers inherit two things through different paths. Direct
 descriptor tools are resolved by `ToolConfig`: `INHERIT_TOOLS` keeps parent
 tools, `OVERRIDE_TOOLS` replaces them, and `RESTRICT_TOOLS.only(...)` filters

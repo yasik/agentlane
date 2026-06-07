@@ -59,6 +59,17 @@ from agentlane.harness.tools import (
 )
 ```
 
+This block shows a representative subset. `agentlane.harness.tools` also
+re-exports the path, output, and bash-executor primitives — `ToolPathResolver`,
+`GitignoreMatcher`, `ToolPermissionGrantPolicy`, `ToolPermissionOutcome`, the
+output-limit constants (`TEXT_MAX_BYTES`, `TEXT_MAX_LINES`, `BASH_MAX_BYTES`,
+`BASH_MAX_LINES`, `GREP_DEFAULT_LIMIT`, `GREP_MAX_LINE_LENGTH`,
+`FIND_DEFAULT_LIMIT`, `LS_DEFAULT_LIMIT`) plus `TruncatedOutput` and
+`truncate_output`, and the bash-executor contract types (`BashExecutor`,
+`LocalBashExecutor`, `BashExecutionRequest`, `BashExecutionResult`,
+`BashShellConfig`, `resolve_bash_shell`). See [bash](./tools-bash.md) for the
+executor contracts.
+
 ## Tool Definitions
 
 Tool helpers return definitions, not raw model tools:
@@ -209,3 +220,6 @@ most recent 2000 combined stdout/stderr lines or 51200 bytes.
 Caller-provided limits are applied before the global caps. For large files, call
 `read` repeatedly with `offset` and `limit`. For large search results, narrow
 the `find` pattern or search path.
+
+`LS_DEFAULT_LIMIT` is also exported, but it is reserved for a future `ls` tool
+that is not yet part of the base set; there is no `ls_tool()` factory today.

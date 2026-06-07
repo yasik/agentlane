@@ -13,11 +13,42 @@ append-only conversation history for later turns in the same run.
 from agentlane.harness.skills import (
     DEFAULT_SKILLS_SYSTEM_PROMPT,
     FilesystemSkillLoader,
+    LoadedSkill,
     SkillCatalog,
     SkillLoader,
+    SkillManifest,
+    SkillResource,
     SkillsShim,
+    SKILL_MAX_COMPATIBILITY_LENGTH,
+    SKILL_MAX_DESCRIPTION_LENGTH,
+    SKILL_MAX_FILE_LINES,
+    SKILL_MAX_NAME_LENGTH,
 )
 ```
+
+## Public Types
+
+A custom `SkillLoader` produces and returns these typed primitives:
+
+1. `SkillManifest` is the discovered metadata for one skill plus its canonical
+   file locations: `name`, `description`, `skill_file`, `root`, and the optional
+   `license`, `compatibility`, `metadata`, `tools`, and `disallowed_tools`
+   fields. `SkillLoader.discover()` returns a sequence of these.
+2. `SkillResource` is one bundled file that belongs to an activated skill,
+   carrying a `path` relative to the skill directory.
+3. `LoadedSkill` is the activated payload returned by `SkillLoader.load(name)`:
+   the `manifest`, the rendered `instructions` body, and the bundled
+   `resources`.
+
+## Constants
+
+The skills package exposes the limits used by the filesystem parser, taken from
+the [Agent Skills spec](https://agentskills.io/client-implementation/adding-skills-support):
+
+1. `SKILL_MAX_NAME_LENGTH` (`64`),
+2. `SKILL_MAX_DESCRIPTION_LENGTH` (`1024`),
+3. `SKILL_MAX_COMPATIBILITY_LENGTH` (`500`),
+4. `SKILL_MAX_FILE_LINES` (`500`).
 
 ## Mental Model
 
@@ -61,9 +92,12 @@ When the model calls `activate_skill`, the shim returns one tool result that
 contains:
 
 1. the full `SKILL.md` body without frontmatter,
-2. the skill directory path,
-3. resource file paths relative to the skill directory,
-4. one `<skill_content>` block that groups those pieces together.
+2. a `Skill directory: ...` line and a note that relative paths in the skill
+   are resolved against that directory,
+3. a `<skill_resources>` list of resource file paths relative to the skill
+   directory,
+4. one `<skill_content name="<skill-name>">` block that groups those pieces
+   together, where the `name` attribute matches the dedup directive below.
 
 That tool result becomes part of the normal tool loop and is preserved in the
 conversation history. Later turns in the same run continue with that skill
@@ -143,6 +177,19 @@ Example:
 shim = SkillsShim(loader=my_loader)
 ```
 
+### Catalog
+
+`SkillsShim` builds a `SkillCatalog` from `await loader.discover()` when it binds
+to an agent instance. The catalog is a read-only container over the discovered
+`SkillManifest` values and exposes:
+
+1. `get(name)` returns the manifest for one skill name, or `None`,
+2. `has(name)` returns whether the named skill exists,
+3. `names()` returns the discovered skill names in stable order,
+4. `await load(name)` loads one named skill into a `LoadedSkill` through the
+   catalog's loader,
+5. iteration and `len()` over the discovered manifests.
+
 ## Filesystem Loader
 
 `FilesystemSkillLoader` is the default loader.
@@ -178,7 +225,7 @@ It skips a skill entirely when:
 3. frontmatter is not a mapping,
 4. `name` is missing or empty,
 5. `description` is missing or empty,
-6. the file exceeds the configured line limit.
+6. the file exceeds `SKILL_MAX_FILE_LINES`.
 
 It logs a warning and continues for softer issues such as:
 
@@ -189,6 +236,22 @@ It logs a warning and continues for softer issues such as:
 
 One malformed skill does not fail discovery or break the agent loop. The loader
 skips that skill and continues with the rest.
+
+### Frontmatter Schema
+
+The filesystem parser reads the following `SKILL.md` frontmatter fields:
+
+| Field             | Required | Notes                                                              |
+| ----------------- | -------- | ------------------------------------------------------------------ |
+| `name`            | yes      | Stable skill name; should match the skill directory name.          |
+| `description`     | yes      | Truncated to `SKILL_MAX_DESCRIPTION_LENGTH`.                       |
+| `license`         | no       | Optional license string.                                           |
+| `compatibility`   | no       | Optional note; truncated to `SKILL_MAX_COMPATIBILITY_LENGTH`.      |
+| `metadata`        | no       | Mapping; keys and values are coerced to strings.                   |
+| `tools`           | no       | Replacement tool allowlist (see below).                            |
+| `disallowedTools` | no       | Tool names removed before the model sees the active skill context. |
+
+Unknown frontmatter keys are ignored.
 
 ## Tool Selection Metadata
 

@@ -22,17 +22,33 @@ registry can infer a serializer from the Python value you send.
 
 In the common case, the runtime figures out:
 
-1. a schema id for the value's type
-2. the content type for the payload
+1. a schema id for the value's type (`infer_schema_id_for_value` /
+   `infer_schema_id_for_type`)
+2. the content type for the payload (`infer_content_type_for_value` /
+   `infer_content_type_for_type`)
 3. which serializer should handle that combination
 
 That means most application code can simply send a value and let the transport
-layer do the rest.
+layer do the rest. The runtime's default registry is produced by
+[`create_default_serializer_registry`](../../src/agentlane/transport/_registry.py),
+which constructs a `SerializerRegistry(auto_register_defaults=True)`.
+
+`SerializerRegistry` exposes two operating modes through its
+`auto_register_defaults` flag:
+
+- default mode (`auto_register_defaults=True`): the registry infers and caches a
+  serializer for a common payload type the first time it is used
+- strict mode (`auto_register_defaults=False`): the serializer key must already
+  be registered or encode/decode raises `UnknownSerializerError`
+
+Beyond `register_type`, the registry surface includes `register`,
+`register_many`, `unregister`, `has`, `encode`, `decode`, and the read-only
+`serializers` snapshot.
 
 ```python
 from pydantic import BaseModel
 
-from agentlane.messaging import AgentId, AgentType
+from agentlane.messaging import AgentId
 from agentlane.runtime import SingleThreadedRuntimeEngine
 
 
@@ -41,7 +57,7 @@ class TaskModel(BaseModel):
 
 
 runtime = SingleThreadedRuntimeEngine()
-recipient = AgentId(type=AgentType("planner"), key="default")
+recipient = AgentId.from_values("planner", "default")
 result = await runtime.send_message(TaskModel(name="compile"), recipient)
 ```
 
@@ -75,6 +91,27 @@ If you need full control, implement the
 [`MessageSerializer`](../../src/agentlane/transport/_serializer.py) protocol
 directly and register that serializer yourself.
 
+## Built-in Serializers
+
+The registry ships four concrete serializers, all keyword-only. Default
+inference (and `register_type`) picks one of them based on the Python type:
+
+- [`PydanticJsonSerializer`](../../src/agentlane/transport/_codecs_json.py)
+  (`*, schema_id, model_type, content_type=JSON_CONTENT_TYPE`) for
+  `pydantic.BaseModel` subclasses.
+- [`DataclassJsonSerializer`](../../src/agentlane/transport/_codecs_json.py)
+  (`*, schema_id, model_type, content_type=JSON_CONTENT_TYPE`) for dataclass
+  types.
+- [`ProtobufSerializer`](../../src/agentlane/transport/_codecs_protobuf.py)
+  (`*, schema_id, message_type, content_type=PROTOBUF_CONTENT_TYPE`) for
+  `google.protobuf.message.Message` subclasses.
+- [`JsonValueSerializer`](../../src/agentlane/transport/_codecs_json.py)
+  (`*, schema_id, content_type=JSON_CONTENT_TYPE`) for any other JSON-compatible
+  value. This is also the conservative decode-only fallback: a JSON payload with
+  no registered typed serializer is recovered as plain `dict`/`list`/scalars,
+  while typed protobuf, Pydantic, and dataclass decoding always requires
+  explicit registration.
+
 ## Wire Payloads
 
 At the transport boundary, runtime payloads become
@@ -86,6 +123,46 @@ cases where you do want to convert a payload manually.
 wire_payload = runtime.payload_to_wire_payload(payload)
 restored_payload = runtime.wire_payload_to_payload(wire_payload)
 ```
+
+A [`WirePayload`](../../src/agentlane/transport/_wire_payload.py) carries four
+fields: `schema_id` ([`SchemaId`](../../src/agentlane/transport/_types.py)),
+`content_type` ([`ContentType`](../../src/agentlane/transport/_types.py)),
+`encoding` ([`WireEncoding`](../../src/agentlane/transport/_types.py): `JSON`,
+`PROTOBUF`, or `BYTES`), and `body` (the serialized `bytes`).
+
+These transport identity types validate eagerly:
+
+- `SchemaId` must be non-empty, use only letters, numbers, and `_.:/-`
+  separators, and be globally namespaced — it must contain at least one of `.`,
+  `:`, or `/`, or construction raises `ValueError`.
+- `ContentType` must be MIME-like (for example `application/json`), or
+  construction raises `ValueError`.
+
+The canonical content-type constants are `JSON_CONTENT_TYPE`
+(`application/json`), `PROTOBUF_CONTENT_TYPE` (`application/x-protobuf`), and
+`OCTET_STREAM_CONTENT_TYPE` (`application/octet-stream`).
+
+When converting between the transport and messaging layers, `WireEncoding` maps
+to the messaging `PayloadFormat` through the
+[`wire_encoding_for_payload_format`](../../src/agentlane/transport/_wire_payload.py)
+and
+[`payload_format_for_wire_encoding`](../../src/agentlane/transport/_wire_payload.py)
+helpers.
+
+## Errors
+
+All transport serializer errors subclass
+[`SerializationError`](../../src/agentlane/transport/_errors.py):
+
+- `SerializerConflictError` — raised by `register` (and therefore
+  `register_many` / `register_type`) when a serializer already exists for the
+  `(schema_id, content_type)` key and `replace=False`.
+- `UnknownSerializerError` — raised by `unregister` when the key is absent, and
+  by `encode`/`decode` when no serializer resolves for the key.
+- `SerializerEncodeError` — raised by `encode` when the underlying codec fails
+  during object-to-bytes conversion.
+- `SerializerDecodeError` — raised by `decode` when the underlying codec fails
+  during bytes-to-object conversion.
 
 ## A Useful Rule Of Thumb
 

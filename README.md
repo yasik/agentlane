@@ -93,76 +93,107 @@ uv sync --all-extras
 
 ## Quick Start
 
-The harness gives you a simple agent interface when you want one, while still letting you drop down into explicit runtime and messaging primitives as your system grows.
+The harness gives you a small, local agent interface when you want one, and the
+same runtime model underneath when your system grows into addressed,
+distributed work.
 
-After installing the package, define an agent descriptor against your model client:
+A local agent is one class with a descriptor, then `await agent.run(...)`. No
+runtime, runner, or message wiring needed. Give it a model client and
+instructions, then run one turn:
 
 ```python
+import asyncio
+import os
+
+from agentlane_openai import ResponsesClient
+
 from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
+from agentlane.models import Config
 
-
-descriptor = AgentDescriptor(
-    name="Care Navigation",
-    model=model,
-    instructions="You are a concise patient care navigation agent.",
+model = ResponsesClient(
+    config=Config(api_key=os.environ["OPENAI_API_KEY"], model="gpt-5.4-mini")
 )
 
-# The descriptor is the static model, prompt, and tool contract for this agent.
-agent = DefaultAgent(descriptor=descriptor)
 
-# Each run executes one user turn and stores resumable run state on the agent.
-result = await agent.run("I feel dizzy after starting a new medication. What should I do first?")
+class CareNavigationAgent(DefaultAgent):
+    descriptor = AgentDescriptor(
+        name="Care Navigation",
+        model=model,
+        instructions="You are a concise patient care navigation agent.",
+    )
+
+
+async def main() -> None:
+    agent = CareNavigationAgent()
+    result = await agent.run("I feel dizzy after a new medication. What first?")
+    print(result.final_output)
+
+
+asyncio.run(main())
 ```
 
-This is the simplest entry point.
+That is the whole loop: one descriptor, one `run(...)` call. Each `run(...)`
+executes one user turn and stores resumable state on the agent.
 
-For distributed execution, keep the user-facing `DefaultAgent` at the top and
-send focused work to another addressed agent:
+### Add a tool
+
+Give the agent a plain Python function and it becomes a callable tool — no
+decorators or registration:
 
 ```python
-from agentlane.harness import AgentDescriptor
-from agentlane.harness.agents import DefaultAgent
+from agentlane.models import Config, Tools
+
+
+def lookup_medication(name: str) -> str:
+    """Return basic guidance for a medication by name."""
+    return f"{name}: take with food; report severe dizziness to your care team."
+
+
+agent = DefaultAgent(
+    descriptor=AgentDescriptor(
+        name="Care Navigation",
+        model=model,
+        instructions="Use `lookup_medication` before advising on a medication.",
+        tools=Tools(tools=[lookup_medication]),
+    )
+)
+```
+
+### Route work to an addressed agent
+
+The same agent can hand focused work to another agent addressed on the runtime.
+This is the entry point to background workers, pub/sub, and distributed
+execution — the communication model does not change as you scale:
+
+```python
 from agentlane.messaging import AgentId
-from agentlane.models import Tools
 from agentlane.runtime import BaseAgent, MessageContext, distributed_runtime, on_message
 
 
 class SafetyReviewAgent(BaseAgent):
     @on_message
     async def handle(self, case: str, context: MessageContext) -> object:
-        # Worker agent: receives addressed work through the runtime.
-        _ = context
         return {"recommendation": "same-day clinician review"}
 
 
-async with distributed_runtime() as runtime:
-    # 1. Register the worker agent type with the distributed runtime.
-    runtime.register_factory("safety_review", SafetyReviewAgent)
+async def main() -> None:
+    async with distributed_runtime() as runtime:
+        runtime.register_factory("safety_review", SafetyReviewAgent)
 
-    async def request_safety_review(case: str) -> object:
-        """Ask the addressed worker agent for a focused safety review."""
-        # 2. Bridge the model-facing tool call into runtime message routing.
         outcome = await runtime.send_message(
-            case,
+            "new BP medication, lightheaded this morning",
             recipient=AgentId.from_values("safety_review", "case-1"),
         )
-        return outcome.response_payload
+        print(outcome.response_payload)
 
-    descriptor = AgentDescriptor(
-        name="Care Navigation",
-        model=model,
-        instructions="Call `request_safety_review` for safety-sensitive cases.",
-        tools=Tools(tools=[request_safety_review]),
-    )
 
-    # 3. Run the user-facing agent on the same distributed runtime.
-    agent = DefaultAgent(
-        descriptor=descriptor,
-        runtime=runtime,
-    )
-    result = await agent.run("Review this case and identify the next step.")
+asyncio.run(main())
 ```
+
+To let the model-facing agent call that worker, pass a tool that bridges into
+`runtime.send_message(...)` and run the `DefaultAgent` on the same runtime
+(`DefaultAgent(descriptor=..., runtime=runtime)`).
 
 For explicit worker placement, pub/sub, or multi-process execution, use the
 runtime layer directly.

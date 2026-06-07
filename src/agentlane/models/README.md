@@ -11,7 +11,7 @@ At a high level, this package provides:
 3. prompt-template helpers such as `PromptTemplate`, `MultiPartPromptTemplate`, and `PromptSpec` for building typed LLM message content,
 4. the native `Tool` primitive and tool execution helpers,
 5. retry and rate-limiting helpers for model clients,
-6. `RunContext` primitives for ephemeral per-run state,
+6. `RunContext` / `DefaultRunContext` primitives (under `agentlane.models.run`) for ephemeral per-run state,
 7. a clean dependency boundary so provider packages can build on the same core model contract.
 
 For tooling ergonomics, the common application path is intentionally lightweight:
@@ -61,3 +61,49 @@ tool-call id so batched or parallel tool calls can each receive the right
 single-call context.
 
 If you are defining how the framework talks to models, validates outputs, executes tools, or carries ephemeral model-call state, it belongs here.
+
+## Public Surface
+
+The package re-exports the following families from `agentlane.models`. The
+narrative docs under `docs/models/` cover prompts, tools, output schemas, and
+streaming in depth; the entries below name the remaining exported symbols so the
+documented surface tracks `__all__`.
+
+Model and request primitives:
+
+- `Model`, `Factory`, `Config`, `ModelTracing`, `MessageDict` — the provider-agnostic client contract and its inputs.
+- `Tools`, `Tool`, `ToolSpec`, `ToolExecutionContext`, `as_tool` — the native tool surface and ergonomic helpers.
+- `ToolExecutor` — runs a batch of model tool calls against the executable tools in a `Tools` value.
+- `ToolOutputAdapter`, `ChatCompletionsOutputAdapter` — format tool results into provider-shaped result messages.
+
+Prompts and output schemas:
+
+- `PromptTemplate`, `MultiPartPromptTemplate`, `PromptTemplateBase`, `PromptSpec`, `TextPart`, `FilePart`, `ImagePart` — typed prompt construction (see [prompt templating](../../../docs/models/prompt-templating.md)).
+- `OutputSchema`, `resolve_output_schema`, `SchemaValidationResult`, `ensure_strict_json_schema` — declare and resolve expected response shapes and enforce strict JSON schemas.
+
+Response models (OpenAI-compatible aliases):
+
+- `ModelResponse`, `Message`, `Choice`, `ChoiceLogprobs`, `ToolCall`, `ToolCallFunction`, `Usage` — the shared terminal-response contract returned by `get_response(...)`.
+
+Streaming:
+
+- `ModelStreamEvent`, `ModelStreamEventKind` — the normalized streaming event envelope yielded by `stream_response(...)`.
+
+Retry helpers:
+
+- `retry_on_errors`, `RetryResult`, `RetryMetrics` — retry a model call and report attempt outcomes.
+- `extract_retry_after`, `wait_with_retry_after`, `is_retryable_by_status_code`, `DEFAULT_RETRY_STATUS_CODES` — honor `Retry-After` and classify retryable HTTP statuses.
+
+Rate limiters:
+
+- `RateLimiter` — base limiter interface.
+- `SlidingWindowRateLimiter`, `ConcurrentRequestLimiter`, `TokenBucketRateLimiter`, `CompositeRateLimiter` — concrete limiting strategies and a combinator.
+
+Response utilities:
+
+- `get_content_or_none`, `get_json_dict_or_none`, `get_reasoning_content_or_none`, `get_search_results_or_none` — safe extraction helpers over a `ModelResponse`.
+- `has_escape_sequence_explosion`, `parse_content_filter_block`, `parse_json_dict`, `ReasoningContent`, `ResponseReasoningItem` — content-quality checks, content-filter parsing, JSON repair, and reasoning payload types.
+
+Exceptions:
+
+- `ModelsException`, `ModelBehaviorError`, `RunErrorDetails` — the package exception hierarchy and structured run-error detail.

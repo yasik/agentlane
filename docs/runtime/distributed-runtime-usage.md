@@ -189,6 +189,20 @@ The current distributed implementation is intentionally narrow:
 
 Those are current implementation facts, not just usage advice.
 
+A few distributed-only behaviors are worth knowing when wiring or debugging:
+
+1. `send_message(...)` and `publish_message(...)` require a connected host and
+   raise `RuntimeError` if the worker is not connected to one
+2. unlike the in-process path, distributed `publish_message(...)` surfaces host
+   or transport failures as a raised `RuntimeError` rather than a failed ack
+3. registering a factory/instance or subscribing on a running worker schedules
+   an asynchronous catalog sync (a full agent-type plus subscription snapshot)
+   to the host; `send_message`/`publish_message` await the pending sync before
+   routing, so freshly registered types become routable as soon as the call
+   proceeds
+4. `WorkerAgentRuntime` exposes `address` (the resolved bind endpoint) and
+   `worker_id` (assigned after registration) for inspecting bound workers
+
 ## Related Docs
 
 1. [Runtime: Engine and Execution](./engine-and-execution.md)

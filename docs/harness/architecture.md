@@ -52,8 +52,7 @@ At a high level, a run moves like this:
 Application / caller
         |
         | run(...), run_stream(...),
-        | run_events(...), or
-        | send_message(run_input)
+        | or run_events(...)
         v
 +---------------------------+
 | DefaultAgent             |
@@ -66,6 +65,8 @@ Application / caller
 | routing + instance reuse  |
 +-------------+-------------+
               |
+              | addressed caller path:
+              | send_message(run_input)
               v
 +---------------------------+
 | Agent                     |
