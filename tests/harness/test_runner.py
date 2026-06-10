@@ -34,6 +34,7 @@ from agentlane.models import (
     ModelResponse,
     ModelStreamEvent,
     ModelStreamEventKind,
+    ModelTracing,
     OutputSchema,
     PromptSpec,
     PromptTemplate,
@@ -45,6 +46,12 @@ from agentlane.models import (
     get_content_or_none,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.tracing import (
+    DefaultTraceProvider,
+    TracingProcessor,
+    set_trace_provider,
+    trace,
+)
 
 
 def _message(role: str, content: object) -> MessageDict:
@@ -100,12 +107,18 @@ class _SequenceModel(Model[ModelResponse]):
         *,
         started: asyncio.Event | None = None,
         release: asyncio.Event | None = None,
+        tracing: ModelTracing = ModelTracing.DISABLED,
     ) -> None:
         self._outcomes = list(outcomes)
         self._started = started
         self._release = release
+        self._tracing_mode = tracing
         self.calls: list[list[MessageDict]] = []
         self.call_options: list[dict[str, object]] = []
+
+    @property
+    def tracing(self) -> ModelTracing:
+        return self._tracing_mode
 
     async def get_response(
         self,
@@ -432,6 +445,122 @@ def test_runner_returns_run_result_and_updates_run_state() -> None:
         assert isinstance(state.history[1], ModelResponse)
 
     asyncio.run(scenario())
+
+
+class _TracingToolArgs(BaseModel):
+    """Arguments for the executable echo tool used in tracing tests."""
+
+    text: str
+
+
+async def _tracing_echo_handler(
+    args: _TracingToolArgs,
+    cancellation_token: CancellationToken,
+    context: ToolExecutionContext,
+) -> str:
+    """Return a simple string so the function span captures tool output."""
+    del cancellation_token, context
+    return f"echoed:{args.text}"
+
+
+class _CollectingTracingProcessor(TracingProcessor):
+    """Capture finished spans for assertions."""
+
+    def __init__(self) -> None:
+        self.spans: list[Any] = []
+
+    def on_trace_start(self, trace: Any) -> None:
+        del trace
+
+    def on_trace_end(self, trace: Any) -> None:
+        del trace
+
+    def on_span_start(self, span: Any) -> None:
+        del span
+
+    def on_span_end(self, span: Any) -> None:
+        self.spans.append(span)
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self) -> None:
+        return None
+
+
+def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProcessor:
+    """Run one tool round-trip under a model with the given tracing mode."""
+    recorder = _CollectingTracingProcessor()
+    provider = DefaultTraceProvider()
+    provider.register_processor(recorder)
+    set_trace_provider(provider)
+
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        echo = Tool(
+            name="echo",
+            description="Echo text",
+            args_model=_TracingToolArgs,
+            handler=_tracing_echo_handler,
+        )
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ],
+            tracing=model_tracing,
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="Tracer",
+                model=model,
+                instructions="You are helpful.",
+                tools=Tools(tools=[echo]),
+            ),
+        )
+        state = RunState(
+            instructions="You are helpful.",
+            history=["please echo"],
+            responses=[],
+        )
+        with trace("runner_tool_tracing"):
+            result = await runner.run(agent, state)
+        assert result.final_output == "done"
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        set_trace_provider(DefaultTraceProvider())
+    return recorder
+
+
+def _recorded_function_span_names(recorder: _CollectingTracingProcessor) -> list[str]:
+    """Return the names of recorded function spans in order."""
+    return [
+        span.span_data.name
+        for span in recorder.spans
+        if span.span_data.type == "function"
+    ]
+
+
+def test_runner_tool_spans_follow_model_tracing_when_enabled() -> None:
+    """With the model's tracing ENABLED, tool calls produce function spans."""
+    recorder = _run_echo_tool_call(ModelTracing.ENABLED)
+    assert _recorded_function_span_names(recorder) == ["echo"]
+
+
+def test_runner_tool_spans_absent_when_model_tracing_disabled() -> None:
+    """With the model's tracing DISABLED, tool calls produce no function spans."""
+    recorder = _run_echo_tool_call(ModelTracing.DISABLED)
+    assert _recorded_function_span_names(recorder) == []
 
 
 def test_runner_retries_retryable_model_failures() -> None:

@@ -260,6 +260,14 @@ class Model[TResponse](abc.ABC):
             **kwargs,
         )
 
+    @property
+    def tracing(self) -> ModelTracing:
+        """Tracing mode configured for this model (defaults to ``DISABLED``).
+
+        Concrete clients return the mode set on their ``Config``.
+        """
+        return ModelTracing.DISABLED
+
     @abc.abstractmethod
     async def get_response(
         self,
