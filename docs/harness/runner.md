@@ -180,11 +180,6 @@ Ordinary executable tools run through
 enforces tool visibility and loop-safety limits so a run cannot keep requesting
 the same tools forever.
 
-Tool-call spans follow the tracing mode of the model that produced the call:
-the runner reads the agent's `model.tracing` and passes it to `ToolExecutor`,
-so enabling tracing on the model (via its `Config`) traces its tool calls too.
-There is no separate tool-tracing setting to keep in sync with the model.
-
 For each ordinary executable tool call, the runner also builds an explicit
 `ToolExecutionContext` containing the run id, agent name, and model tool-call
 id. `ToolExecutor` passes that context to the tool handler; permission policies
