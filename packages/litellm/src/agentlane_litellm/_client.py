@@ -193,6 +193,11 @@ class Client(Model[TResponseType]):
             self._common_params["vertex_project"] = config.vertex_project_id
             self._common_params["vertex_location"] = config.vertex_location
 
+    @property
+    def tracing(self) -> ModelTracing:
+        """Return the tracing mode configured for this client."""
+        return self._tracing
+
     async def get_response(
         self,
         messages: list[MessageDict],

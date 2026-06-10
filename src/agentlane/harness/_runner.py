@@ -812,6 +812,7 @@ class Runner:
                     result,
                 ),
                 context={tool_call.id: context},
+                tracing=_require_model(runner_task).tracing,
             )
             return tool_messages[0]
 

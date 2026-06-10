@@ -36,11 +36,12 @@ class ToolExecutor:
 
     Example:
         ```python
-        executor = ToolExecutor(tracing=ModelTracing.ENABLED)
+        executor = ToolExecutor()
         tool_messages = await executor.execute(
             tool_calls=tool_calls,
             tools=tools,
             parent_span=generation_span,
+            tracing=ModelTracing.ENABLED,
         )
         # tool_messages can be appended to the conversation
         ```
@@ -48,17 +49,14 @@ class ToolExecutor:
 
     def __init__(
         self,
-        tracing: ModelTracing = ModelTracing.DISABLED,
         adapter: ToolOutputAdapter | None = None,
     ) -> None:
         """Initialize the tool executor.
 
         Args:
-            tracing: The tracing mode for tool execution spans.
             adapter: The output adapter for formatting tool results.
                 Defaults to ChatCompletionsOutputAdapter if not provided.
         """
-        self._tracing = tracing
         self._adapter = adapter or ChatCompletionsOutputAdapter()
 
     async def execute(
@@ -71,6 +69,7 @@ class ToolExecutor:
         on_tool_start: ToolStartCallback | None = None,
         on_tool_end: ToolEndCallback | None = None,
         context: Mapping[str, ToolExecutionContext] | None = None,
+        tracing: ModelTracing = ModelTracing.DISABLED,
     ) -> list[dict[str, Any]]:
         """Execute tool calls and return formatted messages.
 
@@ -85,6 +84,8 @@ class ToolExecutor:
                 finishes or exhausts timeout retries.
             context: Optional per-tool-call framework context keyed by tool
                 call id.
+            tracing: Tracing mode for the tool-call spans. The harness runner
+                passes the model's tracing mode so tools trace with the model.
 
         Returns:
             List of tool result messages formatted by the adapter.
@@ -153,7 +154,7 @@ class ToolExecutor:
                 name=function_name,
                 inputs=raw_arguments,
                 parent=parent_span,
-                disabled=self._tracing.is_disabled(),
+                disabled=tracing.is_disabled(),
             ) as span_function:
                 await _maybe_await(on_tool_start, call)
                 attempts = 0

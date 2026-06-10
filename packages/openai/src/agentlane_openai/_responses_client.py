@@ -376,6 +376,11 @@ class ResponsesClient(Model[TResponseType]):
         # Common parameters for API calls
         self._common_params: dict[str, Any] = dict(kwargs)
 
+    @property
+    def tracing(self) -> ModelTracing:
+        """Return the tracing mode configured for this client."""
+        return self._tracing
+
     async def get_response(  # pylint: disable=R0912
         self,
         messages: list[MessageDict],
