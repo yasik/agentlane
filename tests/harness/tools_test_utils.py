@@ -1,7 +1,7 @@
 import asyncio
 import os
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ from agentlane.models import (
     Tools,
 )
 from agentlane.runtime import CancellationToken
+from agentlane.tracing import Span
 
 
 class EchoArgs(BaseModel):
@@ -135,6 +136,7 @@ class SequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: Tools | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del extra_call_args

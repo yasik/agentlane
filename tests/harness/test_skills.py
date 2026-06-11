@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pytest import CaptureFixture, MonkeyPatch
@@ -42,6 +43,7 @@ from agentlane.harness.tools import (
 )
 from agentlane.models import MessageDict, Model, ModelResponse, ToolCall, Tools
 from agentlane.runtime import CancellationToken
+from agentlane.tracing import Span
 
 
 def _make_tool_call(
@@ -101,6 +103,7 @@ class _SequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del cancellation_token

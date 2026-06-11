@@ -388,6 +388,7 @@ class ResponsesClient(Model[TResponseType]):
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **_kwargs: Any,
     ) -> TResponseType:
         """Get a response from the OpenAI Responses API.
@@ -399,6 +400,10 @@ class ResponsesClient(Model[TResponseType]):
             schema: Optional Pydantic model or OutputSchema for structured output.
             tools: Optional tools configuration for function calling.
             cancellation_token: Optional cancellation token.
+            parent_span: Pre-opened generation span owned by the caller. When
+                provided, model metadata and usage are recorded onto it instead
+                of opening a new span — so subsequent tool spans can nest under
+                the same generation.
 
         Returns:
             ModelResponse in Chat Completions format for interchangeability.
@@ -407,11 +412,20 @@ class ResponsesClient(Model[TResponseType]):
         conversation_input = self._messages_to_input(messages)
         schema_retry_count = 0
 
-        with generation_span(
-            model=self._model,
-            model_config=self._trace_settings,
-            disabled=self._tracing.is_disabled(),
-        ) as span_generation:
+        if parent_span is not None:
+            parent_span.span_data.model = self._model
+            parent_span.span_data.model_config = self._trace_settings
+            span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
+                contextlib.nullcontext(parent_span)
+            )
+        else:
+            span_ctx = generation_span(
+                model=self._model,
+                model_config=self._trace_settings,
+                disabled=self._tracing.is_disabled(),
+            )
+
+        with span_ctx as span_generation:
             if self._tracing.include_data():
                 span_generation.span_data.input = messages
 
@@ -529,6 +543,7 @@ class ResponsesClient(Model[TResponseType]):
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **_kwargs: Any,
     ) -> AsyncIterator[ModelStreamEvent]:
         """Stream semantic OpenAI Responses API events as normalized model events.
@@ -537,6 +552,8 @@ class ResponsesClient(Model[TResponseType]):
         occur before the first chunk trigger the shared retry policy, while
         mid-stream failures surface as an ``ERROR`` event and a raised
         exception without retry.
+
+        See :meth:`get_response` for ``parent_span`` semantics.
         """
         conversation_input = self._messages_to_input(messages)
 
@@ -544,11 +561,20 @@ class ResponsesClient(Model[TResponseType]):
             trace_events: list[dict[str, Any]] = []
             stream: object | None = None
 
-            with generation_span(
-                model=self._model,
-                model_config=self._trace_settings,
-                disabled=self._tracing.is_disabled(),
-            ) as span_generation:
+            if parent_span is not None:
+                parent_span.span_data.model = self._model
+                parent_span.span_data.model_config = self._trace_settings
+                span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
+                    contextlib.nullcontext(parent_span)
+                )
+            else:
+                span_ctx = generation_span(
+                    model=self._model,
+                    model_config=self._trace_settings,
+                    disabled=self._tracing.is_disabled(),
+                )
+
+            with span_ctx as span_generation:
                 if self._tracing.include_data():
                     span_generation.span_data.input = messages
 
@@ -1101,33 +1127,54 @@ class ResponsesClient(Model[TResponseType]):
         result: OpenAIResponse,
         retry_metrics: RetryMetrics | None = None,
     ) -> None:
-        """Record token usage and retry information when available."""
-        usage = getattr(result, "usage", None)
-        if usage is None:
-            span_generation.span_data.usage = {}
-        else:
-            span_generation.span_data.usage = {
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "total_tokens": usage.total_tokens,
-            }
+        """Record token usage and retry information when available.
 
-            # Add cache metrics for monitoring cache effectiveness
+        Accumulates into ``span_generation.span_data.usage`` so a generation
+        span shared across multiple model calls in one run captures every
+        call's tokens rather than only the last call.
+        """
+        existing_usage = getattr(span_generation.span_data, "usage", None)
+        if not isinstance(existing_usage, dict):
+            usage_dict: dict[str, Any] = {}
+            span_generation.span_data.usage = usage_dict
+        else:
+            usage_dict = cast(dict[str, Any], existing_usage)
+
+        usage = getattr(result, "usage", None)
+        if usage is not None:
+            usage_dict["input_tokens"] = (
+                usage_dict.get("input_tokens", 0) + usage.input_tokens
+            )
+            usage_dict["output_tokens"] = (
+                usage_dict.get("output_tokens", 0) + usage.output_tokens
+            )
+            usage_dict["total_tokens"] = (
+                usage_dict.get("total_tokens", 0) + usage.total_tokens
+            )
+
+            # Accumulate cache metrics for monitoring cache effectiveness across
+            # the full run.
             input_details = getattr(usage, "input_tokens_details", None)
             if input_details is not None:
                 cached_tokens = getattr(input_details, "cached_tokens", 0) or 0
-                span_generation.span_data.usage["cached_tokens"] = cached_tokens
-                # Calculate cache hit rate as a percentage
-                if usage.input_tokens > 0:
-                    cache_hit_rate = (cached_tokens / usage.input_tokens) * 100
-                    span_generation.span_data.usage["cache_hit_rate_pct"] = round(
-                        cache_hit_rate, 2
+                usage_dict["cached_tokens"] = (
+                    usage_dict.get("cached_tokens", 0) + cached_tokens
+                )
+                # Recompute cache hit rate over the accumulated totals.
+                total_input = usage_dict.get("input_tokens", 0)
+                if total_input > 0:
+                    usage_dict["cache_hit_rate_pct"] = round(
+                        (usage_dict["cached_tokens"] / total_input) * 100, 2
                     )
 
         # Add retry metrics
         if retry_metrics is not None:
-            span_generation.span_data.usage["attempts"] = retry_metrics.attempts
-            span_generation.span_data.usage["retry_wait"] = retry_metrics.retry_wait
-            span_generation.span_data.usage["backend_latency"] = (
-                retry_metrics.backend_latency
+            usage_dict["attempts"] = (
+                usage_dict.get("attempts", 0) + retry_metrics.attempts
+            )
+            usage_dict["retry_wait"] = (
+                usage_dict.get("retry_wait", 0) + retry_metrics.retry_wait
+            )
+            usage_dict["backend_latency"] = (
+                usage_dict.get("backend_latency", 0) + retry_metrics.backend_latency
             )

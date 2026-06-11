@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -22,6 +23,7 @@ from agentlane.harness.tools._shim import render_harness_tools_prompt
 from agentlane.messaging import DeliveryOutcome, DeliveryStatus, MessageId
 from agentlane.models import MessageDict, ModelResponse, Tools
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.tracing import Span
 
 from .tools_test_utils import (
     SequenceModel,
@@ -481,11 +483,13 @@ class _BlockingChildModel(SequenceModel):
         schema: object | None = None,
         tools: Tools | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del extra_call_args
         del schema
         del cancellation_token
+        del parent_span
         del kwargs
 
         self.calls.append([dict(message) for message in messages])

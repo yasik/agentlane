@@ -42,6 +42,7 @@ from agentlane.models import (
 )
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken, RuntimeEngine
+from agentlane.tracing import Span, generation_span
 
 from ._cancellation import cancel_task_callback
 from ._events import (
@@ -267,90 +268,98 @@ class Runner:
         if shim_manager is not None:
             await shim_manager.on_run_start(state, transient_state)
         try:
-            while True:
-                state.turn_count += 1
-                _check_turn_limit(state.turn_count, self._max_turns)
-                prepared_turn = PreparedTurn(
-                    run_state=state,
-                    tools=_visible_tools(
-                        runner_task, tool_call_counts, tool_round_trips
-                    ),
-                    model_args=_model_args(runner_task),
-                    transient_state=transient_state,
-                )
-                if shim_manager is not None:
-                    await shim_manager.prepare_turn(prepared_turn)
-
-                messages = _build_request(prepared_turn)
-                if shim_manager is not None:
-                    messages = await shim_manager.transform_messages(
-                        prepared_turn,
-                        messages,
+            # One generation span scopes the entire agent run: every model call
+            # records onto it (accumulating usage across turns) and every tool
+            # call nests under it, regardless of which turn triggered the tool.
+            with generation_span(
+                disabled=_require_model(runner_task).tracing.is_disabled(),
+            ) as gen_span:
+                while True:
+                    state.turn_count += 1
+                    _check_turn_limit(state.turn_count, self._max_turns)
+                    prepared_turn = PreparedTurn(
+                        run_state=state,
+                        tools=_visible_tools(
+                            runner_task, tool_call_counts, tool_round_trips
+                        ),
+                        model_args=_model_args(runner_task),
+                        transient_state=transient_state,
                     )
-                response = await self._run_with_retry(
-                    agent=agent,
-                    runner_task=runner_task,
-                    messages=messages,
-                    tools=prepared_turn.tools,
-                    model_args=prepared_turn.model_args,
-                    hooks=resolved_hooks,
-                    cancellation_token=cancellation_token,
-                )
+                    if shim_manager is not None:
+                        await shim_manager.prepare_turn(prepared_turn)
 
-                state.responses.append(response)
-                if shim_manager is not None:
-                    await shim_manager.on_model_response(prepared_turn, response)
-                tool_calls = _extract_tool_calls(response)
-                if tool_calls:
-                    handoff_call = _extract_handoff_call(
-                        tools=prepared_turn.tools,
-                        tool_calls=tool_calls,
-                    )
-                    if handoff_call is not None:
-                        return await self._execute_handoff(
-                            agent=agent,
-                            runner_task=runner_task,
-                            state=state,
-                            response=response,
-                            handoff_call=handoff_call,
-                            tools=prepared_turn.tools,
-                            hooks=resolved_hooks,
-                            cancellation_token=cancellation_token,
+                    messages = _build_request(prepared_turn)
+                    if shim_manager is not None:
+                        messages = await shim_manager.transform_messages(
+                            prepared_turn,
+                            messages,
                         )
-
-                    # Tool and sub-agent calls continue the same loop, so the
-                    # raw assistant turn is committed before execution and fed
-                    # back into the next model request together with the tool
-                    # result messages.
-                    state.history.append(response)
-                    tool_messages = await self._execute_tool_calls(
+                    response = await self._run_with_retry(
                         agent=agent,
                         runner_task=runner_task,
+                        messages=messages,
                         tools=prepared_turn.tools,
-                        tool_calls=tool_calls,
-                        response=response,
+                        model_args=prepared_turn.model_args,
                         hooks=resolved_hooks,
                         cancellation_token=cancellation_token,
+                        parent_span=gen_span,
                     )
-                    state.history.extend(tool_messages)
 
-                    # Update incremental counters from this batch
-                    tool_round_trips += 1
-                    for tc in tool_calls:
-                        name = tc.function.name or ""
-                        tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+                    state.responses.append(response)
+                    if shim_manager is not None:
+                        await shim_manager.on_model_response(prepared_turn, response)
+                    tool_calls = _extract_tool_calls(response)
+                    if tool_calls:
+                        handoff_call = _extract_handoff_call(
+                            tools=prepared_turn.tools,
+                            tool_calls=tool_calls,
+                        )
+                        if handoff_call is not None:
+                            return await self._execute_handoff(
+                                agent=agent,
+                                runner_task=runner_task,
+                                state=state,
+                                response=response,
+                                handoff_call=handoff_call,
+                                tools=prepared_turn.tools,
+                                hooks=resolved_hooks,
+                                cancellation_token=cancellation_token,
+                            )
 
-                    continue
+                        # Tool and sub-agent calls continue the same loop, so the
+                        # raw assistant turn is committed before execution and fed
+                        # back into the next model request together with the tool
+                        # result messages.
+                        state.history.append(response)
+                        tool_messages = await self._execute_tool_calls(
+                            agent=agent,
+                            runner_task=runner_task,
+                            tools=prepared_turn.tools,
+                            tool_calls=tool_calls,
+                            response=response,
+                            hooks=resolved_hooks,
+                            cancellation_token=cancellation_token,
+                            parent_span=gen_span,
+                        )
+                        state.history.extend(tool_messages)
 
-                state.history.append(response)
-                _validate_terminal_response(response)
-                result = RunResult(
-                    final_output=_extract_direct_answer(response),
-                    responses=list(state.responses),
-                    turn_count=state.turn_count,
-                    run_state=copy_run_state(state),
-                )
-                return result
+                        # Update incremental counters from this batch
+                        tool_round_trips += 1
+                        for tc in tool_calls:
+                            name = tc.function.name or ""
+                            tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+
+                        continue
+
+                    state.history.append(response)
+                    _validate_terminal_response(response)
+                    result = RunResult(
+                        final_output=_extract_direct_answer(response),
+                        responses=list(state.responses),
+                        turn_count=state.turn_count,
+                        run_state=copy_run_state(state),
+                    )
+                    return result
         finally:
             if shim_manager is not None:
                 await shim_manager.on_run_end(result, transient_state)
@@ -503,98 +512,106 @@ class Runner:
         if run_events is not None:
             run_events.state_snapshot(RunStateSnapshotBoundary.RUN_START, state)
         try:
-            while True:
-                state.turn_count += 1
-                _check_turn_limit(state.turn_count, self._max_turns)
-                prepared_turn = PreparedTurn(
-                    run_state=state,
-                    tools=_visible_tools(
-                        runner_task, tool_call_counts, tool_round_trips
-                    ),
-                    model_args=_model_args(runner_task),
-                    transient_state=transient_state,
-                )
-                if shim_manager is not None:
-                    await shim_manager.prepare_turn(prepared_turn)
-                if run_events is not None:
-                    run_events.state_snapshot(
-                        RunStateSnapshotBoundary.TURN_PREPARED,
-                        state,
+            # See the non-stream loop above. One generation span scopes the
+            # whole run so usage accumulates across turns and tools nest under
+            # one parent regardless of which turn triggered them.
+            with generation_span(
+                disabled=_require_model(runner_task).tracing.is_disabled(),
+            ) as gen_span:
+                while True:
+                    state.turn_count += 1
+                    _check_turn_limit(state.turn_count, self._max_turns)
+                    prepared_turn = PreparedTurn(
+                        run_state=state,
+                        tools=_visible_tools(
+                            runner_task, tool_call_counts, tool_round_trips
+                        ),
+                        model_args=_model_args(runner_task),
+                        transient_state=transient_state,
                     )
-
-                messages = _build_request(prepared_turn)
-                if shim_manager is not None:
-                    messages = await shim_manager.transform_messages(
-                        prepared_turn,
-                        messages,
-                    )
-                response = await self._stream_model_call(
-                    agent=agent,
-                    runner_task=runner_task,
-                    messages=messages,
-                    tools=prepared_turn.tools,
-                    model_args=prepared_turn.model_args,
-                    emit=emit,
-                    hooks=hooks,
-                    cancellation_token=cancellation_token,
-                )
-
-                state.responses.append(response)
-                if shim_manager is not None:
-                    await shim_manager.on_model_response(prepared_turn, response)
-                tool_calls = _extract_tool_calls(response)
-                if tool_calls:
-                    handoff_call = _extract_handoff_call(
-                        tools=prepared_turn.tools,
-                        tool_calls=tool_calls,
-                    )
-                    if handoff_call is not None:
-                        return await self._execute_handoff_stream(
-                            agent=agent,
-                            runner_task=runner_task,
-                            state=state,
-                            response=response,
-                            handoff_call=handoff_call,
-                            tools=prepared_turn.tools,
-                            emit=emit,
-                            hooks=hooks,
-                            cancellation_token=cancellation_token,
-                            run_events=run_events,
-                        )
-
-                    state.history.append(response)
-                    tool_messages = await self._execute_tool_calls(
-                        agent=agent,
-                        runner_task=runner_task,
-                        tools=prepared_turn.tools,
-                        tool_calls=tool_calls,
-                        response=response,
-                        hooks=hooks,
-                        cancellation_token=cancellation_token,
-                    )
-                    state.history.extend(tool_messages)
-
-                    tool_round_trips += 1
-                    for tc in tool_calls:
-                        name = tc.function.name or ""
-                        tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+                    if shim_manager is not None:
+                        await shim_manager.prepare_turn(prepared_turn)
                     if run_events is not None:
                         run_events.state_snapshot(
-                            RunStateSnapshotBoundary.TOOL_ROUND_END,
+                            RunStateSnapshotBoundary.TURN_PREPARED,
                             state,
                         )
 
-                    continue
+                    messages = _build_request(prepared_turn)
+                    if shim_manager is not None:
+                        messages = await shim_manager.transform_messages(
+                            prepared_turn,
+                            messages,
+                        )
+                    response = await self._stream_model_call(
+                        agent=agent,
+                        runner_task=runner_task,
+                        messages=messages,
+                        tools=prepared_turn.tools,
+                        model_args=prepared_turn.model_args,
+                        emit=emit,
+                        hooks=hooks,
+                        cancellation_token=cancellation_token,
+                        parent_span=gen_span,
+                    )
 
-                state.history.append(response)
-                _validate_terminal_response(response)
-                result = RunResult(
-                    final_output=_extract_direct_answer(response),
-                    responses=list(state.responses),
-                    turn_count=state.turn_count,
-                    run_state=copy_run_state(state),
-                )
-                return result
+                    state.responses.append(response)
+                    if shim_manager is not None:
+                        await shim_manager.on_model_response(prepared_turn, response)
+                    tool_calls = _extract_tool_calls(response)
+                    if tool_calls:
+                        handoff_call = _extract_handoff_call(
+                            tools=prepared_turn.tools,
+                            tool_calls=tool_calls,
+                        )
+                        if handoff_call is not None:
+                            return await self._execute_handoff_stream(
+                                agent=agent,
+                                runner_task=runner_task,
+                                state=state,
+                                response=response,
+                                handoff_call=handoff_call,
+                                tools=prepared_turn.tools,
+                                emit=emit,
+                                hooks=hooks,
+                                cancellation_token=cancellation_token,
+                                run_events=run_events,
+                            )
+
+                        state.history.append(response)
+                        tool_messages = await self._execute_tool_calls(
+                            agent=agent,
+                            runner_task=runner_task,
+                            tools=prepared_turn.tools,
+                            tool_calls=tool_calls,
+                            response=response,
+                            hooks=hooks,
+                            cancellation_token=cancellation_token,
+                            parent_span=gen_span,
+                        )
+                        state.history.extend(tool_messages)
+
+                        tool_round_trips += 1
+                        for tc in tool_calls:
+                            name = tc.function.name or ""
+                            tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+                        if run_events is not None:
+                            run_events.state_snapshot(
+                                RunStateSnapshotBoundary.TOOL_ROUND_END,
+                                state,
+                            )
+
+                        continue
+
+                    state.history.append(response)
+                    _validate_terminal_response(response)
+                    result = RunResult(
+                        final_output=_extract_direct_answer(response),
+                        responses=list(state.responses),
+                        turn_count=state.turn_count,
+                        run_state=copy_run_state(state),
+                    )
+                    return result
         finally:
             if shim_manager is not None:
                 await shim_manager.on_run_end(result, transient_state)
@@ -612,6 +629,7 @@ class Runner:
         model_args: dict[str, object] | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
+        parent_span: Span[Any] | None = None,
     ) -> ModelResponse:
         """Execute one model turn under the configured retry policy."""
         retry_result = await self._retryable_run_once(
@@ -622,6 +640,7 @@ class Runner:
             model_args=model_args,
             hooks=hooks,
             cancellation_token=cancellation_token,
+            parent_span=parent_span,
         )
         return retry_result.result
 
@@ -635,6 +654,7 @@ class Runner:
         model_args: dict[str, object] | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
+        parent_span: Span[Any] | None = None,
     ) -> ModelResponse:
         """Execute one single model attempt (no retry logic here)."""
         model = _require_model(runner_task)
@@ -646,6 +666,7 @@ class Runner:
             schema=runner_task.schema,
             tools=tools,
             cancellation_token=cancellation_token,
+            parent_span=parent_span,
         )
         await hooks.on_llm_end(agent, response)
 
@@ -662,6 +683,7 @@ class Runner:
         emit: Callable[[ModelStreamEvent], None],
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
+        parent_span: Span[Any] | None = None,
     ) -> ModelResponse:
         """Execute one streaming model turn and return the completed response.
 
@@ -679,6 +701,7 @@ class Runner:
             schema=runner_task.schema,
             tools=tools,
             cancellation_token=cancellation_token,
+            parent_span=parent_span,
         ):
             emit(event)
             if (
@@ -706,6 +729,7 @@ class Runner:
         response: ModelResponse,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
+        parent_span: Span[Any] | None = None,
     ) -> list[MessageDict]:
         """Execute one model-emitted tool batch and return tool messages."""
         if tools is None:
@@ -739,6 +763,7 @@ class Runner:
                         tool_definition=tool_definitions[tool_call.function.name or ""],
                         hooks=hooks,
                         cancellation_token=cancellation_token,
+                        parent_span=parent_span,
                     )
                     for tool_call in tool_calls
                 ]
@@ -755,6 +780,7 @@ class Runner:
                     tool_definition=tool_definitions[tool_call.function.name or ""],
                     hooks=hooks,
                     cancellation_token=cancellation_token,
+                    parent_span=parent_span,
                 )
             )
         return tool_messages
@@ -769,6 +795,7 @@ class Runner:
         tool_definition: ToolSpec[Any],
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
+        parent_span: Span[Any] | None = None,
     ) -> MessageDict:
         """Execute one tool or delegated-agent call and return its tool message."""
         if isinstance(tool_definition, AgentTool):
@@ -813,6 +840,7 @@ class Runner:
                 ),
                 context={tool_call.id: context},
                 tracing=_require_model(runner_task).tracing,
+                parent_span=parent_span,
             )
             return tool_messages[0]
 

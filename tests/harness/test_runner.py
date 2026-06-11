@@ -48,6 +48,7 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import (
     DefaultTraceProvider,
+    Span,
     TracingProcessor,
     set_trace_provider,
     trace,
@@ -127,9 +128,14 @@ class _SequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del cancellation_token
+
+        # ``parent_span`` is plumbed by the runner so tool spans can nest
+        # under the requesting generation; opaque value, not asserted.
+        recorded_kwargs = {k: v for k, v in kwargs.items() if k != "parent_span"}
 
         self.calls.append(_copy_messages(messages))
         self.call_options.append(
@@ -137,7 +143,7 @@ class _SequenceModel(Model[ModelResponse]):
                 "extra_call_args": extra_call_args,
                 "schema": schema,
                 "tools": tools,
-                "kwargs": dict(kwargs),
+                "kwargs": recorded_kwargs,
             }
         )
         if self._started is not None:
@@ -169,6 +175,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del messages, extra_call_args, schema, tools, cancellation_token, kwargs
@@ -181,6 +188,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ):
         del cancellation_token
@@ -349,6 +357,7 @@ class _BlockingResultModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del messages
