@@ -131,13 +131,17 @@ class _SequenceModel(Model[ModelResponse]):
     ) -> ModelResponse:
         del cancellation_token
 
+        # ``parent_span`` is plumbed by the runner so tool spans can nest
+        # under the requesting generation; opaque value, not asserted.
+        recorded_kwargs = {k: v for k, v in kwargs.items() if k != "parent_span"}
+
         self.calls.append(_copy_messages(messages))
         self.call_options.append(
             {
                 "extra_call_args": extra_call_args,
                 "schema": schema,
                 "tools": tools,
-                "kwargs": dict(kwargs),
+                "kwargs": recorded_kwargs,
             }
         )
         if self._started is not None:

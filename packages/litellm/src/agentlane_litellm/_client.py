@@ -205,17 +205,33 @@ class Client(Model[TResponseType]):
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **_kwargs: Any,
     ) -> TResponseType:
-        """Asynchronously call the LLM with cancellation, tooling, and schema support."""
+        """Asynchronously call the LLM with cancellation, tooling, and schema support.
+
+        When ``parent_span`` is provided, model metadata, usage, and I/O are
+        recorded onto it directly and no new generation span is opened — so the
+        caller (typically the harness runner) can keep that span open across
+        subsequent tool dispatch and nest tool spans under it.
+        """
         conversation: list[MessageDict] = [*messages]
         schema_retry_count = 0
 
-        with generation_span(
-            model=self._model,
-            model_config=self._trace_settings,
-            disabled=self._tracing.is_disabled(),
-        ) as span_generation:
+        if parent_span is not None:
+            parent_span.span_data.model = self._model
+            parent_span.span_data.model_config = self._trace_settings
+            span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
+                contextlib.nullcontext(parent_span)
+            )
+        else:
+            span_ctx = generation_span(
+                model=self._model,
+                model_config=self._trace_settings,
+                disabled=self._tracing.is_disabled(),
+            )
+
+        with span_ctx as span_generation:
             if self._tracing.include_data():
                 span_generation.span_data.input = messages
 
@@ -324,6 +340,7 @@ class Client(Model[TResponseType]):
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **_kwargs: Any,
     ) -> AsyncIterator[ModelStreamEvent]:
         """Return LiteLLM chunk streams as normalized model events.
@@ -332,16 +349,27 @@ class Client(Model[TResponseType]):
         occur before the first chunk trigger the shared retry policy, while
         mid-stream failures surface as an ``ERROR`` event and a raised
         exception without retry.
+
+        See :meth:`get_response` for ``parent_span`` semantics.
         """
 
         async def _stream() -> AsyncIterator[ModelStreamEvent]:
             trace_events: list[dict[str, Any]] = []
 
-            with generation_span(
-                model=self._model,
-                model_config=self._trace_settings,
-                disabled=self._tracing.is_disabled(),
-            ) as span_generation:
+            if parent_span is not None:
+                parent_span.span_data.model = self._model
+                parent_span.span_data.model_config = self._trace_settings
+                span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
+                    contextlib.nullcontext(parent_span)
+                )
+            else:
+                span_ctx = generation_span(
+                    model=self._model,
+                    model_config=self._trace_settings,
+                    disabled=self._tracing.is_disabled(),
+                )
+
+            with span_ctx as span_generation:
                 if self._tracing.include_data():
                     span_generation.span_data.input = messages
 
@@ -787,24 +815,39 @@ class Client(Model[TResponseType]):
         result: ModelResponse,
         retry_metrics: RetryMetrics | None = None,
     ) -> None:
-        """Record token usage, cost, and retry information when available."""
+        """Record token usage, cost, and retry information when available.
+
+        Accumulates into ``span_generation.span_data.usage`` so a generation
+        span shared across multiple model calls in one run captures every
+        call's tokens/cost rather than only the last call.
+        """
+        usage_dict = getattr(span_generation.span_data, "usage", None)
+        if not isinstance(usage_dict, dict):
+            usage_dict = {}
+            span_generation.span_data.usage = usage_dict
 
         usage = getattr(result, "usage", None)
-        if usage is None:
-            span_generation.span_data.usage = {}
-        else:
-            span_generation.span_data.usage = {
-                "input_tokens": usage.prompt_tokens,
-                "output_tokens": usage.completion_tokens,
-                "total_tokens": usage.total_tokens,
-            }
+        if usage is not None:
+            usage_dict["input_tokens"] = (
+                usage_dict.get("input_tokens", 0) + usage.prompt_tokens
+            )
+            usage_dict["output_tokens"] = (
+                usage_dict.get("output_tokens", 0) + usage.completion_tokens
+            )
+            usage_dict["total_tokens"] = (
+                usage_dict.get("total_tokens", 0) + usage.total_tokens
+            )
 
         # Add retry metrics
         if retry_metrics is not None:
-            span_generation.span_data.usage["attempts"] = retry_metrics.attempts
-            span_generation.span_data.usage["retry_wait"] = retry_metrics.retry_wait
-            span_generation.span_data.usage["backend_latency"] = (
-                retry_metrics.backend_latency
+            usage_dict["attempts"] = (
+                usage_dict.get("attempts", 0) + retry_metrics.attempts
+            )
+            usage_dict["retry_wait"] = (
+                usage_dict.get("retry_wait", 0) + retry_metrics.retry_wait
+            )
+            usage_dict["backend_latency"] = (
+                usage_dict.get("backend_latency", 0) + retry_metrics.backend_latency
             )
 
         if not hasattr(result, "_hidden_params"):
@@ -817,20 +860,21 @@ class Client(Model[TResponseType]):
             else None
         )
 
+        call_cost: float | None = None
         if isinstance(response_cost, dict):
             response_cost_dict = cast(dict[str, Any], response_cost)
             total_cost = response_cost_dict.get("total_cost")
             if isinstance(total_cost, (int, float)):
-                span_generation.span_data.usage["total_cost"] = total_cost
-                return
+                call_cost = float(total_cost)
+        elif isinstance(response_cost, (int, float)):
+            call_cost = float(response_cost)
+        else:
+            usage_cost = getattr(usage, "cost", None) if usage is not None else None
+            if isinstance(usage_cost, (int, float)):
+                call_cost = float(usage_cost)
 
-        if response_cost is not None and isinstance(response_cost, (int, float)):
-            span_generation.span_data.usage["total_cost"] = response_cost
-            return
-
-        usage_cost = getattr(usage, "cost", None) if usage is not None else None
-        if isinstance(usage_cost, (int, float)):
-            span_generation.span_data.usage["total_cost"] = usage_cost
+        if call_cost is not None:
+            usage_dict["total_cost"] = usage_dict.get("total_cost", 0.0) + call_cost
 
     def _to_model_response(self, resp: ModelResponse) -> TResponseType:
         """Adapt LiteLLM response to our ModelResponse (OpenAI ChatCompletion).

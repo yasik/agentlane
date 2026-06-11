@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 import httpx
 from pydantic import BaseModel
 
+from ..tracing import Span
 from ._output_schema import OutputSchema
 from ._rate_limiter import RateLimiter
 from ._streaming import ModelStreamEvent, ModelStreamEventKind
@@ -249,6 +250,7 @@ class Model[TResponse](abc.ABC):
         extra_call_args: dict[str, Any] | None = None,
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: Any,
     ) -> TResponse:
         """Get the response from the LLM."""
@@ -257,6 +259,7 @@ class Model[TResponse](abc.ABC):
             extra_call_args=extra_call_args,
             schema=schema,
             tools=tools,
+            parent_span=parent_span,
             **kwargs,
         )
 
@@ -275,9 +278,17 @@ class Model[TResponse](abc.ABC):
         extra_call_args: dict[str, Any] | None = None,
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: Any,
     ) -> TResponse:
-        """Get the response from the LLM."""
+        """Get the response from the LLM.
+
+        When ``parent_span`` is provided, it is a generation span already opened
+        and owned by the caller (the harness runner); implementations record
+        model metadata and usage onto it instead of opening their own, so tool
+        spans dispatched after the call nest under the same generation. When it
+        is ``None``, implementations open and own their own generation span.
+        """
         raise NotImplementedError("get_response method must be implemented")
 
     def stream_response(
@@ -286,6 +297,7 @@ class Model[TResponse](abc.ABC):
         extra_call_args: dict[str, Any] | None = None,
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ModelStreamEvent]:
         """Return a stream of model events.
@@ -294,6 +306,8 @@ class Model[TResponse](abc.ABC):
         non-streaming model implementations by calling ``get_response(...)`` and
         emitting one terminal ``COMPLETED`` event. Concrete provider clients can
         override this with real streaming support.
+
+        See :meth:`get_response` for ``parent_span`` semantics.
         """
 
         async def _fallback() -> AsyncIterator[ModelStreamEvent]:
@@ -303,6 +317,7 @@ class Model[TResponse](abc.ABC):
                     extra_call_args=extra_call_args,
                     schema=schema,
                     tools=tools,
+                    parent_span=parent_span,
                     **kwargs,
                 )
             except Exception as error:
