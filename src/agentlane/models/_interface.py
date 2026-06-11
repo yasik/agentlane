@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 import httpx
 from pydantic import BaseModel
 
+from ..runtime import CancellationToken
 from ..tracing import Span
 from ._output_schema import OutputSchema
 from ._rate_limiter import RateLimiter
@@ -250,6 +251,7 @@ class Model[TResponse](abc.ABC):
         extra_call_args: dict[str, Any] | None = None,
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
         parent_span: Span[Any] | None = None,
         **kwargs: Any,
     ) -> TResponse:
@@ -259,6 +261,7 @@ class Model[TResponse](abc.ABC):
             extra_call_args=extra_call_args,
             schema=schema,
             tools=tools,
+            cancellation_token=cancellation_token,
             parent_span=parent_span,
             **kwargs,
         )
@@ -278,6 +281,7 @@ class Model[TResponse](abc.ABC):
         extra_call_args: dict[str, Any] | None = None,
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
         parent_span: Span[Any] | None = None,
         **kwargs: Any,
     ) -> TResponse:
@@ -297,6 +301,7 @@ class Model[TResponse](abc.ABC):
         extra_call_args: dict[str, Any] | None = None,
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
         parent_span: Span[Any] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ModelStreamEvent]:
@@ -317,6 +322,7 @@ class Model[TResponse](abc.ABC):
                     extra_call_args=extra_call_args,
                     schema=schema,
                     tools=tools,
+                    cancellation_token=cancellation_token,
                     parent_span=parent_span,
                     **kwargs,
                 )

@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Mapping
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -23,6 +24,7 @@ from agentlane.models import (
     Tools,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.tracing import Span
 
 
 def make_assistant_response(
@@ -84,6 +86,7 @@ class _SequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del cancellation_token

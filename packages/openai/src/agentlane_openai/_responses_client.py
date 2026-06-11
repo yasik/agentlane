@@ -1133,10 +1133,12 @@ class ResponsesClient(Model[TResponseType]):
         span shared across multiple model calls in one run captures every
         call's tokens rather than only the last call.
         """
-        usage_dict = getattr(span_generation.span_data, "usage", None)
-        if not isinstance(usage_dict, dict):
-            usage_dict = {}
+        existing_usage = getattr(span_generation.span_data, "usage", None)
+        if not isinstance(existing_usage, dict):
+            usage_dict: dict[str, Any] = {}
             span_generation.span_data.usage = usage_dict
+        else:
+            usage_dict = cast(dict[str, Any], existing_usage)
 
         usage = getattr(result, "usage", None)
         if usage is not None:

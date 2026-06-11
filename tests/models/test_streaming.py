@@ -14,6 +14,7 @@ from agentlane.models import (
     OutputSchema,
     Tools,
 )
+from agentlane.tracing import Span
 
 
 class _FallbackModel(Model[ModelResponse]):
@@ -28,9 +29,12 @@ class _FallbackModel(Model[ModelResponse]):
         extra_call_args: dict[str, Any] | None = None,
         schema: type[BaseModel] | OutputSchema[Any] | None = None,
         tools: Tools | None = None,
+        cancellation_token: Any = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: Any,
     ) -> ModelResponse:
-        del messages, extra_call_args, schema, tools, kwargs
+        del messages, extra_call_args, schema, tools, cancellation_token
+        del parent_span, kwargs
         if self._response is None:
             raise RuntimeError("boom")
         return self._response

@@ -25,6 +25,7 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import (
     DefaultTraceProvider,
+    Span,
     TracingProcessor,
     set_trace_provider,
     trace,
@@ -134,6 +135,8 @@ def test_model_tracing_defaults_to_disabled() -> None:
             extra_call_args: dict[str, Any] | None = None,
             schema: Any = None,
             tools: Tools | None = None,
+            cancellation_token: Any = None,
+            parent_span: Span[Any] | None = None,
             **kwargs: Any,
         ) -> Any:
             raise NotImplementedError

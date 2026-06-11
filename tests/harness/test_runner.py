@@ -48,6 +48,7 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import (
     DefaultTraceProvider,
+    Span,
     TracingProcessor,
     set_trace_provider,
     trace,
@@ -127,6 +128,7 @@ class _SequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del cancellation_token
@@ -173,6 +175,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del messages, extra_call_args, schema, tools, cancellation_token, kwargs
@@ -185,6 +188,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ):
         del cancellation_token
@@ -353,6 +357,7 @@ class _BlockingResultModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del messages

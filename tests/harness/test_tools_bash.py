@@ -38,6 +38,7 @@ from agentlane.models import (
     Tools,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.tracing import Span
 
 
 def _full_output_path_from_output(output: str) -> Path:
@@ -138,6 +139,7 @@ class _SequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: Tools | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del extra_call_args

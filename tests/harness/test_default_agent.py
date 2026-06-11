@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Sequence
+from typing import Any
 
 from agentlane.harness import (
     Agent,
@@ -21,6 +22,7 @@ from agentlane.models import (
     ModelStreamEventKind,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.tracing import Span
 
 
 def make_assistant_response(content: str) -> ModelResponse:
@@ -57,6 +59,7 @@ class _SequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del extra_call_args
@@ -89,6 +92,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del messages, extra_call_args, schema, tools, cancellation_token, kwargs
@@ -101,6 +105,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ):
         del extra_call_args, schema, tools, kwargs

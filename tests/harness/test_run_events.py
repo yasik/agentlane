@@ -45,6 +45,7 @@ from agentlane.models import (
     get_content_or_none,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.tracing import Span
 
 
 def _make_assistant_response(
@@ -105,6 +106,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ) -> ModelResponse:
         del messages, extra_call_args, schema, tools, cancellation_token, kwargs
@@ -117,6 +119,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         schema: object | None = None,
         tools: object | None = None,
         cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
         **kwargs: object,
     ):
         del extra_call_args, schema, tools, cancellation_token, kwargs
