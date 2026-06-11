@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-06-11
+
+AgentLane `0.10.0` makes tracing across model calls and tool execution consistent: harness runs now keep tool spans under the active generation span, provider clients reuse propagated tracing context, and documentation better explains the harness, runtime, serialization, and tracing surfaces.
+
+### Added
+
+- Added `Model.tracing`, `parent_span`, and `cancellation_token` propagation to the public model contract so harness runners and provider clients can coordinate tracing and cancellation across model and tool calls ([`ef14aa4`](https://github.com/yasik/agentlane/commit/ef14aa4), [`3b65ec0`](https://github.com/yasik/agentlane/commit/3b65ec0), [`cd75ffd`](https://github.com/yasik/agentlane/commit/cd75ffd))
+
+### Changed
+
+- Scoped harness generation spans across full runs so repeated model turns accumulate usage on the generation span and tool spans nest under the model request that triggered them ([`ef14aa4`](https://github.com/yasik/agentlane/commit/ef14aa4), [`3b65ec0`](https://github.com/yasik/agentlane/commit/3b65ec0))
+- Updated the OpenAI Responses and LiteLLM provider clients to record model metadata and accumulated usage or cost onto caller-owned parent spans when one is supplied ([`3b65ec0`](https://github.com/yasik/agentlane/commit/3b65ec0), [`cd75ffd`](https://github.com/yasik/agentlane/commit/cd75ffd))
+- Refreshed the README and harness, runtime, messaging, serialization, model, and tracing docs around the current public APIs, run events, tool permissions, and distributed execution model ([`5520e8a`](https://github.com/yasik/agentlane/commit/5520e8a), [`ac03193`](https://github.com/yasik/agentlane/commit/ac03193))
+
+### Fixed
+
+- Fixed tool execution tracing so function spans follow the active model tracing mode instead of a stale executor-level setting ([`ef14aa4`](https://github.com/yasik/agentlane/commit/ef14aa4), [`cd75ffd`](https://github.com/yasik/agentlane/commit/cd75ffd))
+
 ## [0.9.0] - 2026-06-03
 
 AgentLane `0.9.0` turns the harness into a more practical host-app surface: generic sub-agents, first-party tool permission policies, approval/run-event streaming, and distributed example docs are now paired with runtime message identity and cancellation improvements.
@@ -162,6 +180,7 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
+[0.10.0]: https://github.com/yasik/agentlane/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/yasik/agentlane/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/yasik/agentlane/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/yasik/agentlane/compare/v0.6.1...v0.7.0
