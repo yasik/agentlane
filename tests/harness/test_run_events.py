@@ -27,10 +27,12 @@ from agentlane.harness._handoff import normalize_delegation_tool_name
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import PreparedTurn, Shim
 from agentlane.harness.tools import (
+    HarnessToolsShim,
     ToolApprovalBroker,
     ToolApprovalStatus,
     ToolPermissionDecision,
     ToolPermissionRequest,
+    agent_tool,
     read_tool,
 )
 from agentlane.messaging import AgentId
@@ -46,6 +48,8 @@ from agentlane.models import (
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import Span
+
+from .tools_test_utils import SequenceModel, echo_tool
 
 
 def _make_assistant_response(
@@ -352,6 +356,145 @@ def test_default_agent_run_events_orders_model_tool_and_state_events() -> None:
         assert snapshots[4].snapshot.turn_count == 2
         assert snapshots[4].snapshot.history_length == 4
         assert snapshots[4].snapshot.response_count == 2
+
+    asyncio.run(scenario())
+
+
+_LINEAGE_EVENT_TYPES = (
+    RunLLMStartEvent,
+    RunLLMEndEvent,
+    RunToolStartEvent,
+    RunToolEndEvent,
+)
+
+
+def test_default_agent_run_events_stamp_root_lineage_on_single_agent_run() -> None:
+    async def scenario() -> None:
+        async def echo(text: str, cancellation_token: CancellationToken) -> str:
+            """Echo text."""
+            del cancellation_token
+            return f"tool:{text}"
+
+        model = _StreamingSequenceModel(
+            [
+                _make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(tool_id="call_1", arguments='{"text":"x"}')
+                    ],
+                ),
+                _make_assistant_response(content="done"),
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Lineage",
+                model=model,
+                tools=Tools(tools=[echo]),
+            )
+        )
+
+        stream = await agent.run_events("go")
+        events = await _collect_run_events(stream)
+        await stream.result()
+
+        lineage_events = [
+            event for event in events if isinstance(event, _LINEAGE_EVENT_TYPES)
+        ]
+        assert lineage_events, "expected task-carrying run events"
+        # Single-agent runs are entirely root: no app-side root latching needed.
+        assert all(event.is_root for event in lineage_events)
+        assert all(event.parent_task_id is None for event in lineage_events)
+        tool_events = [
+            event
+            for event in events
+            if isinstance(event, (RunToolStartEvent, RunToolEndEvent))
+        ]
+        assert tool_events and all(
+            event.is_delegation is False for event in tool_events
+        )
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_run_events_tag_agent_tool_calls_as_delegation() -> None:
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        # The delegated child runs as a subroutine through get_response, so a
+        # non-streaming SequenceModel is the correct child model here.
+        child_model = SequenceModel([_make_assistant_response(content="child answer")])
+        parent_model = _StreamingSequenceModel(
+            [
+                _make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_echo",
+                            name="echo",
+                            arguments='{"text":"hi"}',
+                        )
+                    ],
+                ),
+                _make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="call_agent",
+                            name="agent",
+                            arguments=(
+                                '{"name":"Researcher","task":"Look into the case."}'
+                            ),
+                        )
+                    ],
+                ),
+                _make_assistant_response(content="all done"),
+            ]
+        )
+        agent = DefaultAgent(
+            runtime=runtime,
+            runner=runner,
+            descriptor=AgentDescriptor(
+                name="Manager",
+                model=parent_model,
+                tools=Tools(tools=[echo_tool("echo")]),
+                shims=(HarnessToolsShim((agent_tool(model=child_model),)),),
+            ),
+        )
+
+        stream = await agent.run_events("delegate then finish")
+        events = await _collect_run_events(stream)
+        result = await stream.result()
+
+        assert result.final_output == "all done"
+        tool_starts = {
+            event.tool_call.function.name: event
+            for event in events
+            if isinstance(event, RunToolStartEvent)
+        }
+        tool_ends = {
+            event.tool_call.function.name: event
+            for event in events
+            if isinstance(event, RunToolEndEvent)
+        }
+        # Delegation is tagged structurally by runner tool-definition type, so the
+        # agent-as-tool call is identifiable without a tool-name registry, while
+        # the plain echo tool is not delegation.
+        assert tool_starts["agent"].is_delegation is True
+        assert tool_ends["agent"].is_delegation is True
+        assert tool_starts["echo"].is_delegation is False
+        assert tool_ends["echo"].is_delegation is False
+        # Every event in the parent stream is root: the delegated child runs as a
+        # subroutine and surfaces only as the tagged tool call.
+        assert all(
+            event.is_root for event in events if isinstance(event, _LINEAGE_EVENT_TYPES)
+        )
+        # Snapshot-root-only contract: the child emits no state snapshots into
+        # the parent stream, so the parent's snapshot turn_counts stay monotonic.
+        snapshot_turns = [
+            event.snapshot.turn_count for event in _state_snapshots(events)
+        ]
+        assert snapshot_turns == sorted(snapshot_turns)
 
     asyncio.run(scenario())
 

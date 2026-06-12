@@ -532,6 +532,9 @@ class Runner:
                     if shim_manager is not None:
                         await shim_manager.prepare_turn(prepared_turn)
                     if run_events is not None:
+                        run_events.register_delegation_tool_names(
+                            _delegation_tool_names(prepared_turn.tools)
+                        )
                         run_events.state_snapshot(
                             RunStateSnapshotBoundary.TURN_PREPARED,
                             state,
@@ -1590,6 +1593,25 @@ def _tool_context(
         run_id=str(agent.task_id),
         agent_name=runner_task.name,
         tool_call_id=tool_call.id,
+    )
+
+
+def _delegation_tool_names(tools: Tools | None) -> frozenset[str]:
+    """Return names of visible tools that delegate to another agent.
+
+    Classification is structural: agent-as-tool and handoff tools are concrete
+    runner tool-definition types, so run events can be tagged as delegation
+    without matching tool names against an app-maintained registry.
+    """
+    if tools is None:
+        return frozenset()
+    return frozenset(
+        tool.name
+        for tool in tools.normalized_tools
+        if isinstance(
+            tool,
+            (AgentTool, DefaultAgentTool, HandoffTool, DefaultHandoffTool),
+        )
     )
 
 

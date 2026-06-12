@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
+from .._tool_result import ToolError, ToolFailure
 from ._bash_executor import (
     BashExecutionRequest,
     BashExecutionResult,
@@ -92,7 +93,7 @@ def bash_tool(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
         context: ToolExecutionContext,
-    ) -> str:
+    ) -> str | ToolFailure:
         try:
             return await _run_bash(
                 args,
@@ -107,7 +108,10 @@ def bash_tool(
             return _GENERIC_BASH_ERROR
 
     return HarnessToolDefinition(
-        tool=Tool[_ToolArgs, str](
+        # ``ToolFailure`` is a ``str`` subclass, so the default formatter renders
+        # it as its model-facing text unchanged while the runner reads the
+        # structured outcome off the same result.
+        tool=Tool[_ToolArgs, str | ToolFailure](
             name=_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
@@ -127,7 +131,7 @@ async def _run_bash(
     approval_callback: ToolApprovalCallback | None,
     cancellation_token: CancellationToken,
     context: ToolExecutionContext,
-) -> str:
+) -> str | ToolFailure:
     """Validate model arguments, execute the command, and render the result."""
     if args.command.strip() == "":
         return "command must not be empty"
@@ -176,8 +180,16 @@ async def _run_bash(
     return _format_bash_output(result)
 
 
-def _format_bash_output(result: BashExecutionResult) -> str:
-    """Render the final model-facing tool result."""
+def _format_bash_output(result: BashExecutionResult) -> str | ToolFailure:
+    """Render the model-facing result, wrapping failures in a typed envelope.
+
+    The rendered text is byte-for-byte identical to the previous string output.
+    Timed-out, cancelled, and non-zero-exit outcomes additionally return a
+    ``ToolFailure`` so the runner reads the structured failure from the result
+    rather than reflecting over ``BashExecutionResult`` fields. ``ToolFailure``
+    is a ``str`` subclass, so the default tool formatter renders the same
+    model-facing text.
+    """
     output = result.output.text.rstrip("\n") or "(no output)"
     notices: list[str] = []
 
@@ -188,6 +200,7 @@ def _format_bash_output(result: BashExecutionResult) -> str:
             f"Full output: {result.full_output_path}"
         )
 
+    error = _bash_failure(result)
     if result.timed_out:
         if result.timeout_seconds is None:
             notices.append("Command timed out")
@@ -200,10 +213,28 @@ def _format_bash_output(result: BashExecutionResult) -> str:
     elif result.exit_code is not None and result.exit_code != 0:
         notices.append(f"Command exited with code {result.exit_code}")
 
-    if not notices:
-        return output
+    text = (
+        output
+        if not notices
+        else output + "\n\n" + "\n".join(f"[{notice}]" for notice in notices)
+    )
+    if error is None:
+        return text
+    return ToolFailure(text=text, error=error)
 
-    return output + "\n\n" + "\n".join(f"[{notice}]" for notice in notices)
+
+def _bash_failure(result: BashExecutionResult) -> ToolError | None:
+    """Map a bash execution result to a typed failure, or ``None`` on success."""
+    if result.timed_out:
+        return ToolError(message="Command timed out", kind="timeout")
+    if result.cancelled:
+        return ToolError(message="Command cancelled", kind="cancelled")
+    if result.exit_code is not None and result.exit_code != 0:
+        return ToolError(
+            message=f"Command exited with code {result.exit_code}",
+            kind="nonzero_exit",
+        )
+    return None
 
 
 def _format_seconds(seconds: float) -> str:

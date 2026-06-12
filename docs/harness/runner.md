@@ -182,11 +182,78 @@ Each emitted item is a `RunEvent`, a union tagged by `RunEventKind`:
    control transfers
 7. `RunStateSnapshotEvent` carries a compact `RunStateSnapshot` at stable run
    boundaries
+8. `RunPlanUpdatedEvent` carries the structured plan after a successful
+   first-party plan-tool call
 
 `RunStateSnapshotEvent` boundaries are named by `RunStateSnapshotBoundary`:
 `run_start`, `turn_prepared`, `tool_round_end`, and `run_end`. The snapshot
 itself is compact (`turn_count`, `history_length`, `response_count`, and a copy
 of `shim_state`) rather than the full working state.
+
+### Tool success and failure
+
+`RunToolEndEvent` carries a framework-derived outcome alongside the raw
+`result`:
+
+- `ok: bool` — whether the runner considers the call successful.
+- `error: ToolError | None` — a typed failure payload (`message`, optional
+  stable `kind`) when `ok` is `False`.
+
+Consumers read `event.ok` / `event.error` directly instead of inferring success
+from result wording or reflecting over tool-specific result fields. The runner
+derives the outcome with `tool_outcome(result)`, which recognizes, in order:
+
+1. `ToolFailure` — the one public, typed way a tool implementation signals
+   failure. `ToolFailure` is a `str` subclass carrying a `ToolError`, so the
+   model still sees its text verbatim (the default formatter renders `str`
+   values unchanged) while the framework reads the structured error. The
+   first-party `bash` tool returns `ToolFailure` for timed-out, cancelled, and
+   non-zero-exit outcomes.
+2. A captured `BaseException` — a raised-and-captured tool error.
+3. A mapping with a truthy `error` entry — the structured-mapping convention
+   third-party tools commonly return.
+
+Anything else is treated as `ok`. First-party tools that render operational
+errors as plain strings stay `ok` because result wording is not a contract; a
+tool that needs a failure marked returns `ToolFailure`.
+
+### Plan-updated events
+
+After a successful first-party plan-tool call, the runner emits a
+`RunPlanUpdatedEvent` carrying the structured plan as a tuple of `RunPlanItem`
+(`step`, `status`) plus the optional model-supplied `explanation` and the
+originating `tool_call`. Consumers render plan UX from this typed payload
+instead of string-matching the plan tool's success message. The public
+constants `PLAN_TOOL_NAME` and `PLAN_UPDATED_MESSAGE` are exported from
+`agentlane.harness.tools` for callers that still need the wire literals.
+
+### Lineage and scope semantics
+
+Every task-carrying run event exposes lineage so consumers do not latch the
+root task id and infer subagents by comparison:
+
+- `parent_task_id: str | None` — the parent run's task id, or `None` for the
+  stream root.
+- `is_root: bool` — whether the event belongs to the stream's root run.
+
+The emitter latches the first agent run's `task_id` as the stream root. In the
+default single-agent-plus-delegation topology every event in one stream is a
+root event, because a delegated child runs in its own runtime turn and surfaces
+to the parent only as a tool call.
+
+`RunToolStartEvent` / `RunToolEndEvent` additionally carry `is_delegation:
+bool`, set structurally for agent-as-tool and handoff calls (by runner
+tool-definition type, not by name heuristics), so consumers identify delegation
+without an app-side tool-name registry.
+
+Two scope contracts matter for consumers that aggregate run telemetry:
+
+- `RunAgentEndEvent` fires for child tasks too, carrying that child's `result`,
+  when an application shares run hooks across agents. Treating it as "the whole
+  run ended" records child telemetry as root telemetry; gate root-only
+  aggregation on `is_root`.
+- State snapshots are root-stream-only by contract: a delegated child never
+  emits `RunStateSnapshotEvent` into the parent stream.
 
 ## Run Result And State
 
@@ -200,6 +267,14 @@ holds `instructions`, `history`, `responses`, persisted `shim_state`
 also one of the accepted `RunInput` forms (alongside a plain `str` and a
 `list[RunHistoryItem]`), so a completed run's `run_state` can be passed back in
 to resume the conversation. The persisted `shim_state` survives across resumes.
+
+`turn_count` counts turns *started*, not completed: the runner increments it at
+the start of each turn, before shims prepare the turn and before the model is
+called. While turn N is being prepared or executed, `turn_count` is `N`, so the
+first turn observes `turn_count == 1`; after the run finishes it equals the
+total number of turns that ran (`RunResult.turn_count` is this final value).
+Gate first-turn logic on `turn_count == 1` rather than reading it as a
+completed-turns count.
 
 ## Request Ownership
 
