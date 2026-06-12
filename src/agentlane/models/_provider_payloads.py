@@ -37,9 +37,15 @@ def get_reasoning_phase(event: ModelStreamEvent) -> ReasoningPhase | None:
     """Return the output-message phase carried by one stream event, if any.
 
     The phase lives on the provider-native `output_item` events preserved in
-    `ModelStreamEvent.raw`. `None` means "no phase reported" — the event is not
-    an output-item event, the item type carries no phase, or the provider sent
-    no phase — and never signals a failure.
+    `ModelStreamEvent.raw`. `None` means "no usable phase reported" — the event
+    is not an output-item event, the item type carries no phase, the provider
+    sent no phase, or the provider sent a phase string this enum does not model
+    — and never signals a failure.
+
+    The preserved raw payload is not re-validated, so a provider may surface a
+    phase value outside `ReasoningPhase`. Such values degrade to `None` rather
+    than raising, because an unmodeled phase is missing data to a consumer, not
+    an error.
 
     Args:
         event: One normalized model stream event.
@@ -58,7 +64,10 @@ def get_reasoning_phase(event: ModelStreamEvent) -> ReasoningPhase | None:
     phase = item.phase
     if phase is None:
         return None
-    return ReasoningPhase(phase)
+    try:
+        return ReasoningPhase(phase)
+    except ValueError:
+        return None
 
 
 class UsageTotals:

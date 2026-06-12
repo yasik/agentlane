@@ -105,6 +105,29 @@ def test_get_reasoning_phase_returns_none_for_non_message_item() -> None:
     assert get_reasoning_phase(event) is None
 
 
+def test_get_reasoning_phase_returns_none_for_unrecognized_phase() -> None:
+    # Provider payloads preserved on `raw` are not re-validated, so a provider
+    # may surface a phase string this enum does not model. `model_construct`
+    # bypasses validation to mirror that preserved-payload shape.
+    message = ResponseOutputMessage.model_construct(
+        id="msg_1",
+        content=[],
+        role="assistant",
+        status="completed",
+        type="message",
+        phase="some_future_phase",
+    )
+    raw = ResponseOutputItemDoneEvent(
+        item=message,
+        output_index=0,
+        sequence_number=1,
+        type="response.output_item.done",
+    )
+    event = ModelStreamEvent(kind=ModelStreamEventKind.PROVIDER, raw=raw)
+
+    assert get_reasoning_phase(event) is None
+
+
 def test_get_usage_totals_exposes_typed_token_counts() -> None:
     response = _response_with_usage(
         Usage(completion_tokens=10, prompt_tokens=20, total_tokens=30)

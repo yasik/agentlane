@@ -147,9 +147,11 @@ exported from `agentlane.models`:
 1. `get_reasoning_phase(event)` reads the OpenAI Responses output-message phase
    off `ModelStreamEvent.raw` for `output_item` events. It returns a
    `ReasoningPhase` (`COMMENTARY` or `FINAL_ANSWER`) or `None`. `None` means
-   "no phase reported" — the event is not an output-item event, the item type
-   carries no phase, or the provider sent no phase — and never signals a
-   failure.
+   "no usable phase reported" — the event is not an output-item event, the item
+   type carries no phase, the provider sent no phase, or the provider sent a
+   phase string this enum does not model. The preserved raw payload is not
+   re-validated, so an unmodeled phase degrades to `None` rather than raising;
+   it never signals a failure.
 2. `get_usage_totals(response)` returns a typed `UsageTotals` view over
    `ModelResponse.usage`, exposing `prompt_tokens`, `completion_tokens`, and
    `total_tokens`. It returns `None` when the response (or its usage) is
