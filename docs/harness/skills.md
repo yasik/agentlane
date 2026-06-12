@@ -223,8 +223,13 @@ already carries its own loader.
 ### Reading Active Skill Names
 
 `SkillsShim.active_skill_names(run_state)` returns the skill names activated so
-far in a run, in activation order. Use it instead of reconstructing the internal
-shim-state key; the persisted key format is private and may change:
+far in a run, in activation order. It is a convenience accessor over the
+documented state contract: the shim writes active names under a `shim_state` key
+formed from the shim `name` and
+[`ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`](../../src/agentlane/harness/_run.py),
+which is also what `RunStateView.active_skill_names` reads. Prefer this accessor
+(or the run-state view, for the union across multiple skills shims) over
+hand-building the key:
 
 ```python
 shim = SkillsShim(catalog=catalog)

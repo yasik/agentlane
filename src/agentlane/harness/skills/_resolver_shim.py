@@ -18,13 +18,14 @@ The contract is deliberately narrow and safe:
 See `docs/harness/skills.md` for the rationale and the full limit list.
 """
 
+import inspect
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
 from pydantic import BaseModel
 
-from agentlane.models import Tool, ToolExecutionContext
+from agentlane.models import Tool, ToolExecutionContext, ToolHandler
 from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
@@ -101,8 +102,8 @@ class SkillRelativePathShim(Shim):
         self._name = name
         self._skill_roots = {manifest.name: manifest.root for manifest in catalog}
         # A name-only SkillsShim is used purely as the public accessor for the
-        # paired shim's active-skill names; this avoids re-deriving the private
-        # activation state-key format here.
+        # paired shim's active-skill names; this reads the same documented
+        # state key the paired shim writes without re-deriving it here.
         self._active_names_reader = SkillsShim(name=skills_shim_name)
         self._path_arg_fields = (
             dict(_DEFAULT_PATH_ARG_FIELDS)
@@ -226,28 +227,34 @@ def _wrap_tool(
     arg_field: str,
     roots_provider: _RootsProvider,
 ) -> Tool[BaseModel, Any]:
-    """Return a tool that resolves one path argument before delegating."""
+    """Return a tool that resolves one path argument before delegating.
 
-    async def run_tool(
-        args: BaseModel,
-        cancellation_token: CancellationToken,
-        context: ToolExecutionContext,
-    ) -> Any:
-        resolved_args = _resolve_args(
-            args,
-            arg_field=arg_field,
-            skill_roots=roots_provider(),
-        )
-        return await tool.run(resolved_args, cancellation_token, context)
+    Built with ``Tool.with_handler`` so every other field — formatter, schema,
+    and any field added to ``Tool`` later — is carried over by construction
+    instead of re-listed here, where a forgotten field would silently drop.
+    """
 
-    return Tool(
-        name=tool.name,
-        description=tool.description,
-        args_model=tool.args_type(),
-        handler=run_tool,
-        formatter=tool.return_value_as_string,
-        parameters_schema=tool.schema["parameters"],
-    )
+    def wrapper(
+        inner: ToolHandler[BaseModel, Any],
+    ) -> ToolHandler[BaseModel, Any]:
+        async def run_tool(
+            args: BaseModel,
+            cancellation_token: CancellationToken,
+            context: ToolExecutionContext,
+        ) -> Any:
+            resolved_args = _resolve_args(
+                args,
+                arg_field=arg_field,
+                skill_roots=roots_provider(),
+            )
+            result = inner(resolved_args, cancellation_token, context)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        return run_tool
+
+    return tool.with_handler(wrapper)
 
 
 def _resolve_args(

@@ -9,7 +9,7 @@ from agentlane.models import Tool, ToolExecutionContext, Tools
 from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
-from .._run import RunState, ShimState
+from .._run import ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX, RunState, ShimState
 from .._tooling import exclude_tools, filter_tools, merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._catalog import SkillCatalog
@@ -173,10 +173,11 @@ class SkillsShim(Shim):
     def active_skill_names(self, run_state: RunState) -> tuple[str, ...]:
         """Return the skill names activated so far in `run_state`.
 
-        This reads the persisted activation state this shim owns and returns
-        the names in activation order. Use it instead of reconstructing the
-        internal `{name}:active-skill-names` shim-state key; the key format is
-        private and may change.
+        This is a convenience accessor over the documented state contract: the
+        shim records active names under `name` + `ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`,
+        and this method reads that key for this shim's own name and returns the
+        names in activation order. Prefer it (or `RunStateView.active_skill_names`
+        for the union across all skills shims) over hand-building the key.
 
         Args:
             run_state: Persisted run state for the run to inspect.
@@ -251,8 +252,14 @@ def _build_activate_skill_tool(
 
 
 def _active_names_key(shim_name: str) -> str:
-    """Return the persisted shim-state key for activated skill names."""
-    return f"{shim_name}:active-skill-names"
+    """Return the persisted shim-state key for activated skill names.
+
+    The key is the shim name followed by the public
+    ``ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`` so this writer and the
+    ``RunStateView.active_skill_names`` reader stay single-sourced: changing the
+    suffix moves both sides together rather than silently desynchronizing them.
+    """
+    return f"{shim_name}{ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX}"
 
 
 def _active_skill_names(
