@@ -14,6 +14,7 @@ from ._prompts import (
     PromptTemplate,
     PromptTemplateBase,
     TextPart,
+    render_instruction_text,
 )
 from ._rate_limiter import (
     CompositeRateLimiter,
@@ -77,6 +78,7 @@ __all__ = [
     "PromptTemplateBase",
     "MultiPartPromptTemplate",
     "PromptSpec",
+    "render_instruction_text",
     "TextPart",
     "FilePart",
     "ImagePart",
