@@ -251,6 +251,24 @@ entries override earlier ones. Callers should reject or report
 CLI and environment-variable callers can collect every unsupported entry and
 report them together instead of failing on the first one.
 
+By default the parser only recognizes the built-in first-party tools (`read`,
+`find`, `grep`, `write`, `patch`, `bash`), so a grant for an app-registered
+egress tool such as `web_search:network_access` is reported as invalid. Pass
+`known_tools` — a mapping from each extra tool name to the `ToolOperation`
+values it exposes — to drive grants for those tools from a grant string:
+
+```python
+grants, invalid_entries = parse_tool_permission_grants(
+    "web_search:network_access",
+    known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+)
+```
+
+A `known_tools` entry whose name collides with a built-in is ignored; the
+built-in operation set wins. Operation names outside a tool's declared set are
+still reported as invalid, so `web_search:read_file` is rejected even when
+`web_search` is known.
+
 For programmatic grants, construct `ToolPermissionGrant` values directly.
 `ToolPermissionGrant.all_operations("read")` makes whole-tool intent explicit;
 `ToolPermissionGrant("write", ToolOperation.CREATE_FILE)` grants one

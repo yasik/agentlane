@@ -439,16 +439,37 @@ def format_tool_permission_result(
 
 def parse_tool_permission_grants(
     value: str | None,
+    *,
+    known_tools: Mapping[str, Iterable[ToolOperation]] | None = None,
 ) -> tuple[tuple[ToolPermissionGrant, ...], tuple[str, ...]]:
     """Parse comma-separated whole-tool and operation-level permission grants.
 
     The parser returns partial success as `(grants, invalid_entries)`, preserves
     valid duplicates, and does not apply override semantics. Callers that want
     a unique set or fail-fast behavior should layer that policy explicitly.
+
+    The built-in first-party tools (`read`, `find`, `grep`, `write`, `patch`,
+    `bash`) are always recognized. Pass `known_tools` to also accept grants for
+    app-registered tools — each entry maps a tool name to the operations that
+    tool exposes — so a grant string can drive operations the built-in map does
+    not list, such as `"web_search:network_access"` for an egress tool. A
+    `known_tools` entry whose name collides with a built-in is ignored; the
+    built-in operation set wins. Operation names outside a tool's declared set,
+    and operation names that are not valid `ToolOperation` values, are still
+    reported as invalid entries.
+
+    Args:
+        value: Comma-separated grant string, or `None`.
+        known_tools: Optional extra tool-to-operations map for app-registered
+            tools. Defaults to `None`, which keeps the built-in-only behavior.
+
+    Returns:
+        A `(grants, invalid_entries)` pair.
     """
     if value is None or value.strip() == "":
         return (), ()
 
+    operations_by_tool = _operations_by_tool(known_tools)
     grants: list[ToolPermissionGrant] = []
     invalid_entries: list[str] = []
     for raw_entry in value.split(","):
@@ -456,7 +477,7 @@ def parse_tool_permission_grants(
         if entry == "":
             continue
 
-        grant = _parse_permission_grant(entry)
+        grant = _parse_permission_grant(entry, operations_by_tool=operations_by_tool)
         if grant is None:
             invalid_entries.append(entry)
             continue
@@ -465,9 +486,27 @@ def parse_tool_permission_grants(
     return tuple(grants), tuple(invalid_entries)
 
 
-def _parse_permission_grant(entry: str) -> ToolPermissionGrant | None:
+def _operations_by_tool(
+    known_tools: Mapping[str, Iterable[ToolOperation]] | None,
+) -> Mapping[str, frozenset[ToolOperation]]:
+    """Merge app-registered tools under the built-in map, built-ins winning."""
+    if known_tools is None:
+        return _TOOL_OPERATIONS_BY_TOOL
+    merged: dict[str, frozenset[ToolOperation]] = {
+        tool_name: frozenset(operations)
+        for tool_name, operations in known_tools.items()
+    }
+    merged.update(_TOOL_OPERATIONS_BY_TOOL)
+    return merged
+
+
+def _parse_permission_grant(
+    entry: str,
+    *,
+    operations_by_tool: Mapping[str, frozenset[ToolOperation]],
+) -> ToolPermissionGrant | None:
     tool_name, separator, operation_name = entry.partition(":")
-    operations = _TOOL_OPERATIONS_BY_TOOL.get(tool_name)
+    operations = operations_by_tool.get(tool_name)
     if operations is None:
         return None
     if separator == "":

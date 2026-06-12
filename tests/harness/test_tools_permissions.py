@@ -484,6 +484,64 @@ def test_parse_tool_permission_grants_preserves_duplicate_entries() -> None:
     ]
 
 
+def test_parse_tool_permission_grants_accepts_known_tool_network_access() -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_search:network_access",
+        known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+
+    assert invalid_entries == ()
+    assert [(grant.tool_name, grant.operation) for grant in grants] == [
+        ("web_search", ToolOperation.NETWORK_ACCESS)
+    ]
+
+
+def test_parse_tool_permission_grants_accepts_known_tool_whole_tool_entry() -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_search",
+        known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+
+    assert invalid_entries == ()
+    assert [(grant.tool_name, grant.operation) for grant in grants] == [
+        ("web_search", None)
+    ]
+
+
+def test_parse_tool_permission_grants_rejects_network_access_without_known_tools() -> (
+    None
+):
+    grants, invalid_entries = parse_tool_permission_grants("web_search:network_access")
+
+    assert grants == ()
+    assert invalid_entries == ("web_search:network_access",)
+
+
+def test_parse_tool_permission_grants_rejects_garbage_for_known_tool() -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_search:not_an_operation, web_search:read_file",
+        known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+
+    assert grants == ()
+    assert invalid_entries == (
+        "web_search:not_an_operation",
+        "web_search:read_file",
+    )
+
+
+def test_parse_tool_permission_grants_keeps_builtin_operations_for_collisions() -> None:
+    # A known-tools entry that collides with a built-in name must not widen the
+    # built-in operation set: `bash` only exposes execute_command.
+    grants, invalid_entries = parse_tool_permission_grants(
+        "bash:network_access",
+        known_tools={"bash": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+
+    assert grants == ()
+    assert invalid_entries == ("bash:network_access",)
+
+
 def test_tool_permission_grant_all_operations_allows_any_operation_for_tool(
     tmp_path: Path,
 ) -> None:
