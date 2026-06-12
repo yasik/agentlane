@@ -543,11 +543,17 @@ def test_tool_replace_round_trips_every_observable_field() -> None:
 
 
 def test_tool_constructor_signature_matches_known_copy_fields() -> None:
-    """The Tool constructor keyword set must match the fields copies forward.
+    """The Tool constructor keyword set must stay the fields copies forward.
 
-    ``replace``/``with_handler`` rebuild from a fixed field set. If a new
-    keyword is added to ``Tool.__init__`` without being threaded through the
-    copy path, this assertion flags it so the copy cannot silently drop it.
+    ``replace``/``with_handler`` rebuild a tool from a fixed field set. If a new
+    keyword is added to ``Tool.__init__``, this assertion fails first and forces
+    the new field to be acknowledged here. That, in turn, requires extending
+    ``test_tool_replace_round_trips_every_observable_field`` to assert the field
+    survives a copy — which fails unless the copy path forwards it. Together the
+    two tests are the framework-owned replacement for Vera's
+    ``inspect.signature(Tool.__init__)`` reflection drift test, closing the
+    silent-field-drop class of bug (Vera's ``formatter`` regression) without an
+    app having to keep its own alarm.
     """
     constructor_fields = {
         name

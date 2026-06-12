@@ -236,6 +236,33 @@ on hidden process-local state. The executor accepts these contexts as a mapping
 keyed by model tool-call id because one model response can contain multiple
 tool calls. The tool handler receives only its own single context.
 
+### Live Run-State View
+
+The runner also stamps a read-only view of the live run onto each ordinary
+tool's context as `context.run_state`, typed as
+[`RunStateView`](../../src/agentlane/models/_tool.py) and implemented by
+[`LiveRunStateView`](../../src/agentlane/harness/_run.py). It lets a tool
+observe the run it is executing inside without an app-built side channel:
+
+- `run_state.task_id` — the stable task identity for the run. `context.run_id`
+  is guaranteed to equal `str(run_state.task_id)`, so per-run stores may be
+  keyed by either field consistently. This is the documented, stable
+  relationship between `run_id` and task identity.
+- `run_state.shim_state` — the live persisted shim-owned state, read-only. The
+  view reads through to current values, so state a shim writes earlier in the
+  run is visible to later tool calls.
+- `run_state.active_skill_names` — the names of skills active for the run. A
+  skills shim records these under a `shim_state` key ending in
+  [`ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`](../../src/agentlane/harness/_run.py)
+  (the shim name is the key prefix, so multiple skills shims never collide);
+  the accessor unions every such key. Tools resolving skill-relative resources
+  read this instead of reaching for a private state key.
+
+`context.run_state` is `None` when a tool runs outside a runner loop (for
+example a direct `tool.run(...)` call). The view is read-only; a tool that
+needs to persist state should do so through its own shim, never by mutating the
+run.
+
 ## Agent-As-Tool
 
 Agent-as-tool uses the same model-facing pattern as any other tool: the model
