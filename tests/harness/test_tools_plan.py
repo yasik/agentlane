@@ -1,12 +1,31 @@
 import asyncio
-from typing import cast
+from typing import Any, cast
 
-from agentlane.harness import AgentDescriptor
+from agentlane.harness import (
+    AgentDescriptor,
+    RunPlanItem,
+    RunPlanUpdatedEvent,
+)
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
-from agentlane.harness.tools import HarnessToolsShim, plan_tool
+from agentlane.harness.tools import (
+    PLAN_TOOL_NAME,
+    PLAN_UPDATED_MESSAGE,
+    HarnessToolsShim,
+    PlanUpdate,
+    plan_tool,
+)
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
+    get_content_or_none,
+)
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken
+from agentlane.tracing import Span
 
 from .tools_test_utils import (
     SequenceModel,
@@ -15,6 +34,80 @@ from .tools_test_utils import (
     run_state,
     run_tool,
 )
+
+
+class _StreamingPlanModel(Model[ModelResponse]):
+    """Minimal streamed model that replays scripted responses."""
+
+    def __init__(self, outcomes: list[ModelResponse]) -> None:
+        self._outcomes = list(outcomes)
+
+    async def get_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: object | None = None,
+        cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
+        **kwargs: object,
+    ) -> ModelResponse:
+        del messages, extra_call_args, schema, tools, cancellation_token, kwargs
+        raise AssertionError("Plan run-event tests use streamed model calls.")
+
+    def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: object | None = None,
+        cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
+        **kwargs: object,
+    ) -> Any:
+        del messages, extra_call_args, schema, tools, cancellation_token, kwargs
+
+        async def _stream() -> Any:
+            response = self._outcomes.pop(0)
+            content = get_content_or_none(response) or ""
+            if content:
+                yield ModelStreamEvent(
+                    kind=ModelStreamEventKind.TEXT_DELTA,
+                    text=content,
+                )
+            yield ModelStreamEvent(
+                kind=ModelStreamEventKind.COMPLETED,
+                response=response,
+            )
+
+        return _stream()
+
+
+def test_plan_tool_public_constants_match_tool_definition() -> None:
+    assert PLAN_TOOL_NAME == "write_plan"
+    assert PLAN_UPDATED_MESSAGE == "Plan updated"
+    assert plan_tool().tool.name == PLAN_TOOL_NAME
+
+
+def test_plan_tool_success_returns_structured_plan_update() -> None:
+    output = run_tool(
+        plan_tool(),
+        explanation="Track the implementation.",
+        plan=[
+            {"step": "Inspect implementation", "status": "completed"},
+            {"step": "Add tests", "status": "in_progress"},
+        ],
+    )
+
+    # Backward compatible: the value still equals the success message...
+    assert output == PLAN_UPDATED_MESSAGE
+    # ...and additionally carries the structured plan for typed events.
+    assert isinstance(output, PlanUpdate)
+    assert output.plan_explanation == "Track the implementation."
+    assert output.plan_steps == (
+        ("Inspect implementation", "completed"),
+        ("Add tests", "in_progress"),
+    )
 
 
 def test_plan_tool_updates_plan_with_codex_success_message() -> None:
@@ -161,6 +254,56 @@ def test_plan_tool_runs_through_normal_runner_execution() -> None:
             and message["name"] == "write_plan"
             and message["content"] == "Plan updated"
             for message in run_state.history
+        )
+
+    asyncio.run(scenario())
+
+
+def test_plan_tool_emits_structured_plan_updated_run_event() -> None:
+    async def scenario() -> None:
+        model = _StreamingPlanModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="plan_call",
+                            name=PLAN_TOOL_NAME,
+                            arguments=(
+                                '{"explanation":"kick off",'
+                                '"plan":[{"step":"Inspect","status":"in_progress"},'
+                                '{"step":"Ship","status":"pending"}]}'
+                            ),
+                        )
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Planner",
+                model=model,
+                instructions="You create plans.",
+                shims=(HarnessToolsShim((plan_tool(),)),),
+            )
+        )
+
+        stream = await agent.run_events("Plan this task.")
+        plan_events = [
+            event async for event in stream if isinstance(event, RunPlanUpdatedEvent)
+        ]
+        await stream.result()
+
+        assert len(plan_events) == 1
+        event = plan_events[0]
+        assert event.tool_call.function.name == PLAN_TOOL_NAME
+        assert event.explanation == "kick off"
+        assert event.is_root is True
+        assert event.parent_task_id is None
+        assert event.plan == (
+            RunPlanItem(step="Inspect", status="in_progress"),
+            RunPlanItem(step="Ship", status="pending"),
         )
 
     asyncio.run(scenario())

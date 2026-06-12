@@ -28,6 +28,13 @@ Successful model-facing tool result:
 Plan updated
 ```
 
+The tool name and success message are exported as the public constants
+`PLAN_TOOL_NAME` and `PLAN_UPDATED_MESSAGE` from `agentlane.harness.tools`, so
+consumers need not mirror the literals. On a successful update the runner emits
+a [`RunPlanUpdatedEvent`](runner.md#plan-updated-events) carrying the structured
+plan (`RunPlanItem` tuples plus the optional `explanation`); consumers render
+plan UX from that typed event instead of string-matching the success message.
+
 The plan payload itself is intended for clients and shims to render. The tool
 does not echo the full checklist back to the model after a successful update.
 Invalid plan structure returns stable text such as
