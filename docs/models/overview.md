@@ -118,6 +118,39 @@ The harness now reuses this same event type directly. High-level agent
 streaming through `DefaultAgent.run_stream(...)` yields `ModelStreamEvent`
 through a harness `RunStream` handle instead of wrapping the per-event payload.
 
+### Typed accessors for common provider shapes
+
+A few provider-native shapes are only reachable through the preserved raw
+payload. Rather than duck-typing them with `getattr`, use the typed accessors
+exported from `agentlane.models`:
+
+1. `get_reasoning_phase(event)` reads the OpenAI Responses output-message phase
+   off `ModelStreamEvent.raw` for `output_item` events. It returns a
+   `ReasoningPhase` (`COMMENTARY` or `FINAL_ANSWER`) or `None`. `None` means
+   "no phase reported" — the event is not an output-item event, the item type
+   carries no phase, or the provider sent no phase — and never signals a
+   failure.
+2. `get_usage_totals(response)` returns a typed `UsageTotals` view over
+   `ModelResponse.usage`, exposing `prompt_tokens`, `completion_tokens`, and
+   `total_tokens`. It returns `None` when the response (or its usage) is
+   missing, which callers should treat as missing data rather than zero.
+
+```python
+from agentlane.models import (
+    ReasoningPhase,
+    get_reasoning_phase,
+    get_usage_totals,
+)
+
+phase = get_reasoning_phase(event)
+if phase is ReasoningPhase.FINAL_ANSWER:
+    ...
+
+totals = get_usage_totals(response)
+if totals is not None:
+    track(totals.total_tokens)
+```
+
 ## Run-Scoped Context
 
 Some model-adjacent helpers live under `agentlane.models.run`.

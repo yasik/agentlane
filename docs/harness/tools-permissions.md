@@ -33,8 +33,8 @@ policies are small and composable:
 4. `ToolPermissionGrantPolicy` is a tool and operation allowlist. It does not
    sandbox paths and does not ask for approval.
 5. `SideEffectApprovalToolPermissionPolicy` returns `require_approval` for
-   writes, patches, directory creation, and command execution. The host
-   application still owns the approval callback and UI.
+   writes, patches, directory creation, command execution, and network access.
+   The host application still owns the approval callback and UI.
 6. `AllOfToolPermissionPolicy` composes policies conservatively: deny wins,
    then approval, then allow.
 
@@ -46,6 +46,57 @@ Policy defaults are intentionally explicit:
    request it checks.
 3. `AllOfToolPermissionPolicy(())` allows because no nested policy denies; use
    it only when an empty composition is intentional.
+
+## Composition semantics (strictest wins)
+
+`AllOfToolPermissionPolicy` resolves nested decisions on the ordering
+`allow < require_approval < deny`. It scans every nested policy: a `deny` is
+terminal and returned immediately; a `require_approval` is remembered; an
+`allow` never widens a decision a stricter policy already made. The final
+outcome is the strictest decision any nested policy returned.
+
+This has one trap worth stating plainly. `SideEffectApprovalToolPermissionPolicy`
+returns `require_approval` for every side-effecting operation it covers. If you
+also compose a `ToolPermissionGrantPolicy` (or `workspace_tool_policy(grants=...)`)
+to pre-grant `bash:execute_command`, that grant is **outcome-inert** by default:
+the grant policy returns `allow`, but the side-effect policy still returns
+`require_approval`, and strictest-wins keeps the approval. The configured grant
+looks like it permits the operation but never actually skips approval.
+
+Two supported ways to make a side-effect grant meaningful:
+
+1. Pass the grants to the side-effect policy so a matching grant downgrades
+   `require_approval` to `allow` for the operations it covers:
+
+   ```python
+   AllOfToolPermissionPolicy(
+       (
+           WorkspaceToolPermissionPolicy(WORKSPACE, allowed_operations=...),
+           ToolPermissionGrantPolicy(grants),
+           SideEffectApprovalToolPermissionPolicy(grants=grants),
+       )
+   )
+   ```
+
+2. With the `workspace_tool_policy(...)` helper, opt in with
+   `grants_downgrade_side_effect_approval=True`:
+
+   ```python
+   workspace_tool_policy(
+       WORKSPACE,
+       grants=grants,
+       require_bash_approval=True,
+       grants_downgrade_side_effect_approval=True,
+   )
+   ```
+
+   With the flag set, a request matching a grant returns `allow` from the
+   side-effect policy, so `bash:execute_command` actually skips approval.
+   Without it (the default), the grant stays inert and `bash` still requires
+   approval — the conservative behavior is the default so opting into trust is
+   always explicit. `grants=None` on `SideEffectApprovalToolPermissionPolicy`
+   keeps the always-require-approval behavior; only an explicit grant list
+   downgrades.
 
 For a path-only workspace boundary, pass `WorkspaceToolPermissionPolicy`:
 
@@ -372,6 +423,10 @@ Operations are intentionally small and tool-oriented:
 | `patch` | `modify_file` |
 | `bash` | `execute_command` |
 
+Egress tools (web search, API callers) use `network_access`; it is not bound to
+a first-party local tool because the framework ships no egress tool, but the
+operation is a stable part of `ToolOperation` for application egress tools.
+
 `write` may issue two permission requests for one tool call. If the target's
 parent directory does not exist, it checks `create_directory` for that parent
 first. It then checks `create_file` for a missing target or `overwrite_file`
@@ -385,3 +440,60 @@ startup. Because `WorkspaceToolPermissionPolicy` is a path sandbox, it denies
 included in `allowed_operations` or another host policy allows it.
 Applications that need real process isolation should provide a sandboxed
 `BashExecutor`, container, remote worker, or equivalent host boundary.
+
+## Network access (egress)
+
+`ToolOperation.NETWORK_ACCESS` is the operation for tools that send data off
+the machine, such as a web search or an API caller. Network egress has no
+filesystem path for a path policy to bound, so an egress tool builds a
+`ToolPermissionRequest` with `operation=ToolOperation.NETWORK_ACCESS`, an
+optional `command`/payload describing the outbound data, and a human-readable
+`reason`. Use this operation instead of borrowing `EXECUTE_COMMAND` for network
+calls: a path or command sandbox would either deny the request or mislabel the
+payload as a shell command.
+
+`NETWORK_ACCESS` is classified as a side effect, so
+`SideEffectApprovalToolPermissionPolicy()` (with default `operations`) returns
+`require_approval` for it. The `reason` on the request flows through
+`format_tool_permission_result(...)`: when a decision carries no `reason`, the
+default approval-required text names the tool's network access rather than a
+"command", so an approval UI can render an egress prompt without special-casing
+a synthetic command shape.
+
+```python
+blocked = await evaluate_tool_permission(
+    ToolPermissionRequest(
+        tool_name="web_search",
+        operation=ToolOperation.NETWORK_ACCESS,
+        cwd=WORKSPACE,
+        command=query,
+        reason="approval required: outbound web search awaiting approval",
+    ),
+    policy=permissions,
+    approval_callback=approval_callback,
+)
+if blocked is not None:
+    return blocked
+```
+
+## Recording immediate decisions through the broker
+
+By default `ToolApprovalBroker.callback(...)` only handles `require_approval`
+decisions and raises on an already-decided `allow`/`deny`, because those need
+no host resolution round-trip. A host that runs auto-allow or auto-deny modes
+would then make those decisions outside the broker and keep its own counters,
+so they never appear in `broker.events()`.
+
+Construct the broker with `record_immediate_decisions=True` to route every
+decision through the same observable place:
+
+```python
+broker = ToolApprovalBroker(record_immediate_decisions=True)
+```
+
+With the flag set, passing an `allow`/`deny` decision to `callback(...)`
+records the request as resolved in the same step: the broker emits a `pending`
+then a `resolved` event for it and returns the decision unchanged. The request
+never lingers in `broker.pending()`. `require_approval` decisions still suspend
+for host resolution exactly as before. The default stays `False` so existing
+hosts that only broker approvals keep raising on non-approval decisions.
