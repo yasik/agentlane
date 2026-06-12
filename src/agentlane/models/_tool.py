@@ -6,7 +6,17 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Annotated, Any, get_args, get_origin, get_type_hints, overload
+from typing import (
+    Annotated,
+    Any,
+    Protocol,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+    overload,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, Field, create_model
 
@@ -21,14 +31,71 @@ def _empty_execution_metadata() -> dict[str, object]:
     return {}
 
 
+@runtime_checkable
+class RunStateView(Protocol):
+    """Read-only view of the live run a tool is executing inside.
+
+    Tools receive this through ``ToolExecutionContext.run_state`` so a handler
+    can observe the run without an app-built side channel: which skills are
+    active, what shim-owned state has accumulated, and the stable task identity
+    used to key per-run stores. The view is read-only; tools that need to
+    persist state should do so through their own shim, not by mutating the run.
+
+    The harness supplies the concrete implementation. This protocol lives in
+    ``models`` so the tool primitive can carry it without depending on the
+    harness package.
+    """
+
+    @property
+    def task_id(self) -> str:
+        """Return the stable task identity for this run.
+
+        This equals ``ToolExecutionContext.run_id`` for the same execution:
+        the harness derives ``run_id`` as ``str(task_id)``. Tools may key
+        per-run stores by this value and match them back from either field.
+        """
+        ...
+
+    @property
+    def shim_state(self) -> Mapping[str, object]:
+        """Return the persisted shim-owned state for this run, read-only."""
+        ...
+
+    @property
+    def active_skill_names(self) -> tuple[str, ...]:
+        """Return the names of skills currently active for this run.
+
+        Empty when no skills shim is installed or no skill is active. The
+        skills shim populates the underlying state; this accessor exposes it
+        without the tool reaching for a private state key.
+        """
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class ToolExecutionContext:
-    """Framework correlation context for one tool execution."""
+    """Framework correlation context for one tool execution.
+
+    Carries correlation identity plus an optional read-only view of the live
+    run (``run_state``). ``run_id`` is the harness-stamped run identity and is
+    guaranteed to equal ``str(run_state.task_id)`` when ``run_state`` is
+    present, so per-run stores may be keyed by either consistently.
+    """
 
     run_id: str | None = None
+    """Stable run identity; equals ``str(run_state.task_id)`` when set."""
+
     agent_name: str | None = None
+    """Name of the agent that issued this tool call."""
+
     tool_call_id: str | None = None
+    """Identifier of the originating model tool call."""
+
     metadata: Mapping[str, object] = field(default_factory=_empty_execution_metadata)
+    """Host-application correlation data; never framework-populated."""
+
+    run_state: RunStateView | None = None
+    """Read-only view of the live run, or ``None`` outside a runner loop."""
 
 
 type ToolHandler[ArgsT: BaseModel, ResultT] = Callable[
@@ -173,6 +240,94 @@ class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
         )
         self._handler = handler
         self._formatter = formatter
+
+    @property
+    def handler(self) -> ToolHandler[ArgsT, ResultT]:
+        """Return the callable that executes this tool.
+
+        Exposed so wrappers can compose the existing handler (for example to
+        intercept arguments before execution) without reaching into private
+        attributes. Use ``with_handler`` for the common wrapping case.
+        """
+        return self._handler
+
+    @property
+    def formatter(self) -> ToolFormatter[ResultT] | None:
+        """Return the result formatter, or ``None`` when the default is used."""
+        return self._formatter
+
+    def _construction_kwargs(self) -> dict[str, Any]:
+        """Return the full keyword set needed to rebuild this exact tool.
+
+        Every ``Tool.__init__`` keyword maps to a resolved current value here,
+        including the already-resolved ``parameters_schema``. ``replace`` and
+        ``with_handler`` rebuild through this single mapping so adding a new
+        ``Tool`` field cannot be silently dropped by a copy: the
+        ``test_tool_replace`` drift guard asserts these keys stay aligned with
+        the constructor signature.
+        """
+        return {
+            "name": self.name,
+            "description": self.description,
+            "args_model": self._args_model,
+            "handler": self._handler,
+            "formatter": self._formatter,
+            # Forward the resolved schema, not None, so an explicit
+            # parameters_schema override survives the copy unchanged.
+            "parameters_schema": self._parameters_schema,
+        }
+
+    def replace(self, **overrides: Any) -> "Tool[Any, Any]":
+        """Return a copy of this tool with selected fields overridden.
+
+        All fields not named in ``overrides`` are preserved by construction
+        from the live tool, so a future ``Tool`` field cannot be silently lost
+        by callers that only meant to change one thing. This mirrors
+        ``dataclasses.replace`` for the non-dataclass ``Tool`` primitive.
+
+        Args:
+            **overrides: Any subset of ``Tool`` constructor keyword arguments
+                (``name``, ``description``, ``args_model``, ``handler``,
+                ``formatter``, ``parameters_schema``).
+
+        Returns:
+            A new ``Tool`` carrying the merged fields.
+
+        Raises:
+            TypeError: If an override names a non-constructor field.
+        """
+        kwargs = self._construction_kwargs()
+        unknown = set(overrides) - set(kwargs)
+        if unknown:
+            raise TypeError(
+                f"Tool.replace received unknown field(s): {', '.join(sorted(unknown))}."
+            )
+        kwargs.update(overrides)
+        return Tool(**kwargs)
+
+    def with_handler[NewResultT](
+        self,
+        wrapper: Callable[
+            [ToolHandler[ArgsT, ResultT]], ToolHandler[ArgsT, NewResultT]
+        ],
+    ) -> "Tool[ArgsT, NewResultT]":
+        """Return a copy whose handler is built from the current handler.
+
+        The ``wrapper`` receives this tool's existing handler and returns a new
+        handler, which is the standard shape for argument interception, result
+        post-processing, sandboxing, or redaction. Every other field is
+        preserved by construction.
+
+        Args:
+            wrapper: Callable that takes the original handler and returns the
+                replacement handler.
+
+        Returns:
+            A new ``Tool`` whose handler is ``wrapper(self.handler)`` and whose
+            remaining fields are copied unchanged.
+        """
+        wrapped = wrapper(self._handler)
+        return cast("Tool[ArgsT, NewResultT]", self.replace(handler=wrapped))
 
     async def run(
         self,
