@@ -328,7 +328,7 @@ def test_tool_approval_broker_immediate_disabled_still_brokers_approvals(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
-        broker = ToolApprovalBroker(record_immediate_decisions=True)
+        broker = ToolApprovalBroker(record_immediate_decisions=False)
         events = broker.events()
         requested_event_task = asyncio.create_task(_next_event(events))
         callback_task = asyncio.create_task(
@@ -341,6 +341,36 @@ def test_tool_approval_broker_immediate_disabled_still_brokers_approvals(
 
         assert requested_event.status == ToolApprovalStatus.PENDING
         assert broker.pending()[0].request_id == requested_event.request_id
+
+        allow = ToolPermissionDecision.allow()
+        assert await broker.resolve(requested_event.request_id, allow)
+        assert await asyncio.wait_for(callback_task, timeout=1.0) == allow
+
+    asyncio.run(scenario())
+
+
+def test_tool_approval_broker_immediate_enabled_still_brokers_approvals(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        broker = ToolApprovalBroker(record_immediate_decisions=True)
+        events = broker.events()
+        requested_event_task = asyncio.create_task(_next_event(events))
+        callback_task = asyncio.create_task(
+            broker.callback(
+                _request(tmp_path), ToolPermissionDecision.require_approval()
+            )
+        )
+
+        requested_event = await requested_event_task
+
+        # An approval-required decision is brokered through the normal pending
+        # round-trip even with immediate recording enabled; only already-decided
+        # allow/deny decisions take the immediate-record path.
+        assert requested_event.status == ToolApprovalStatus.PENDING
+        assert broker.pending()[0].request_id == requested_event.request_id
+        await asyncio.sleep(0)
+        assert not callback_task.done()
 
         allow = ToolPermissionDecision.allow()
         assert await broker.resolve(requested_event.request_id, allow)
