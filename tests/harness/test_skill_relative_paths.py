@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from agentlane.harness import RunState, Task
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
@@ -17,8 +18,8 @@ from agentlane.harness.skills import (
     discover_skill_catalog,
     resolve_skill_relative_path,
 )
-from agentlane.harness.tools import base_harness_tools
-from agentlane.models import ToolExecutionContext, Tools
+from agentlane.harness.tools import HarnessToolDefinition, base_harness_tools
+from agentlane.models import Tool, ToolExecutionContext, Tools
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken
 
@@ -297,6 +298,66 @@ def test_skill_relative_path_shim_passes_through_unwrapped_tools() -> None:
         assert isinstance(turn.tools, Tools)
         names = {tool.name for tool in turn.tools.executable_tools}
         assert names == {"read", "bash"}
+
+    asyncio.run(scenario())
+
+
+class _PathToolArgs(BaseModel):
+    """Arguments for a custom path-taking tool used to check field fidelity."""
+
+    path: str
+
+
+def test_skill_relative_path_shim_preserves_wrapped_tool_formatter_and_schema() -> None:
+    # The wrapper must copy every Tool field by construction, not re-list them.
+    # A custom formatter and an explicit parameters schema are the two fields a
+    # field-by-field reconstruction historically dropped or diverged on.
+    catalog = SkillCatalog(manifests=[], loader=cast(Any, _DummyLoader()))
+    explicit_schema = {
+        "type": "object",
+        "properties": {"path": {"type": "string", "title": "Custom Path"}},
+        "required": ["path"],
+        "additionalProperties": False,
+    }
+
+    def custom_formatter(value: str) -> str:
+        return f"formatted::{value}"
+
+    async def handler(
+        args: _PathToolArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> str:
+        del cancellation_token, context
+        return args.path
+
+    source_tool: Tool[_PathToolArgs, str] = Tool(
+        name="read",
+        description="Read a path.",
+        args_model=_PathToolArgs,
+        handler=handler,
+        formatter=custom_formatter,
+        parameters_schema=explicit_schema,
+    )
+    definition = HarnessToolDefinition(tool=source_tool)
+
+    async def scenario() -> None:
+        shim = SkillRelativePathShim([definition], catalog=catalog)
+        bound = await shim.bind(_binding_context())
+
+        run_state = RunState(instructions=None, history=[], responses=[])
+        turn = PreparedTurn(run_state=run_state, tools=None, model_args=None)
+        await bound.prepare_turn(turn)
+
+        assert isinstance(turn.tools, Tools)
+        wrapped = {tool.name: tool for tool in turn.tools.executable_tools}["read"]
+        assert isinstance(wrapped, Tool)
+        # The custom formatter is carried over, not replaced by the source tool's
+        # bound render method.
+        assert wrapped.formatter is custom_formatter
+        assert wrapped.return_value_as_string("x") == "formatted::x"
+        # The explicit parameters schema survives the copy unchanged.
+        assert wrapped.schema["parameters"] == explicit_schema
 
     asyncio.run(scenario())
 

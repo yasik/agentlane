@@ -49,7 +49,14 @@ from ._retry import (
 )
 from ._streaming import ModelStreamEvent, ModelStreamEventKind
 from ._strict_schema import ensure_strict_json_schema
-from ._tool import RunStateView, Tool, ToolExecutionContext, ToolSpec, as_tool
+from ._tool import (
+    RunStateView,
+    Tool,
+    ToolExecutionContext,
+    ToolHandler,
+    ToolSpec,
+    as_tool,
+)
 from ._tool_executor import ToolExecutor
 from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapter
 from ._types import (
@@ -101,6 +108,7 @@ __all__ = [
     "ToolSpec",
     "Tool",
     "ToolExecutionContext",
+    "ToolHandler",
     "RunStateView",
     "as_tool",
     "Tools",
