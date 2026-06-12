@@ -255,6 +255,81 @@ Two scope contracts matter for consumers that aggregate run telemetry:
 - State snapshots are root-stream-only by contract: a delegated child never
   emits `RunStateSnapshotEvent` into the parent stream.
 
+## Stream Cancellation And Closure
+
+`run_events(...)` and `run_stream(...)` both return a stream handle that
+exposes `aclose()` (inherited from the shared
+[`BaseRunStream`](../../src/agentlane/harness/_stream_base.py)). The
+cancellation contract is:
+
+1. **`aclose()` stops the underlying run.** When you pass a
+   `cancellation_token` to `run_events(...)`, the runner wires
+   `token.cancel` as the stream's `on_close` hook. Calling `await
+   stream.aclose()` therefore cancels that token, which propagates through the
+   async run chain and stops the in-flight provider request. `aclose()` also
+   runs the stream's cleanup callbacks (cancelling the internal run task and any
+   approval-forwarding task) and ends the iterator. Without a
+   `cancellation_token`, `aclose()` still ends the iterator and runs cleanups,
+   but there is no token to cancel, so a blocking provider call already in
+   flight is not interrupted by closure alone.
+
+2. **Cancelling the consuming task does not close the stream.** If you iterate
+   the stream from a task and cancel that task, the `CancelledError` unwinds
+   your `async for`, but it does not call `aclose()` for you. The underlying run
+   task and provider request keep going until they finish or are cancelled
+   another way. To stop the run when a consumer goes away, call `aclose()`
+   explicitly — typically in a `finally` around the consumption loop, or by
+   cancelling the same `cancellation_token` you handed to `run_events(...)`.
+
+3. **`result()` must be retrieved after `aclose()`.** `aclose()` fails the
+   stream's result future with `asyncio.CancelledError`. Await `result()` (and
+   swallow `CancelledError`) after closing so asyncio does not log a
+   "Future exception was never retrieved" warning. The shared
+   `close_stream_callback` / `_close_stream` helpers in `_stream_base.py` follow
+   exactly this close-then-drain pattern.
+
+The recommended host pattern is to own the `cancellation_token`, pass it into
+`run_events(...)`, consume the stream in a `try`/`finally`, and call
+`await stream.aclose()` in the `finally` so a dying consumer always stops the
+provider-side request:
+
+```python
+token = CancellationToken()
+stream = agent.run_events(prompt, cancellation_token=token)
+try:
+    async for event in stream:
+        handle(event)
+finally:
+    await stream.aclose()
+    with contextlib.suppress(asyncio.CancelledError):
+        await stream.result()
+```
+
+### Cooperative cancellation for blocking I/O
+
+[`CancellationToken`](../../src/agentlane/runtime/_cancellation.py) is
+cooperative: it cannot interrupt a blocking call already running in a worker
+thread. Its surface is `is_cancelled` (poll), `await wait_cancelled()` (await
+the request), `link_future(future)` (cancel an `asyncio.Future`/task when the
+token is cancelled), and `cancel()`.
+
+For `asyncio.to_thread(...)`-style blocking calls (for example a synchronous
+HTTP client, or `urllib.request.urlopen`), the intended pattern is:
+
+1. Check `token.is_cancelled` before starting the blocking call and return early
+   if cancellation is already requested.
+2. Run the blocking call in a worker thread, keeping any per-call timeout short
+   enough that a cancelled run does not linger longer than that timeout.
+3. Check `token.is_cancelled` again after the call returns and discard the
+   result if cancellation happened while it was in flight.
+
+A blocking call such as `urlopen(...)` cannot be interrupted mid-flight by the
+token, so a cancelled run may linger up to that call's own timeout before the
+worker thread unblocks. Where you control the awaitable instead of a blocking
+thread call, prefer `token.link_future(task)` so the token cancels it directly.
+For cancellable network work, wrap the request in an `asyncio.Task` and link it,
+or use an async HTTP client whose request future the token can cancel.
+
 ## Run Result And State
 
 [`RunResult`](../../src/agentlane/harness/_run.py) records what came out of the

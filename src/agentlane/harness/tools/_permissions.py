@@ -20,6 +20,13 @@ class ToolOperation(StrEnum):
     MODIFY_FILE = "modify_file"
     CREATE_DIRECTORY = "create_directory"
     EXECUTE_COMMAND = "execute_command"
+    NETWORK_ACCESS = "network_access"
+    """Outbound network egress, such as a web search or an API call.
+
+    Network access has no filesystem path for a path policy to bound, so egress
+    tools set `command`/`reason` on the request to describe the outbound payload.
+    It is classified as a side effect so side-effect approval policies gate it.
+    """
 
 
 class ToolPermissionOutcome(StrEnum):
@@ -186,6 +193,7 @@ def workspace_tool_policy(
     grants: Iterable[ToolPermissionGrant] | None = None,
     require_approval_for_side_effects: bool = False,
     require_bash_approval: bool = False,
+    grants_downgrade_side_effect_approval: bool = False,
 ) -> AllOfToolPermissionPolicy:
     """Build the common workspace policy used by application harnesses.
 
@@ -197,7 +205,15 @@ def workspace_tool_policy(
     `require_bash_approval=True` is the only way this helper admits `bash`
     command execution, and it requires approval before the process can start.
     It is not process sandboxing.
+
+    By default a grant for a side-effecting operation is outcome-inert: the
+    side-effect approval policy still requires approval and, under
+    strictest-wins composition, that approval is never widened back to allow.
+    Pass `grants_downgrade_side_effect_approval=True` to opt in to letting a
+    grant downgrade approval to allow for the operations it covers, so a
+    configured grant such as `bash:execute_command` actually skips approval.
     """
+    grant_tuple = () if grants is None else tuple(grants)
     policies: list[ToolPermissionPolicy] = [
         WorkspaceToolPermissionPolicy(
             root,
@@ -207,13 +223,18 @@ def workspace_tool_policy(
         )
     ]
     if grants is not None:
-        policies.append(ToolPermissionGrantPolicy(grants))
+        policies.append(ToolPermissionGrantPolicy(grant_tuple))
     approval_operations = _workspace_policy_approval_operations(
         require_approval_for_side_effects=require_approval_for_side_effects,
         require_bash_approval=require_bash_approval,
     )
     if approval_operations:
-        policies.append(SideEffectApprovalToolPermissionPolicy(approval_operations))
+        policies.append(
+            SideEffectApprovalToolPermissionPolicy(
+                approval_operations,
+                grants=(grant_tuple if grants_downgrade_side_effect_approval else None),
+            )
+        )
 
     return AllOfToolPermissionPolicy(policies)
 
@@ -225,6 +246,14 @@ class SideEffectApprovalToolPermissionPolicy:
     a narrower approval policy. The policy returns `REQUIRE_APPROVAL`;
     `evaluate_tool_permission()` is the boundary that calls the optional host
     `approval_callback`.
+
+    Composition caveat: under `AllOfToolPermissionPolicy` (`allow` < `approval`
+    < `deny`) an unconditional `REQUIRE_APPROVAL` here is never widened by an
+    `ALLOW` from an earlier grant policy, so a grant for a side-effecting
+    operation is outcome-inert. To let a grant downgrade approval to allow for
+    operations the app trusts, pass `grants`: a request that matches one of
+    those grants returns `ALLOW` instead of `REQUIRE_APPROVAL`. `grants=None`
+    keeps the always-require-approval behavior.
     """
 
     operations: frozenset[ToolOperation]
@@ -232,17 +261,24 @@ class SideEffectApprovalToolPermissionPolicy:
     def __init__(
         self,
         operations: Iterable[ToolOperation | str] | None = None,
+        *,
+        grants: Iterable[ToolPermissionGrant] | None = None,
     ) -> None:
         self.operations = (
             _SIDE_EFFECT_OPERATIONS
             if operations is None
             else frozenset(_coerce_operation(operation) for operation in operations)
         )
+        self._grants = () if grants is None else tuple(grants)
 
     def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
-        if request.operation in self.operations:
-            return ToolPermissionDecision.require_approval()
-        return ToolPermissionDecision.allow()
+        if request.operation not in self.operations:
+            return ToolPermissionDecision.allow()
+        if any(grant.allows(request) for grant in self._grants):
+            # An app-trusted grant downgrades approval to allow so the grant is
+            # not silently inert under strictest-wins composition.
+            return ToolPermissionDecision.allow()
+        return ToolPermissionDecision.require_approval()
 
 
 class WorkspaceToolPermissionPolicy:
@@ -489,6 +525,11 @@ def _format_approval_required(request: ToolPermissionRequest) -> str:
             "approval required: bash command requires application approval "
             "before execution"
         )
+    if request.operation == ToolOperation.NETWORK_ACCESS:
+        return (
+            f"approval required: {request.tool_name} network access requires "
+            "application approval before execution"
+        )
     subject = _permission_subject(request)
     if subject is None:
         return (
@@ -581,6 +622,7 @@ _SIDE_EFFECT_OPERATIONS = frozenset(
     {
         *_PATH_SIDE_EFFECT_OPERATIONS,
         ToolOperation.EXECUTE_COMMAND,
+        ToolOperation.NETWORK_ACCESS,
     }
 )
 
