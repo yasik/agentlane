@@ -263,3 +263,87 @@ def test_tool_approval_broker_callback_can_allow_read_tool(
         assert output == "approved"
 
     asyncio.run(scenario())
+
+
+async def _collect_immediate_events(
+    broker: ToolApprovalBroker,
+) -> list[ToolApprovalEvent]:
+    """Subscribe, then return the pending then resolved immediate events."""
+    collected: list[ToolApprovalEvent] = []
+    async for event in broker.events():
+        collected.append(event)
+        if len(collected) == 2:
+            return collected
+    return collected
+
+
+def test_tool_approval_broker_records_immediate_allow_when_enabled(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        broker = ToolApprovalBroker(record_immediate_decisions=True)
+        collector = asyncio.create_task(_collect_immediate_events(broker))
+        # Yield so the collector subscribes before the immediate decision emits.
+        await asyncio.sleep(0)
+
+        allow = ToolPermissionDecision.allow()
+        returned = await broker.callback(_request(tmp_path), allow)
+
+        pending_event, resolved_event = await asyncio.wait_for(collector, timeout=1.0)
+
+        assert returned == allow
+        assert pending_event.status == ToolApprovalStatus.PENDING
+        assert resolved_event.status == ToolApprovalStatus.RESOLVED
+        assert resolved_event.request_id == pending_event.request_id
+        assert resolved_event.record.final_decision == allow
+        # The decision resolved in the same step, so it never lingers pending.
+        assert broker.pending() == ()
+
+    asyncio.run(scenario())
+
+
+def test_tool_approval_broker_records_immediate_deny_when_enabled(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        broker = ToolApprovalBroker(record_immediate_decisions=True)
+        collector = asyncio.create_task(_collect_immediate_events(broker))
+        await asyncio.sleep(0)
+
+        deny = ToolPermissionDecision.deny("not allowed in this mode")
+        returned = await broker.callback(_request(tmp_path), deny)
+
+        pending_event, resolved_event = await asyncio.wait_for(collector, timeout=1.0)
+
+        assert returned == deny
+        assert pending_event.status == ToolApprovalStatus.PENDING
+        assert resolved_event.status == ToolApprovalStatus.RESOLVED
+        assert resolved_event.record.final_decision == deny
+        assert broker.pending() == ()
+
+    asyncio.run(scenario())
+
+
+def test_tool_approval_broker_immediate_disabled_still_brokers_approvals(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        broker = ToolApprovalBroker(record_immediate_decisions=True)
+        events = broker.events()
+        requested_event_task = asyncio.create_task(_next_event(events))
+        callback_task = asyncio.create_task(
+            broker.callback(
+                _request(tmp_path), ToolPermissionDecision.require_approval()
+            )
+        )
+
+        requested_event = await requested_event_task
+
+        assert requested_event.status == ToolApprovalStatus.PENDING
+        assert broker.pending()[0].request_id == requested_event.request_id
+
+        allow = ToolPermissionDecision.allow()
+        assert await broker.resolve(requested_event.request_id, allow)
+        assert await asyncio.wait_for(callback_task, timeout=1.0) == allow
+
+    asyncio.run(scenario())
