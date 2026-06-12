@@ -23,6 +23,7 @@ from agentlane.harness.skills import (
     SkillManifest,
     SkillResource,
     SkillsShim,
+    discover_skill_catalog,
 )
 from agentlane.harness.skills._constraints import (
     SKILL_MAX_COMPATIBILITY_LENGTH,
@@ -1422,3 +1423,139 @@ def test_skills_shim_returns_already_active_when_other_skills_remain() -> None:
         }
 
     asyncio.run(scenario())
+
+
+def test_discover_skill_catalog_returns_shared_catalog(tmp_path: Path) -> None:
+    _write_skill(
+        root=tmp_path,
+        name="refund-policy",
+        description="Handle refund questions.",
+        body="# Refund Policy",
+    )
+    loader = FilesystemSkillLoader(roots=(tmp_path,), include_default_roots=False)
+
+    async def scenario() -> None:
+        catalog = await discover_skill_catalog(loader)
+
+        assert isinstance(catalog, SkillCatalog)
+        assert catalog.names() == ("refund-policy",)
+        manifest = catalog.get("refund-policy")
+        assert manifest is not None
+        assert manifest.root == (tmp_path / "refund-policy").resolve()
+        loaded = await catalog.load("refund-policy")
+        assert loaded.instructions == "# Refund Policy"
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_reuses_shared_catalog_without_rediscovery() -> None:
+    loaded_skill = LoadedSkill(
+        manifest=_make_manifest("refund-policy"),
+        instructions="# Refund Policy",
+        resources=(),
+    )
+    loader = _MemorySkillLoader(loaded_skill)
+    model = _SequenceModel([_assistant_response("done")])
+
+    async def scenario() -> None:
+        catalog = await discover_skill_catalog(loader)
+        assert loader.discover_calls == 1
+
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Support",
+                model=model,
+                instructions="You are a support assistant.",
+                shims=(SkillsShim(catalog=catalog),),
+            )
+        )
+        result = await agent.run("Hello")
+
+        assert result.final_output == "done"
+        # The shim consumes the shared catalog and does not discover again.
+        assert loader.discover_calls == 1
+        system_prompt = str(model.calls[0][0]["content"])
+        assert "<name>refund-policy</name>" in system_prompt
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_rejects_loader_and_catalog_together() -> None:
+    catalog = SkillCatalog(manifests=[], loader=_EmptySkillLoader())
+
+    with pytest.raises(ValueError, match="loader or catalog, not both"):
+        SkillsShim(loader=_EmptySkillLoader(), catalog=catalog)
+
+
+def test_skills_shim_active_skill_names_reads_persisted_state() -> None:
+    skill_a = LoadedSkill(
+        manifest=_make_manifest("refund-policy"),
+        instructions="# Refund instructions",
+        resources=(),
+    )
+    skill_b = LoadedSkill(
+        manifest=_make_manifest("shipping-info"),
+        instructions="# Shipping instructions",
+        resources=(),
+    )
+    loader = _MultiSkillLoader([skill_a, skill_b])
+    model = _SequenceModel(
+        [
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_1",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "refund-policy"}),
+                    )
+                ],
+            ),
+            _assistant_response(
+                None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="call_2",
+                        name="activate_skill",
+                        arguments=json.dumps({"name": "shipping-info"}),
+                    )
+                ],
+            ),
+            _assistant_response("done"),
+        ]
+    )
+    shim = SkillsShim(loader=loader)
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="Support",
+            model=model,
+            instructions="You are a support assistant.",
+            shims=(shim,),
+        )
+    )
+
+    async def scenario() -> None:
+        await agent.run("Help me with my order")
+
+        assert agent.run_state is not None
+        assert shim.active_skill_names(agent.run_state) == (
+            "refund-policy",
+            "shipping-info",
+        )
+
+    asyncio.run(scenario())
+
+
+def test_skills_shim_active_skill_names_empty_before_activation() -> None:
+    shim = SkillsShim(loader=_EmptySkillLoader())
+    state = RunState(instructions=None, history=[], responses=[])
+
+    assert shim.active_skill_names(state) == ()
+
+
+def test_skills_shim_active_skill_names_honors_custom_shim_name() -> None:
+    state = RunState(instructions=None, history=[], responses=[])
+    state.shim_state["docs:active-skill-names"] = ["report-generator"]
+    shim = SkillsShim(loader=_EmptySkillLoader(), name="docs")
+
+    assert shim.active_skill_names(state) == ("report-generator",)

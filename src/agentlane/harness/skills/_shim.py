@@ -132,11 +132,36 @@ class SkillsShim(Shim):
         self,
         *,
         loader: SkillLoader | None = None,
+        catalog: SkillCatalog | None = None,
         system_prompt: str | None = None,
         tool_name: str = "activate_skill",
         name: str = "skills",
     ) -> None:
+        """Initialize one skills shim definition.
+
+        Args:
+            loader: Optional skill loader used to discover skills at bind time.
+                Defaults to a `FilesystemSkillLoader`. Ignored when `catalog`
+                is provided.
+            catalog: Optional already-discovered catalog to reuse. Pass the
+                value returned by `discover_skill_catalog(...)` so an
+                application can share one discovered catalog with this shim and
+                with its own tools instead of re-discovering skills with a
+                second loader and asserting the name pairing at assembly.
+            system_prompt: Optional system-prompt template override.
+            tool_name: Name of the contributed activation tool.
+            name: Stable shim name used for persisted state keys.
+
+        Raises:
+            ValueError: When both `loader` and `catalog` are provided.
+        """
+        if loader is not None and catalog is not None:
+            raise ValueError(
+                "SkillsShim accepts loader or catalog, not both; a catalog "
+                "already carries its own loader."
+            )
         self._loader = loader
+        self._catalog = catalog
         self._system_prompt = system_prompt or DEFAULT_SKILLS_SYSTEM_PROMPT
         self._tool_name = tool_name
         self._name = name
@@ -145,19 +170,59 @@ class SkillsShim(Shim):
     def name(self) -> str:
         return self._name
 
+    def active_skill_names(self, run_state: RunState) -> tuple[str, ...]:
+        """Return the skill names activated so far in `run_state`.
+
+        This reads the persisted activation state this shim owns and returns
+        the names in activation order. Use it instead of reconstructing the
+        internal `{name}:active-skill-names` shim-state key; the key format is
+        private and may change.
+
+        Args:
+            run_state: Persisted run state for the run to inspect.
+
+        Returns:
+            tuple[str, ...]: Activated skill names in activation order.
+        """
+        return _active_skill_names(
+            shim_state=run_state.shim_state,
+            key=_active_names_key(self._name),
+        )
+
     async def bind(self, context: ShimBindingContext) -> BoundShim:
         del context
-        loader = self._loader or FilesystemSkillLoader()
-        catalog = SkillCatalog(
-            manifests=await loader.discover(),
-            loader=loader,
-        )
         return _BoundSkillsShim(
             shim_name=self._name,
-            catalog=catalog,
+            catalog=await self._resolve_catalog(),
             system_prompt=self._system_prompt,
             tool_name=self._tool_name,
         )
+
+    async def _resolve_catalog(self) -> SkillCatalog:
+        """Return the shared catalog, or discover one through the loader."""
+        if self._catalog is not None:
+            return self._catalog
+        return await discover_skill_catalog(self._loader or FilesystemSkillLoader())
+
+
+async def discover_skill_catalog(loader: SkillLoader) -> SkillCatalog:
+    """Discover skills once and return a shareable `SkillCatalog`.
+
+    `SkillsShim` discovers skills inside `bind(...)`, so an application that
+    needs the discovered manifests elsewhere (for example to map skill names to
+    their roots) would otherwise have to discover a second time with a parallel
+    loader and assert the two name sets agree. Building the catalog here and
+    passing it to `SkillsShim(catalog=...)` retires that duplicate discovery:
+    the same catalog backs the shim and is available to the application.
+
+    Args:
+        loader: Loader whose `discover()` result seeds the catalog.
+
+    Returns:
+        SkillCatalog: Read-only catalog over the discovered manifests, bound to
+        `loader` for later activation.
+    """
+    return SkillCatalog(manifests=await loader.discover(), loader=loader)
 
 
 def _build_activate_skill_tool(
