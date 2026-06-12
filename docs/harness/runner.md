@@ -217,6 +217,17 @@ Anything else is treated as `ok`. First-party tools that render operational
 errors as plain strings stay `ok` because result wording is not a contract; a
 tool that needs a failure marked returns `ToolFailure`.
 
+`ToolFailure`, `ToolError`, the derived `ToolOutcome`, and the `tool_outcome`
+helper are exported from `agentlane.harness`:
+
+```python
+from agentlane.harness import ToolError, ToolFailure, tool_outcome
+```
+
+A tool handler signals a typed failure by returning `ToolFailure(text=...,
+error=ToolError(message=..., kind=...))`. The `text` is what the model sees; the
+`error` is what `RunToolEndEvent.error` carries.
+
 ### Plan-updated events
 
 After a successful first-party plan-tool call, the runner emits a
