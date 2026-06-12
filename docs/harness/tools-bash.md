@@ -61,6 +61,14 @@ before failure
 [Command exited with code 7]
 ```
 
+For timed-out, cancelled, and non-zero-exit outcomes the tool returns a
+[`ToolFailure`](runner.md#tool-success-and-failure) instead of a plain string.
+`ToolFailure` is a `str` subclass, so the model-facing text is unchanged, while
+the runner reads the attached `ToolError` and reports `ok=False` (with a stable
+`kind` of `timeout`, `cancelled`, or `nonzero_exit`) on the `RunToolEndEvent`.
+Consumers read that envelope directly rather than reflecting over
+`BashExecutionResult` fields.
+
 If output is truncated, the result includes a temporary log path with the full
 combined output. On timeout or cancellation, the tool terminates the process
 group and kills it if graceful termination does not finish promptly. On POSIX,
