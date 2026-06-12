@@ -35,7 +35,7 @@ can keep the prompt readable and still pass typed values into it.
 ```python
 from typing import TypedDict
 
-from agentlane.models import OutputSchema, PromptSpec, PromptTemplate
+from agentlane.models import PromptSpec, PromptTemplate
 
 
 class IntakeVars(TypedDict):
@@ -43,10 +43,11 @@ class IntakeVars(TypedDict):
     question: str
 
 
+# `output_schema` defaults to plain string output, so instruction-only and
+# plain-text prompts can omit it entirely.
 template = PromptTemplate[IntakeVars, str](
     system_template="You are helping with {{ clinic_name }} patient intake.",
     user_template="{{ question }}",
-    output_schema=OutputSchema(str),
 )
 
 prompt = PromptSpec(
@@ -76,7 +77,7 @@ template string with values. `FilePart` and `ImagePart` carry already-prepared
 payloads.
 
 ```python
-from agentlane.models import ImagePart, MultiPartPromptTemplate, OutputSchema
+from agentlane.models import ImagePart, MultiPartPromptTemplate
 from agentlane.models import PromptSpec, TextPart
 
 
@@ -88,7 +89,6 @@ template = MultiPartPromptTemplate[dict[str, str], str](
         TextPart("Customer note: {{ note }}"),
         ImagePart(base64_data=receipt_image_b64, media_type="image/png"),
     ],
-    output_schema=OutputSchema(str),
 )
 
 prompt = PromptSpec(
@@ -104,6 +104,27 @@ Every prompt template carries an
 how the model layer knows whether you expect plain text or structured output,
 and whether a provider should enforce a JSON schema at request time.
 
+`output_schema` is optional. When omitted, the template defaults to plain string
+output (`OutputSchema(str)`), which renders no structured `response_format`.
+Pass an explicit `OutputSchema` only when the template drives structured output:
+
+```python
+from pydantic import BaseModel
+
+from agentlane.models import OutputSchema, PromptTemplate
+
+
+class Triage(BaseModel):
+    urgency: str
+    summary: str
+
+
+structured = PromptTemplate[IntakeVars, Triage](
+    system_template="Classify the intake request.",
+    output_schema=OutputSchema(Triage),
+)
+```
+
 It helps to think of the pieces this way:
 
 1. the template describes what goes in
@@ -118,6 +139,24 @@ If you are building on the harness, keep prompts at the
 [`PromptSpec`](../../src/agentlane/models/_prompts.py) level and let the runner
 build the final request. Reach for direct rendering when you are implementing a
 lower-level model flow and need the canonical message list immediately.
+
+### Rendering System Instruction Text
+
+When you need the system-instruction *text* a `PromptSpec` produces — for
+logging, assertions, or feeding another component — use
+[`render_instruction_text`](../../src/agentlane/models/_prompts.py) instead of
+re-implementing role filtering over `render_messages(...)`. It renders the
+spec, keeps only the `system`-role messages, and joins their plain text:
+
+```python
+from agentlane.models import render_instruction_text
+
+system_text = render_instruction_text(prompt)
+```
+
+It raises `ValueError` if the spec renders no system message or if the system
+content is not plain text, so a misconfigured prompt fails loudly instead of
+silently producing an empty string.
 
 ## Related Docs
 

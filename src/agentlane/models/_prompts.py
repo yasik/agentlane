@@ -4,7 +4,7 @@ for single and multi-part prompt templates.
 
 import abc
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from jinja2 import Template
 
@@ -12,6 +12,10 @@ from ._output_schema import OutputSchema
 
 CtxT = TypeVar("CtxT")
 OutT = TypeVar("OutT")
+
+# Shared plain-text schema used when a template declares no `output_schema`.
+# Reused across instances because OutputSchema(str) is immutable and stateless.
+_STR_SCHEMA: OutputSchema[str] = OutputSchema(str)
 
 
 class PromptTemplateBase[CtxT, OutT](abc.ABC):
@@ -43,14 +47,60 @@ class PromptSpec[CtxT]:
     """Concrete values supplied to the prompt template at render time."""
 
 
+def render_instruction_text(spec: PromptSpec[Any]) -> str:
+    """Render one prompt spec into a single system-instruction string.
+
+    Renders the spec's template, keeps only its ``system``-role messages, and
+    joins their plain-text content with blank lines. This is the canonical way
+    to turn a `PromptSpec` into the system-instruction text the harness sends
+    to the model; consumers that need that text should call this instead of
+    re-implementing role filtering against `PromptTemplateBase.render_messages`.
+
+    Args:
+        spec: The prompt spec whose system instructions are rendered.
+
+    Returns:
+        The concatenated text of every system-role message the spec renders.
+
+    Raises:
+        ValueError: If the spec renders no system-role message, or if any
+            system message content is not plain text.
+    """
+    messages = [
+        message
+        for message in spec.template.render_messages(spec.values)
+        if message.get("role") == "system"
+    ]
+    if not messages:
+        raise ValueError("PromptSpec must render at least one system-role message.")
+
+    contents: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            contents.append(content)
+            continue
+        raise ValueError(
+            "System PromptSpec content must render to plain text when rendered "
+            "as instruction text."
+        )
+    return "\n\n".join(contents)
+
+
 @dataclass(init=False)
 class PromptTemplate(PromptTemplateBase[CtxT, OutT]):
-    """A prompt template that can render optional system and user messages."""
+    """A prompt template that can render optional system and user messages.
+
+    `output_schema` is optional. Plain string system prompts — the common case
+    for instruction-only templates — omit it and default to ``str`` output,
+    which renders no structured `response_format`. Pass an explicit
+    `OutputSchema` only when the template drives structured output.
+    """
 
     def __init__(
         self,
         *,
-        output_schema: OutputSchema[OutT],
+        output_schema: OutputSchema[OutT] | None = None,
         system_template: str | None = None,
         user_template: str | None = None,
     ) -> None:
@@ -64,7 +114,11 @@ class PromptTemplate(PromptTemplateBase[CtxT, OutT]):
         self._user_template = (
             Template(user_template, trim_blocks=True) if user_template else None
         )
-        self._output_schema = output_schema
+        # Default to plain string output so instruction-only prompts skip the
+        # OutputSchema(str) boilerplate. cast keeps the OutT type variable
+        # honest: when no schema is given the output is str, which is the
+        # contract callers get from the OutT default.
+        self._output_schema = output_schema or cast(OutputSchema[OutT], _STR_SCHEMA)
 
     def render_messages(self, ctx: CtxT | None = None) -> list[dict[str, Any]]:
         """Render the prompt template into a list of messages."""
@@ -175,18 +229,23 @@ class MultiPartPromptTemplate(PromptTemplateBase[CtxT, OutT]):
     def __init__(
         self,
         *,
-        output_schema: OutputSchema[OutT],
+        output_schema: OutputSchema[OutT] | None = None,
         system_parts: list[PartTemplate[CtxT]] | None = None,
         user_parts: list[PartTemplate[CtxT]] | None = None,
     ) -> None:
-        """Initialize the multi-part prompt template."""
+        """Initialize the multi-part prompt template.
+
+        `output_schema` is optional and defaults to plain string output, which
+        renders no structured `response_format`. Pass an explicit
+        `OutputSchema` only when the template drives structured output.
+        """
         if not system_parts and not user_parts:
             raise ValueError(
                 "MultiPartPromptTemplate requires at least one of `system_parts` or `user_parts`."
             )
         self._system_parts = system_parts or []
         self._user_parts = user_parts or []
-        self._output_schema = output_schema
+        self._output_schema = output_schema or cast(OutputSchema[OutT], _STR_SCHEMA)
 
     def render_messages(self, ctx: CtxT | None = None) -> list[dict[str, Any]]:
         """Render the multi-part prompt template into a list of messages."""

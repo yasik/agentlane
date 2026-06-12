@@ -23,14 +23,16 @@ First-party examples include [Harness Tools](./tools.md) and
 ```python
 from agentlane.harness.shims import (
     BoundShim,
+    DelegatingBoundShim,
+    DelegatingShim,
     PreparedTurn,
     Shim,
     ShimBindingContext,
 )
 ```
 
-The public surface is `Shim`, `BoundShim`, `PreparedTurn`, and
-`ShimBindingContext`.
+The public surface is `Shim`, `BoundShim`, `DelegatingBoundShim`,
+`DelegatingShim`, `PreparedTurn`, and `ShimBindingContext`.
 
 ## Mental Model
 
@@ -250,6 +252,63 @@ directly; the default bound session forwards it automatically. Reserve a custom
 
 For a runnable example, see
 [examples/harness/default_agent_shims_quickstart](../../examples/harness/default_agent_shims_quickstart/README.md).
+
+## Wrapping Another Shim
+
+Composition — wrapping an existing shim to add behavior around it — should not
+require re-forwarding every callback by hand. A hand-written delegate is
+silently incomplete the moment the framework adds a callback: the new callback
+falls through to the inert `BoundShim`/`Shim` default and never reaches the
+wrapped shim.
+
+Two delegate-by-default bases remove that hazard.
+
+### `DelegatingBoundShim`
+
+Wrap a bound session and override only the callbacks you change. Every other
+callback, including callbacks added in future releases, forwards to the inner
+bound shim automatically.
+
+```python
+from agentlane.harness.shims import BoundShim, DelegatingBoundShim, PreparedTurn
+
+
+class RunStateInjectingBoundShim(DelegatingBoundShim):
+    def __init__(self, inner: BoundShim, consumer: RunStateConsumer) -> None:
+        super().__init__(inner)
+        self._consumer = consumer
+
+    async def prepare_turn(self, turn: PreparedTurn) -> None:
+        self._consumer.set_run_state(turn.run_state)
+        await super().prepare_turn(turn)
+```
+
+The wrapped session is available as `self.inner`. Call `await super().<callback>`
+inside an override to run your behavior and then forward to the inner shim.
+
+### `DelegatingShim`
+
+`DelegatingShim` is the definition-level analog. It forwards `name`, `bind`, and
+every lifecycle callback to an inner `Shim`. The common pattern is to override
+`bind(...)` only, wrapping the inner bound session in a `DelegatingBoundShim`
+subclass:
+
+```python
+from agentlane.harness.shims import (
+    BoundShim,
+    DelegatingShim,
+    ShimBindingContext,
+)
+
+
+class RunStateInjectingShim(DelegatingShim):
+    async def bind(self, context: ShimBindingContext) -> BoundShim:
+        inner = await self.inner.bind(context)
+        return RunStateInjectingBoundShim(inner, self._consumer)
+```
+
+Both bases are reflection-tested against the full `BoundShim`/`Shim` callback
+surface, so a newly added callback cannot silently bypass delegation.
 
 ## Boundaries
 
