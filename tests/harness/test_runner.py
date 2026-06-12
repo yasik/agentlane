@@ -507,7 +507,7 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
-        echo = Tool(
+        echo: Tool[_TracingToolArgs, str] = Tool(
             name="echo",
             description="Echo text",
             args_model=_TracingToolArgs,

@@ -599,7 +599,7 @@ class AgentLifecycle:
                             cancellation_token=active_input.cancellation_token,
                         )
                     elif isinstance(active_input.stream, RunEventStream):
-                        runner_stream = runner.run_events(
+                        event_stream = runner.run_events(
                             agent=agent,
                             state=working_state,
                             hooks=hooks,
@@ -607,30 +607,30 @@ class AgentLifecycle:
                             cancellation_token=active_input.cancellation_token,
                         )
                         active_input.stream.add_cleanup(
-                            close_stream_callback(runner_stream)
+                            close_stream_callback(event_stream)
                         )
                         try:
-                            async for event in runner_stream:
-                                active_input.stream.emit(event)
-                            result = await runner_stream.result()
+                            async for run_event in event_stream:
+                                active_input.stream.emit(run_event)
+                            result = await event_stream.result()
                         finally:
-                            await runner_stream.aclose()
+                            await event_stream.aclose()
                     else:
-                        runner_stream = runner.run_stream(
+                        model_stream = runner.run_stream(
                             agent=agent,
                             state=working_state,
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
                         active_input.stream.add_cleanup(
-                            close_stream_callback(runner_stream)
+                            close_stream_callback(model_stream)
                         )
                         try:
-                            async for event in runner_stream:
-                                active_input.stream.emit(event)
-                            result = await runner_stream.result()
+                            async for model_event in model_stream:
+                                active_input.stream.emit(model_event)
+                            result = await model_stream.result()
                         finally:
-                            await runner_stream.aclose()
+                            await model_stream.aclose()
                 except Exception as exc:  # noqa: BLE001
                     # Runner failures are contained: only this input's
                     # future is failed. The persisted baseline is unchanged,
