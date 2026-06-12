@@ -10,8 +10,19 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
-from agentlane.models import MessageDict, ModelResponse, PromptSpec
+from agentlane.messaging import AgentId
+from agentlane.models import MessageDict, ModelResponse, PromptSpec, RunStateView
 from agentlane.models.run import DefaultRunContext
+
+ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX = ":active-skill-names"
+"""Documented ``shim_state`` key suffix that holds active skill names.
+
+A skills shim records the names of the skills active for the current run under
+a key ending in this suffix (the shim name is the prefix, so multiple skills
+shims never collide). ``RunStateView.active_skill_names`` reads every such key
+so tools can resolve skill-relative resources without coupling to a specific
+shim name or reaching for a private key. The value must be a list of strings.
+"""
 
 
 class ShimState(DefaultRunContext):
@@ -177,3 +188,41 @@ def copy_generic_value(value: object) -> object:
     if isinstance(value, BaseModel):
         return value.model_copy(deep=True)
     return value
+
+
+@dataclass(frozen=True, slots=True)
+class LiveRunStateView(RunStateView):
+    """Read-only ``RunStateView`` backed by one live harness ``RunState``.
+
+    Cheap to construct: it wraps the live ``RunState`` and the run's task
+    identity by reference, reading through on each access. The runner builds
+    one per local tool call and stamps it onto ``ToolExecutionContext`` so tool
+    handlers can observe the run without an app-built side channel.
+    """
+
+    _run_state: RunState
+    _task_id: AgentId
+
+    @property
+    def task_id(self) -> str:
+        """Return the stable task identity (``str`` of the run's task id)."""
+        return str(self._task_id)
+
+    @property
+    def shim_state(self) -> Mapping[str, object]:
+        """Return the live persisted shim state as a read-only mapping."""
+        return self._run_state.shim_state
+
+    @property
+    def active_skill_names(self) -> tuple[str, ...]:
+        """Return active skill names read from the documented state keys."""
+        names: list[str] = []
+        for key, value in self._run_state.shim_state.items():
+            if not key.endswith(ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX):
+                continue
+            if not isinstance(value, list):
+                continue
+            for entry in cast(list[object], value):
+                if isinstance(entry, str) and entry not in names:
+                    names.append(entry)
+        return tuple(names)
