@@ -1,14 +1,13 @@
 """Plan tool implementation for first-party harness base tools."""
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Literal, Self
+from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool, ToolExecutionContext
+from agentlane.models import PlanStepStatus, Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
-from .._tool_result import PlanStepStatus
 from ._types import HarnessToolDefinition
 
 PLAN_TOOL_NAME = "write_plan"
@@ -96,6 +95,17 @@ class PlanUpdate(str):
         instance._steps = steps
         return instance
 
+    def __getnewargs_ex__(self) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Return the keyword-only ``__new__`` arguments for copy and pickle.
+
+        ``PlanUpdate`` is a ``str`` subclass with a keyword-only ``__new__``.
+        Without this hook ``copy.deepcopy`` and ``pickle`` reconstruct the value
+        with positional ``str`` newargs, which the keyword-only signature
+        rejects. Returning the keyword form preserves the structured plan across
+        a round-trip.
+        """
+        return (), {"explanation": self._explanation, "steps": self._steps}
+
     @property
     def plan_message(self) -> str:
         """Return the model-facing success text for the plan update."""
@@ -116,9 +126,7 @@ class _PlanItem(BaseModel):
     """Model-visible plan item."""
 
     step: str = Field(description="Concise description of this step.")
-    status: Literal["pending", "in_progress", "completed"] = Field(
-        description="Current step status."
-    )
+    status: PlanStepStatus = Field(description="Current step status.")
 
 
 class _ToolArgs(BaseModel):

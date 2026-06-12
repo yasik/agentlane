@@ -27,13 +27,20 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
-from agentlane.models import MessageDict, ModelResponse, ModelStreamEvent, ToolCall
+from agentlane.models import (
+    MessageDict,
+    ModelResponse,
+    ModelStreamEvent,
+    PlanStepStatus,
+    ToolCall,
+    ToolError,
+)
 
 from ._hooks import RunnerHooks
 from ._run import RunResult, RunState, copy_generic_value
 from ._stream_base import BaseRunStream
 from ._task import Task
-from ._tool_result import ToolError, as_plan_update, tool_outcome
+from ._tool_result import as_plan_update, tool_outcome
 
 if TYPE_CHECKING:
     from .tools._approvals import ToolApprovalEvent
@@ -285,7 +292,7 @@ class RunPlanItem:
     step: str
     """Concise description of this plan step."""
 
-    status: Literal["pending", "in_progress", "completed"]
+    status: PlanStepStatus
     """Current status of this plan step."""
 
 

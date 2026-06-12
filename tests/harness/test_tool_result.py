@@ -1,3 +1,6 @@
+import copy
+import pickle
+
 from pydantic import BaseModel
 
 from agentlane.harness import (
@@ -47,6 +50,56 @@ def test_default_formatter_renders_tool_failure_text_unchanged() -> None:
 
     assert tool.return_value_as_string(failure) == "[Command cancelled]"
     assert tool.return_value_as_string("plain result") == "plain result"
+
+
+def test_tool_failure_deepcopy_preserves_text_and_error() -> None:
+    failure = ToolFailure(text="boom", error=ToolError(message="boom", kind="timeout"))
+
+    copied = copy.deepcopy(failure)
+
+    assert isinstance(copied, ToolFailure)
+    assert copied == "boom"
+    assert copied.error == ToolError(message="boom", kind="timeout")
+
+
+def test_tool_failure_pickle_round_trip_preserves_text_and_error() -> None:
+    failure = ToolFailure(text="boom", error=ToolError(message="boom", kind="timeout"))
+
+    # Round-trips trusted, locally serialized data to exercise __getnewargs_ex__.
+    restored = pickle.loads(pickle.dumps(failure))  # noqa: S301
+
+    assert isinstance(restored, ToolFailure)
+    assert restored == "boom"
+    assert restored.error == ToolError(message="boom", kind="timeout")
+
+
+def test_plan_update_deepcopy_preserves_text_and_payload() -> None:
+    update = PlanUpdate(
+        explanation="why",
+        steps=(("a", "pending"), ("b", "in_progress")),
+    )
+
+    copied = copy.deepcopy(update)
+
+    assert isinstance(copied, PlanUpdate)
+    assert copied == PLAN_UPDATED_MESSAGE
+    assert copied.plan_explanation == "why"
+    assert copied.plan_steps == (("a", "pending"), ("b", "in_progress"))
+
+
+def test_plan_update_pickle_round_trip_preserves_text_and_payload() -> None:
+    update = PlanUpdate(
+        explanation="why",
+        steps=(("a", "pending"), ("b", "in_progress")),
+    )
+
+    # Round-trips trusted, locally serialized data to exercise __getnewargs_ex__.
+    restored = pickle.loads(pickle.dumps(update))  # noqa: S301
+
+    assert isinstance(restored, PlanUpdate)
+    assert restored == PLAN_UPDATED_MESSAGE
+    assert restored.plan_explanation == "why"
+    assert restored.plan_steps == (("a", "pending"), ("b", "in_progress"))
 
 
 def test_tool_outcome_marks_tool_failure_as_failed() -> None:

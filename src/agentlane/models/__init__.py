@@ -59,6 +59,7 @@ from ._tool import (
 )
 from ._tool_executor import ToolExecutor
 from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapter
+from ._tool_result import PlanStepStatus, ToolError, ToolFailure
 from ._types import (
     Choice,
     ChoiceLogprobs,
@@ -125,6 +126,9 @@ __all__ = [
     "is_retryable_by_status_code",
     "DEFAULT_RETRY_STATUS_CODES",
     "ToolExecutor",
+    "ToolError",
+    "ToolFailure",
+    "PlanStepStatus",
     "ToolOutputAdapter",
     "ChatCompletionsOutputAdapter",
     "ModelResponse",

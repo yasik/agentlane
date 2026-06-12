@@ -13,8 +13,10 @@ from agentlane.models import (
     ModelBehaviorError,
     Tool,
     ToolCall,
+    ToolError,
     ToolExecutionContext,
     ToolExecutor,
+    ToolFailure,
     Tools,
     ToolSpec,
     as_tool,
@@ -418,6 +420,58 @@ def test_tool_executor_raises_for_unregistered_tool() -> None:
                 tools=Tools(tools=[]),
             )
         )
+
+
+def test_tool_executor_reports_exhausted_timeout_as_structured_failure() -> None:
+    """An exhausted tool timeout should reach on_tool_end as a typed failure."""
+
+    async def slow_handler(
+        args: EchoArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> EchoResult:
+        del cancellation_token, context
+        await asyncio.sleep(1.0)
+        return EchoResult(echoed=args.text)
+
+    tool: Tool[EchoArgs, EchoResult] = Tool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=slow_handler,
+    )
+    executor = ToolExecutor()
+    ended: list[object] = []
+
+    async def on_tool_end(call: ToolCall, result: object) -> None:
+        del call
+        ended.append(result)
+
+    messages = asyncio.run(
+        executor.execute(
+            tool_calls=[_make_tool_call('{"text": "hello"}')],
+            tools=Tools(
+                tools=[tool],
+                tool_call_timeout=0.01,
+                tool_call_max_retries=0,
+            ),
+            on_tool_end=on_tool_end,
+        )
+    )
+
+    expected_text = "Error: Tool 'echo' timed out after 0.01s (1 attempts)."
+    # The model-facing message stays a plain string, byte-for-byte unchanged.
+    assert messages[0]["content"] == expected_text
+    # The tool-end callback receives a structured failure so the runner derives
+    # ok=False rather than treating the timeout text as a successful result.
+    assert len(ended) == 1
+    timeout_result = ended[0]
+    assert isinstance(timeout_result, ToolFailure)
+    assert timeout_result == expected_text
+    assert timeout_result.error == ToolError(
+        message="Tool 'echo' timed out after 0.01s (1 attempts).",
+        kind="timeout",
+    )
 
 
 def _explicit_schema_tool() -> Tool[EchoArgs, EchoResult]:

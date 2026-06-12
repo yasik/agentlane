@@ -1,20 +1,17 @@
-"""Structured success/failure envelope for harness tool results.
+"""Framework-side derivation over the tool success/failure envelope.
 
-Tool handlers return model-facing text by default, which leaves consumers with
-no framework-derived way to tell a successful call from a failed one. This
-module adds a small, typed failure signal plus the derivation the runner uses
-to populate ``ok``/``error`` on tool-end run events.
+The typed envelope primitives a tool returns —  :class:`ToolError`,
+:class:`ToolFailure`, and the :data:`PlanStepStatus` alias — live in
+``agentlane.models`` so the model-layer tool executor can build a structured
+failure without importing from the harness package above it. This module
+re-exports them unchanged (so ``from agentlane.harness import ToolFailure`` keeps
+working) and adds the framework-side halves the runner uses:
 
-Two halves work together:
-
-1. ``ToolFailure`` is the one public, typed way a tool implementation signals
-   failure. A tool returns it instead of a plain string; because it is a ``str``
-   subclass the model still sees ``ToolFailure.text`` verbatim (the default tool
-   formatter renders ``str`` values unchanged), while the framework reads the
-   attached ``ToolError``.
-2. ``tool_outcome`` is the framework-side derivation. The runner calls it for
-   every tool result so every ``RunToolEndEvent`` carries an ``ok`` flag and an
-   optional typed error, without consumers reflecting over result internals.
+1. ``tool_outcome`` derives a success/failure :class:`ToolOutcome` for every tool
+   result so each ``RunToolEndEvent`` carries an ``ok`` flag and an optional
+   typed error, without consumers reflecting over result internals.
+2. ``PlanUpdateResult`` / ``as_plan_update`` narrow a tool result to its
+   structured plan view so the runner can emit a typed plan-updated event.
 
 Typical usage example:
 
@@ -26,54 +23,19 @@ Typical usage example:
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, Self, cast, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
+from ..models import PlanStepStatus, ToolError, ToolFailure
 
-@dataclass(frozen=True, slots=True)
-class ToolError:
-    """Typed, framework-derived failure payload for one tool call.
-
-    The payload stays intentionally small: a human-readable ``message`` plus an
-    optional machine-stable ``kind`` consumers can branch on (for example
-    ``"timeout"`` or ``"cancelled"``) without parsing the model-facing text.
-    """
-
-    message: str
-    """Human-readable description of why the tool call failed."""
-
-    kind: str | None = None
-    """Optional stable failure category (e.g. ``"timeout"``, ``"cancelled"``)."""
-
-
-class ToolFailure(str):
-    """Public, typed failure result a tool returns to signal an unsuccessful call.
-
-    ``ToolFailure`` is a ``str`` equal to its model-facing ``text``: it renders,
-    compares, and persists exactly like the plain string a tool would otherwise
-    return, so the conversation contract is unchanged. The attached
-    :class:`ToolError` is what the framework reads to mark the call as failed on
-    the tool-end run event. Returning ``ToolFailure`` is the one public, typed
-    way a tool implementation signals failure.
-    """
-
-    __slots__ = ("_error",)
-
-    _error: ToolError
-
-    def __new__(cls, *, text: str, error: ToolError) -> Self:
-        instance = super().__new__(cls, text)
-        instance._error = error
-        return instance
-
-    @property
-    def text(self) -> str:
-        """Return the exact model-facing text for this failure."""
-        return str(self)
-
-    @property
-    def error(self) -> ToolError:
-        """Return the typed failure payload surfaced on the tool-end event."""
-        return self._error
+__all__ = [
+    "PlanStepStatus",
+    "PlanUpdateResult",
+    "ToolError",
+    "ToolFailure",
+    "ToolOutcome",
+    "as_plan_update",
+    "tool_outcome",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,10 +47,6 @@ class ToolOutcome:
 
     error: ToolError | None = None
     """Typed failure payload when the call failed, otherwise ``None``."""
-
-
-type PlanStepStatus = Literal["pending", "in_progress", "completed"]
-"""Status values a plan step may carry."""
 
 
 @runtime_checkable
