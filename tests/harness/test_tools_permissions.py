@@ -15,6 +15,7 @@ from agentlane.harness.tools import (
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
     evaluate_tool_permission,
+    format_tool_permission_result,
     parse_tool_permission_grants,
     workspace_tool_policy,
 )
@@ -825,6 +826,139 @@ def test_workspace_tool_policy_denies_bash_without_required_approval(
 
 
 def test_workspace_tool_policy_requires_bash_approval_without_other_side_effects(
+    tmp_path: Path,
+) -> None:
+    grants, _ = parse_tool_permission_grants("bash:execute_command")
+    policy = workspace_tool_policy(
+        tmp_path,
+        grants=grants,
+        require_bash_approval=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="bash",
+                operation=ToolOperation.EXECUTE_COMMAND,
+                cwd=tmp_path,
+                command="printf 'hello\\n'",
+            )
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_network_access_is_side_effect_requiring_approval(tmp_path: Path) -> None:
+    policy = SideEffectApprovalToolPermissionPolicy()
+
+    decision = policy.check(
+        _request(
+            tool_name="web_search",
+            operation=ToolOperation.NETWORK_ACCESS,
+            cwd=tmp_path,
+            command="functional medicine protocols",
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_network_access_approval_message_names_network_not_command(
+    tmp_path: Path,
+) -> None:
+    request = _request(
+        tool_name="web_search",
+        operation=ToolOperation.NETWORK_ACCESS,
+        cwd=tmp_path,
+        command="functional medicine protocols",
+    )
+
+    result = format_tool_permission_result(
+        request=request,
+        decision=ToolPermissionDecision.require_approval(),
+    )
+
+    assert "network access requires application approval" in result
+    assert "command" not in result
+
+
+def test_network_access_reason_flows_into_model_facing_result(
+    tmp_path: Path,
+) -> None:
+    request = ToolPermissionRequest(
+        tool_name="web_search",
+        operation=ToolOperation.NETWORK_ACCESS,
+        cwd=tmp_path,
+        reason="approval required: outbound web search awaiting approval",
+    )
+
+    result = format_tool_permission_result(
+        request=request,
+        decision=ToolPermissionDecision.require_approval(request.reason),
+    )
+
+    assert result == request.reason
+
+
+def test_side_effect_grant_downgrades_approval_to_allow(tmp_path: Path) -> None:
+    grant = ToolPermissionGrant("bash", ToolOperation.EXECUTE_COMMAND)
+    policy = SideEffectApprovalToolPermissionPolicy(grants=(grant,))
+
+    decision = policy.check(
+        _request(
+            tool_name="bash",
+            operation=ToolOperation.EXECUTE_COMMAND,
+            cwd=tmp_path,
+            command="printf 'hello\\n'",
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.ALLOW
+
+
+def test_side_effect_grant_does_not_widen_unrelated_operation(tmp_path: Path) -> None:
+    grant = ToolPermissionGrant("bash", ToolOperation.EXECUTE_COMMAND)
+    policy = SideEffectApprovalToolPermissionPolicy(grants=(grant,))
+
+    decision = policy.check(
+        _request(
+            tool_name="write",
+            operation=ToolOperation.CREATE_FILE,
+            cwd=tmp_path,
+            path=tmp_path / "notes.txt",
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_workspace_tool_policy_grant_downgrade_opt_in_allows_bash(
+    tmp_path: Path,
+) -> None:
+    grants, _ = parse_tool_permission_grants("bash:execute_command")
+    policy = workspace_tool_policy(
+        tmp_path,
+        grants=grants,
+        require_bash_approval=True,
+        grants_downgrade_side_effect_approval=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="bash",
+                operation=ToolOperation.EXECUTE_COMMAND,
+                cwd=tmp_path,
+                command="printf 'hello\\n'",
+            )
+        )
+    )
+
+    assert decision.outcome == ToolPermissionOutcome.ALLOW
+
+
+def test_workspace_tool_policy_without_downgrade_keeps_bash_approval(
     tmp_path: Path,
 ) -> None:
     grants, _ = parse_tool_permission_grants("bash:execute_command")
