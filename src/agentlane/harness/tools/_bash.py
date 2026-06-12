@@ -4,10 +4,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool, ToolExecutionContext
+from agentlane.models import Tool, ToolError, ToolExecutionContext, ToolFailure
 from agentlane.runtime import CancellationToken
 
-from .._tool_result import ToolError, ToolFailure
 from ._bash_executor import (
     BashExecutionRequest,
     BashExecutionResult,
@@ -105,7 +104,13 @@ def bash_tool(
                 context=context,
             )
         except Exception:
-            return _GENERIC_BASH_ERROR
+            # A crashed handler must still mark the call as failed, so wrap the
+            # unchanged model-facing text in a ``ToolFailure`` rather than
+            # returning a plain string the runner would read as success.
+            return ToolFailure(
+                text=_GENERIC_BASH_ERROR,
+                error=ToolError(message=_GENERIC_BASH_ERROR, kind="error"),
+            )
 
     return HarnessToolDefinition(
         # ``ToolFailure`` is a ``str`` subclass, so the default formatter renders

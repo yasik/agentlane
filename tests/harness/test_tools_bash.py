@@ -548,7 +548,17 @@ def test_bash_tool_sanitizes_unexpected_error_text(
 
     output = _run_bash("printf 'hidden\\n'", cwd=tmp_path)
 
+    # The model-facing text is the sanitized generic message, byte-for-byte
+    # unchanged...
     assert output == "failed to execute bash command"
+    # ...while a crashed handler now marks the call as failed instead of
+    # returning a plain string the runner would read as success.
+    assert isinstance(output, ToolFailure)
+    assert output.error == ToolError(
+        message="failed to execute bash command",
+        kind="error",
+    )
+    assert tool_outcome(output) == ToolOutcome(ok=False, error=output.error)
 
 
 def test_bash_tool_executes_through_tool_executor() -> None:
