@@ -12,6 +12,8 @@ from ._events import (
     RunLLMEndEvent,
     RunLLMStartEvent,
     RunModelStreamEvent,
+    RunPlanItem,
+    RunPlanUpdatedEvent,
     RunStateSnapshot,
     RunStateSnapshotBoundary,
     RunStateSnapshotEvent,
@@ -25,6 +27,13 @@ from ._run import RunInput, RunResult, RunState, ShimState
 from ._runner import Runner
 from ._stream import RunStream
 from ._task import Task
+from ._tool_result import (
+    PlanUpdateResult,
+    ToolError,
+    ToolFailure,
+    ToolOutcome,
+    tool_outcome,
+)
 from ._tooling import (
     INHERIT_TOOLS,
     OVERRIDE_TOOLS,
@@ -45,6 +54,7 @@ __all__ = [
     "InheritTools",
     "OVERRIDE_TOOLS",
     "OverrideTools",
+    "PlanUpdateResult",
     "RESTRICT_TOOLS",
     "RunAgentEndEvent",
     "RunAgentStartEvent",
@@ -57,6 +67,8 @@ __all__ = [
     "RunLLMEndEvent",
     "RunLLMStartEvent",
     "RunModelStreamEvent",
+    "RunPlanItem",
+    "RunPlanUpdatedEvent",
     "RunResult",
     "RunState",
     "RunStateSnapshot",
@@ -73,4 +85,8 @@ __all__ = [
     "RunnerHooks",
     "Task",
     "ToolConfig",
+    "ToolError",
+    "ToolFailure",
+    "ToolOutcome",
+    "tool_outcome",
 ]

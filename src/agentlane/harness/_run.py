@@ -85,7 +85,15 @@ class RunState:
     """Persisted shim-owned state that must survive resumed runs."""
 
     turn_count: int = 0
-    """Number of model turns completed for this run."""
+    """Number of model turns started for this run (1-based during a turn).
+
+    The runner increments this at the start of each turn, before shims prepare
+    the turn and before the model is called. While turn N is being prepared or
+    executed, ``turn_count`` is ``N``; the first turn therefore observes
+    ``turn_count == 1``. After the run finishes, it equals the total number of
+    turns that ran. Gate first-turn logic on ``turn_count == 1`` rather than a
+    "completed-turns" reading.
+    """
 
 
 type RunInput = str | list[RunHistoryItem] | RunState
@@ -109,7 +117,11 @@ class RunResult:
     """Raw model responses accumulated across the run."""
 
     turn_count: int
-    """Number of model turns completed for this run."""
+    """Total number of model turns that ran for this completed run.
+
+    Equal to the final value of ``RunState.turn_count`` (which the runner
+    increments at the start of each turn), so a single-turn run reports ``1``.
+    """
 
     run_state: RunState | None = None
     """Final resumable run state for this completed run when available."""
