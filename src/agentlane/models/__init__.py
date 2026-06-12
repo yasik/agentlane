@@ -15,6 +15,12 @@ from ._prompts import (
     PromptTemplateBase,
     TextPart,
 )
+from ._provider_payloads import (
+    ReasoningPhase,
+    UsageTotals,
+    get_reasoning_phase,
+    get_usage_totals,
+)
 from ._rate_limiter import (
     CompositeRateLimiter,
     ConcurrentRequestLimiter,
@@ -80,6 +86,10 @@ __all__ = [
     "TextPart",
     "FilePart",
     "ImagePart",
+    "ReasoningPhase",
+    "UsageTotals",
+    "get_reasoning_phase",
+    "get_usage_totals",
     "ensure_strict_json_schema",
     "Model",
     "Config",
