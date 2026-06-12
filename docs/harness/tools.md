@@ -104,6 +104,38 @@ no_shell_tools = base_harness_tools(
 Unknown selector names raise `ValueError`. Passing the same name in both
 `include` and `exclude` also raises `ValueError`.
 
+`BASE_TOOL_NAMES` is exported for applications that compose the base tools with
+their own tools and need the owned name set without re-deriving it from
+`base_harness_tools()`:
+
+```python
+from agentlane.harness.tools import BASE_TOOL_NAMES
+
+assert "bash" in BASE_TOOL_NAMES
+```
+
+### Sharing One Selector With Application Tools
+
+When an application adds its own tools alongside the base set and wants a single
+`include`/`exclude` selector to span both, pass the application tool names
+through `extra_names`. Those names are accepted by selector validation but never
+built by `base_harness_tools` (it only owns `BASE_TOOL_NAMES`), so the selectors
+no longer raise on names this function does not own:
+
+```python
+# `web_search` is an application tool; the shared selector references it without
+# `base_harness_tools` rejecting the unknown name or trying to build it.
+base = base_harness_tools(
+    cwd=WORKSPACE,
+    include=("read", "grep", "web_search"),
+    extra_names=("web_search",),
+)
+# -> read, grep   (web_search is the application's responsibility to build)
+```
+
+Names outside both `BASE_TOOL_NAMES` and `extra_names` still raise `ValueError`,
+so genuine typos are still caught.
+
 You can also construct tools individually when an agent needs a custom tool set:
 
 ```python
