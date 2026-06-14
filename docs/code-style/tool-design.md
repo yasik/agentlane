@@ -90,9 +90,10 @@ Use this page when adding or changing first-party tools, especially tools under
   constructor that composes the public primitives. Do not replace the low-level
   policies or hide extension points behind an app-specific default.
 - Use `workspace_tool_policy(...)` for the standard workspace-app shape:
-  path containment, optional grants, optional approval for side effects, and
-  explicit command approval through `require_bash_approval=True`. Do not name
-  command-execution options as if they allow execution by themselves.
+  path containment, host-admitted non-path operations, optional grants,
+  optional approval for side effects, and explicit command approval through
+  `require_bash_approval=True`. Do not name command-execution options as if
+  they allow execution by themselves.
 - Keep single-root and multi-scope path policies separate. Use
   `WorkspaceToolPermissionPolicy` for a hard workspace boundary, and
   `PathScopeToolPermissionPolicy` when an app has explicitly approved files or

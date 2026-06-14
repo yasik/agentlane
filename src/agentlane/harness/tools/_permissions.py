@@ -191,6 +191,7 @@ def workspace_tool_policy(
     root: str | Path,
     *,
     grants: Iterable[ToolPermissionGrant] | None = None,
+    allowed_non_path_operations: Iterable[ToolOperation | str] = (),
     require_approval_for_side_effects: bool = False,
     require_bash_approval: bool = False,
     grants_downgrade_side_effect_approval: bool = False,
@@ -206,6 +207,12 @@ def workspace_tool_policy(
     command execution, and it requires approval before the process can start.
     It is not process sandboxing.
 
+    `allowed_non_path_operations` admits host-registered operations that a
+    workspace path boundary cannot scope, such as `network_access`. Do not use
+    it for `execute_command`; command execution stays behind
+    `require_bash_approval=True` so the base-tool bundle keeps one explicit
+    command-execution path.
+
     By default a grant for a side-effecting operation is outcome-inert: the
     side-effect approval policy still requires approval and, under
     strictest-wins composition, that approval is never widened back to allow.
@@ -214,11 +221,15 @@ def workspace_tool_policy(
     configured grant such as `bash:execute_command` actually skips approval.
     """
     grant_tuple = () if grants is None else tuple(grants)
+    non_path_operations = _coerce_allowed_non_path_operations(
+        allowed_non_path_operations
+    )
     policies: list[ToolPermissionPolicy] = [
         WorkspaceToolPermissionPolicy(
             root,
             allowed_operations=_workspace_policy_operations(
                 include_execute_command=require_bash_approval,
+                allowed_non_path_operations=non_path_operations,
             ),
         )
     ]
@@ -227,6 +238,7 @@ def workspace_tool_policy(
     approval_operations = _workspace_policy_approval_operations(
         require_approval_for_side_effects=require_approval_for_side_effects,
         require_bash_approval=require_bash_approval,
+        allowed_non_path_operations=non_path_operations,
     )
     if approval_operations:
         policies.append(
@@ -454,8 +466,9 @@ def parse_tool_permission_grants(
     tool exposes — so a grant string can drive operations the built-in map does
     not list, such as `"web_search:network_access"` for an egress tool. A
     `known_tools` entry whose name collides with a built-in is ignored; the
-    built-in operation set wins. Operation names outside a tool's declared set,
-    and operation names that are not valid `ToolOperation` values, are still
+    built-in operation set wins. Whole-tool entries expand to the operation set
+    declared for that tool. Operation names outside a tool's declared set, and
+    operation names that are not valid `ToolOperation` values, are still
     reported as invalid entries.
 
     Args:
@@ -477,23 +490,23 @@ def parse_tool_permission_grants(
         if entry == "":
             continue
 
-        grant = _parse_permission_grant(entry, operations_by_tool=operations_by_tool)
-        if grant is None:
+        parsed = _parse_permission_grant(entry, operations_by_tool=operations_by_tool)
+        if parsed is None:
             invalid_entries.append(entry)
             continue
-        grants.append(grant)
+        grants.extend(parsed)
 
     return tuple(grants), tuple(invalid_entries)
 
 
 def _operations_by_tool(
     known_tools: Mapping[str, Iterable[ToolOperation]] | None,
-) -> Mapping[str, frozenset[ToolOperation]]:
+) -> Mapping[str, tuple[ToolOperation, ...]]:
     """Merge app-registered tools under the built-in map, built-ins winning."""
     if known_tools is None:
         return _TOOL_OPERATIONS_BY_TOOL
-    merged: dict[str, frozenset[ToolOperation]] = {
-        tool_name: frozenset(operations)
+    merged: dict[str, tuple[ToolOperation, ...]] = {
+        tool_name: _normalize_tool_operations(operations)
         for tool_name, operations in known_tools.items()
     }
     merged.update(_TOOL_OPERATIONS_BY_TOOL)
@@ -503,14 +516,17 @@ def _operations_by_tool(
 def _parse_permission_grant(
     entry: str,
     *,
-    operations_by_tool: Mapping[str, frozenset[ToolOperation]],
-) -> ToolPermissionGrant | None:
+    operations_by_tool: Mapping[str, tuple[ToolOperation, ...]],
+) -> tuple[ToolPermissionGrant, ...] | None:
     tool_name, separator, operation_name = entry.partition(":")
     operations = operations_by_tool.get(tool_name)
     if operations is None:
         return None
     if separator == "":
-        return ToolPermissionGrant.all_operations(tool_name)
+        return tuple(
+            ToolPermissionGrant(tool_name=tool_name, operation=operation)
+            for operation in operations
+        )
 
     try:
         operation = ToolOperation(operation_name)
@@ -518,7 +534,7 @@ def _parse_permission_grant(
         return None
     if operation not in operations:
         return None
-    return ToolPermissionGrant(tool_name=tool_name, operation=operation)
+    return (ToolPermissionGrant(tool_name=tool_name, operation=operation),)
 
 
 async def _resolve_permission_result(
@@ -633,6 +649,40 @@ def _coerce_operation(operation: ToolOperation | str) -> ToolOperation:
     return ToolOperation(operation)
 
 
+def _normalize_tool_operations(
+    operations: Iterable[ToolOperation | str],
+) -> tuple[ToolOperation, ...]:
+    """Return operations in stable first-seen order with duplicates removed."""
+    normalized: list[ToolOperation] = []
+    seen: set[ToolOperation] = set()
+    for operation in operations:
+        coerced = _coerce_operation(operation)
+        if coerced in seen:
+            continue
+        seen.add(coerced)
+        normalized.append(coerced)
+    return tuple(normalized)
+
+
+def _coerce_allowed_non_path_operations(
+    operations: Iterable[ToolOperation | str],
+) -> tuple[ToolOperation, ...]:
+    """Return host-approved non-path operations for `workspace_tool_policy`."""
+    normalized = _normalize_tool_operations(operations)
+    disallowed = tuple(
+        operation
+        for operation in normalized
+        if operation in _PATH_OPERATIONS or operation == ToolOperation.EXECUTE_COMMAND
+    )
+    if disallowed:
+        names = ", ".join(operation.value for operation in disallowed)
+        raise ValueError(
+            "allowed_non_path_operations only accepts non-path operations other "
+            f"than execute_command; got: {names}"
+        )
+    return normalized
+
+
 _PATH_OPERATIONS = (
     ToolOperation.READ_FILE,
     ToolOperation.SEARCH_FILES,
@@ -669,38 +719,44 @@ _SIDE_EFFECT_OPERATIONS = frozenset(
 def _workspace_policy_operations(
     *,
     include_execute_command: bool,
+    allowed_non_path_operations: Iterable[ToolOperation],
 ) -> tuple[ToolOperation, ...]:
     # `bash` is deliberately outside the default path-operation set. The
     # workspace helper includes it only for the `require_bash_approval` path.
+    operations = (*_PATH_OPERATIONS, *allowed_non_path_operations)
     if include_execute_command:
-        return (*_PATH_OPERATIONS, ToolOperation.EXECUTE_COMMAND)
-    return _PATH_OPERATIONS
+        return (*operations, ToolOperation.EXECUTE_COMMAND)
+    return operations
 
 
 def _workspace_policy_approval_operations(
     *,
     require_approval_for_side_effects: bool,
     require_bash_approval: bool,
+    allowed_non_path_operations: Iterable[ToolOperation],
 ) -> tuple[ToolOperation, ...]:
     operations: list[ToolOperation] = []
     if require_approval_for_side_effects:
         operations.extend(_PATH_SIDE_EFFECT_OPERATIONS)
+        operations.extend(
+            operation
+            for operation in allowed_non_path_operations
+            if operation in _SIDE_EFFECT_OPERATIONS
+        )
     if require_bash_approval:
         operations.append(ToolOperation.EXECUTE_COMMAND)
     return tuple(operations)
 
 
-_TOOL_OPERATIONS_BY_TOOL: dict[str, frozenset[ToolOperation]] = {
-    "read": frozenset({ToolOperation.READ_FILE}),
-    "find": frozenset({ToolOperation.SEARCH_FILES}),
-    "grep": frozenset({ToolOperation.READ_FILE, ToolOperation.SEARCH_FILES}),
-    "write": frozenset(
-        {
-            ToolOperation.CREATE_FILE,
-            ToolOperation.OVERWRITE_FILE,
-            ToolOperation.CREATE_DIRECTORY,
-        }
+_TOOL_OPERATIONS_BY_TOOL: dict[str, tuple[ToolOperation, ...]] = {
+    "read": (ToolOperation.READ_FILE,),
+    "find": (ToolOperation.SEARCH_FILES,),
+    "grep": (ToolOperation.READ_FILE, ToolOperation.SEARCH_FILES),
+    "write": (
+        ToolOperation.CREATE_FILE,
+        ToolOperation.OVERWRITE_FILE,
+        ToolOperation.CREATE_DIRECTORY,
     ),
-    "patch": frozenset({ToolOperation.MODIFY_FILE}),
-    "bash": frozenset({ToolOperation.EXECUTE_COMMAND}),
+    "patch": (ToolOperation.MODIFY_FILE,),
+    "bash": (ToolOperation.EXECUTE_COMMAND,),
 }

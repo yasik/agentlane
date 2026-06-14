@@ -454,7 +454,7 @@ def test_parse_tool_permission_grants_supports_tool_and_operation_entries() -> N
     assert invalid_entries == ()
     assert [grant.tool_name for grant in grants] == ["read", "write", "write", "bash"]
     assert [grant.operation for grant in grants] == [
-        None,
+        ToolOperation.READ_FILE,
         ToolOperation.CREATE_FILE,
         ToolOperation.OVERWRITE_FILE,
         ToolOperation.EXECUTE_COMMAND,
@@ -477,8 +477,8 @@ def test_parse_tool_permission_grants_preserves_duplicate_entries() -> None:
 
     assert invalid_entries == ()
     assert [(grant.tool_name, grant.operation) for grant in grants] == [
-        ("read", None),
-        ("read", None),
+        ("read", ToolOperation.READ_FILE),
+        ("read", ToolOperation.READ_FILE),
         ("write", ToolOperation.CREATE_FILE),
         ("write", ToolOperation.CREATE_FILE),
     ]
@@ -496,7 +496,7 @@ def test_parse_tool_permission_grants_accepts_known_tool_network_access() -> Non
     ]
 
 
-def test_parse_tool_permission_grants_accepts_known_tool_whole_tool_entry() -> None:
+def test_parse_tool_permission_grants_expands_known_tool_whole_tool_entry() -> None:
     grants, invalid_entries = parse_tool_permission_grants(
         "web_search",
         known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
@@ -504,8 +504,57 @@ def test_parse_tool_permission_grants_accepts_known_tool_whole_tool_entry() -> N
 
     assert invalid_entries == ()
     assert [(grant.tool_name, grant.operation) for grant in grants] == [
-        ("web_search", None)
+        ("web_search", ToolOperation.NETWORK_ACCESS)
     ]
+
+
+def test_parse_tool_permission_grants_expands_whole_entry_to_declared_operations() -> (
+    None
+):
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_cache",
+        known_tools={
+            "web_cache": (
+                ToolOperation.NETWORK_ACCESS,
+                ToolOperation.CREATE_FILE,
+            )
+        },
+    )
+
+    assert invalid_entries == ()
+    assert [(grant.tool_name, grant.operation) for grant in grants] == [
+        ("web_cache", ToolOperation.NETWORK_ACCESS),
+        ("web_cache", ToolOperation.CREATE_FILE),
+    ]
+
+
+def test_parse_tool_permission_grants_whole_known_tool_does_not_widen_operations(
+    tmp_path: Path,
+) -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_search",
+        known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+    policy = ToolPermissionGrantPolicy(grants)
+
+    network_decision = policy.check(
+        _request(
+            tool_name="web_search",
+            operation=ToolOperation.NETWORK_ACCESS,
+            cwd=tmp_path,
+        )
+    )
+    command_decision = policy.check(
+        _request(
+            tool_name="web_search",
+            operation=ToolOperation.EXECUTE_COMMAND,
+            cwd=tmp_path,
+        )
+    )
+
+    assert invalid_entries == ()
+    assert network_decision.outcome == ToolPermissionOutcome.ALLOW
+    assert command_decision.outcome == ToolPermissionOutcome.DENY
 
 
 def test_parse_tool_permission_grants_rejects_network_access_without_known_tools() -> (
@@ -881,6 +930,113 @@ def test_workspace_tool_policy_denies_bash_without_required_approval(
     )
 
     assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_workspace_tool_policy_denies_network_without_allowed_non_path_operation(
+    tmp_path: Path,
+) -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_search:network_access",
+        known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+    policy = workspace_tool_policy(
+        tmp_path,
+        grants=grants,
+        require_approval_for_side_effects=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="web_search",
+                operation=ToolOperation.NETWORK_ACCESS,
+                cwd=tmp_path,
+                command="functional medicine protocols",
+            )
+        )
+    )
+
+    assert invalid_entries == ()
+    assert decision.outcome == ToolPermissionOutcome.DENY
+
+
+def test_workspace_tool_policy_allows_network_with_allowed_non_path_operation(
+    tmp_path: Path,
+) -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_search:network_access",
+        known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+    policy = workspace_tool_policy(
+        tmp_path,
+        grants=grants,
+        allowed_non_path_operations=(ToolOperation.NETWORK_ACCESS,),
+        require_approval_for_side_effects=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="web_search",
+                operation=ToolOperation.NETWORK_ACCESS,
+                cwd=tmp_path,
+                command="functional medicine protocols",
+            )
+        )
+    )
+
+    assert invalid_entries == ()
+    assert decision.outcome == ToolPermissionOutcome.REQUIRE_APPROVAL
+
+
+def test_workspace_tool_policy_grant_downgrade_allows_network(
+    tmp_path: Path,
+) -> None:
+    grants, invalid_entries = parse_tool_permission_grants(
+        "web_search",
+        known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+    )
+    policy = workspace_tool_policy(
+        tmp_path,
+        grants=grants,
+        allowed_non_path_operations=(ToolOperation.NETWORK_ACCESS,),
+        require_approval_for_side_effects=True,
+        grants_downgrade_side_effect_approval=True,
+    )
+
+    decision = asyncio.run(
+        policy.check(
+            _request(
+                tool_name="web_search",
+                operation=ToolOperation.NETWORK_ACCESS,
+                cwd=tmp_path,
+                command="functional medicine protocols",
+            )
+        )
+    )
+
+    assert invalid_entries == ()
+    assert decision.outcome == ToolPermissionOutcome.ALLOW
+
+
+def test_workspace_tool_policy_rejects_path_operations_as_non_path_operations(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="allowed_non_path_operations"):
+        workspace_tool_policy(
+            tmp_path,
+            allowed_non_path_operations=(ToolOperation.READ_FILE,),
+        )
+
+
+def test_workspace_tool_policy_rejects_bash_as_non_path_operation(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="execute_command"):
+        workspace_tool_policy(
+            tmp_path,
+            allowed_non_path_operations=(ToolOperation.EXECUTE_COMMAND,),
+        )
 
 
 def test_workspace_tool_policy_requires_bash_approval_without_other_side_effects(

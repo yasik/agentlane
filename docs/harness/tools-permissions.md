@@ -24,8 +24,8 @@ policies are small and composable:
    allow-all policy to compose.
 2. `WorkspaceToolPermissionPolicy` is a single-root path boundary. It allows
    path operations only when the resolved target stays inside `root`. It
-   denies `ToolOperation.EXECUTE_COMMAND` unless that operation is explicitly
-   included in `allowed_operations`, because a path boundary cannot prove shell
+   denies non-path operations unless they are explicitly included in
+   `allowed_operations`, because a path boundary cannot prove shell or network
    side effects.
 3. `PathScopeToolPermissionPolicy` is an explicit set of approved files or
    directories. Use it when a coding assistant works from one `cwd` but the
@@ -145,8 +145,9 @@ sandboxed executor, container, or remote worker. The nearest-parent check uses
 filesystem stats at permission time, which is appropriate for interactive
 agent tool calls but not a substitute for kernel-enforced isolation.
 
-For the common application policy "stay inside this workspace, apply a tool
-grant allowlist, and require app approval before side effects", use
+For the common application policy "stay inside this workspace, admit declared
+host operations, apply a tool grant allowlist, and require app approval before
+side effects", use
 `workspace_tool_policy(...)`. It is an opinionated convenience constructor for
 that workspace-app shape over the same public primitives, not a separate
 policy system:
@@ -175,8 +176,13 @@ Grant defaults are intentionally distinct. Omit `grants` or pass
 `grants=None` when you do not want a grant allowlist; the helper will compose
 only workspace and approval policies. Pass an empty iterable, `grants=()`,
 only when the grant layer should exist and deny every tool.
+`allowed_non_path_operations` is the host-extension point for operations a
+workspace root cannot scope, such as app-provided network egress tools. It does
+not admit `bash`; command execution stays controlled by
+`require_bash_approval=True`.
 `require_approval_for_side_effects=True` makes file creation, overwrites,
-patches, and directory creation require approval. `bash` is separate:
+patches, directory creation, and admitted non-path side effects require
+approval. `bash` is separate:
 `require_bash_approval=True` is the only way this helper admits
 `bash:execute_command`, and it always makes command execution require approval
 before the process starts. If grants are configured, `bash:execute_command`
@@ -185,12 +191,14 @@ must still be granted. This does not sandbox the command after startup.
 The helper composes the public low-level policies in this order:
 
 1. `WorkspaceToolPermissionPolicy` denies path operations outside the root and
-   denies `bash` unless `require_bash_approval=True`.
+   denies non-path operations unless explicitly admitted by
+   `allowed_non_path_operations` or `require_bash_approval=True`.
 2. `ToolPermissionGrantPolicy`, when provided, denies requests that do not
    match a whole-tool or operation-level grant.
 3. `SideEffectApprovalToolPermissionPolicy` returns `require_approval` for
-   file side effects when `require_approval_for_side_effects=True`, and for
-   command execution when `require_bash_approval=True`.
+   file and admitted non-path side effects when
+   `require_approval_for_side_effects=True`, and for command execution when
+   `require_bash_approval=True`.
 4. `AllOfToolPermissionPolicy` combines those decisions conservatively: deny
    wins, then approval, then allow.
 
@@ -251,6 +259,12 @@ entries override earlier ones. Callers should reject or report
 CLI and environment-variable callers can collect every unsupported entry and
 report them together instead of failing on the first one.
 
+Whole-tool entries expand to that tool's declared operation set. For example,
+`write` becomes grants for `create_file`, `overwrite_file`, and
+`create_directory`; it is not an unbounded wildcard for future or undeclared
+operations. `ToolPermissionGrant.all_operations(...)` remains available for
+programmatic callers that intentionally want a wildcard grant.
+
 By default the parser only recognizes the built-in first-party tools (`read`,
 `find`, `grep`, `write`, `patch`, `bash`), so a grant for an app-registered
 egress tool such as `web_search:network_access` is reported as invalid. Pass
@@ -259,7 +273,7 @@ values it exposes — to drive grants for those tools from a grant string:
 
 ```python
 grants, invalid_entries = parse_tool_permission_grants(
-    "web_search:network_access",
+    "web_search",
     known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
 )
 ```
@@ -268,6 +282,22 @@ A `known_tools` entry whose name collides with a built-in is ignored; the
 built-in operation set wins. Operation names outside a tool's declared set are
 still reported as invalid, so `web_search:read_file` is rejected even when
 `web_search` is known.
+
+To use that app egress tool with the workspace convenience policy, the host
+must also admit the non-path operation at the workspace boundary:
+
+```python
+tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=workspace_tool_policy(
+        WORKSPACE,
+        grants=grants,
+        allowed_non_path_operations=(ToolOperation.NETWORK_ACCESS,),
+        require_approval_for_side_effects=True,
+    ),
+    approval_callback=approve,
+)
+```
 
 For programmatic grants, construct `ToolPermissionGrant` values directly.
 `ToolPermissionGrant.all_operations("read")` makes whole-tool intent explicit;
