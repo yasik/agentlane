@@ -1,5 +1,10 @@
 """Tests for the live run-state read view exposed to tool handlers."""
 
+from collections.abc import MutableMapping
+from typing import cast
+
+import pytest
+
 from agentlane.harness import (
     ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX,
     LiveRunStateView,
@@ -43,6 +48,20 @@ def test_live_run_state_view_shim_state_reads_through_to_live_state() -> None:
     state.shim_state["skills:workspace"] = "/work/ws"
 
     assert view.shim_state.get("skills:workspace") == "/work/ws"
+
+
+def test_live_run_state_view_shim_state_rejects_top_level_mutation() -> None:
+    """shim_state should be live but not writable through the tool view."""
+    state = _run_state()
+    state.shim_state["skills:workspace"] = "/work/ws"
+    view = LiveRunStateView(state, _task_id())
+
+    with pytest.raises(TypeError):
+        cast(MutableMapping[str, object], view.shim_state)[
+            "skills:workspace"
+        ] = "/other"
+
+    assert state.shim_state["skills:workspace"] == "/work/ws"
 
 
 def test_live_run_state_view_active_skill_names_unions_suffix_keys() -> None:

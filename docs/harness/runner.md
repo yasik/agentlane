@@ -306,7 +306,7 @@ provider-side request:
 
 ```python
 token = CancellationToken()
-stream = agent.run_events(prompt, cancellation_token=token)
+stream = await agent.run_events(prompt, cancellation_token=token)
 try:
     async for event in stream:
         handle(event)

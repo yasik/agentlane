@@ -6,6 +6,7 @@ lifecycle and the runner.
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, cast
 
 from pydantic import BaseModel
@@ -223,7 +224,7 @@ class LiveRunStateView(RunStateView):
     @property
     def shim_state(self) -> Mapping[str, object]:
         """Return the live persisted shim state as a read-only mapping."""
-        return self._run_state.shim_state
+        return MappingProxyType(self._run_state.shim_state)
 
     @property
     def active_skill_names(self) -> tuple[str, ...]:
