@@ -6,12 +6,24 @@ lifecycle and the runner.
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, cast
 
 from pydantic import BaseModel
 
-from agentlane.models import MessageDict, ModelResponse, PromptSpec
+from agentlane.messaging import AgentId
+from agentlane.models import MessageDict, ModelResponse, PromptSpec, RunStateView
 from agentlane.models.run import DefaultRunContext
+
+ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX = ":active-skill-names"
+"""Documented ``shim_state`` key suffix that holds active skill names.
+
+A skills shim records the names of the skills active for the current run under
+a key ending in this suffix (the shim name is the prefix, so multiple skills
+shims never collide). ``RunStateView.active_skill_names`` reads every such key
+so tools can resolve skill-relative resources without coupling to a specific
+shim name or reaching for a private key. The value must be a list of strings.
+"""
 
 
 class ShimState(DefaultRunContext):
@@ -85,7 +97,15 @@ class RunState:
     """Persisted shim-owned state that must survive resumed runs."""
 
     turn_count: int = 0
-    """Number of model turns completed for this run."""
+    """Number of model turns started for this run (1-based during a turn).
+
+    The runner increments this at the start of each turn, before shims prepare
+    the turn and before the model is called. While turn N is being prepared or
+    executed, ``turn_count`` is ``N``; the first turn therefore observes
+    ``turn_count == 1``. After the run finishes, it equals the total number of
+    turns that ran. Gate first-turn logic on ``turn_count == 1`` rather than a
+    "completed-turns" reading.
+    """
 
 
 type RunInput = str | list[RunHistoryItem] | RunState
@@ -109,7 +129,11 @@ class RunResult:
     """Raw model responses accumulated across the run."""
 
     turn_count: int
-    """Number of model turns completed for this run."""
+    """Total number of model turns that ran for this completed run.
+
+    Equal to the final value of ``RunState.turn_count`` (which the runner
+    increments at the start of each turn), so a single-turn run reports ``1``.
+    """
 
     run_state: RunState | None = None
     """Final resumable run state for this completed run when available."""
@@ -177,3 +201,41 @@ def copy_generic_value(value: object) -> object:
     if isinstance(value, BaseModel):
         return value.model_copy(deep=True)
     return value
+
+
+@dataclass(frozen=True, slots=True)
+class LiveRunStateView(RunStateView):
+    """Read-only ``RunStateView`` backed by one live harness ``RunState``.
+
+    Cheap to construct: it wraps the live ``RunState`` and the run's task
+    identity by reference, reading through on each access. The runner builds
+    one per local tool call and stamps it onto ``ToolExecutionContext`` so tool
+    handlers can observe the run without an app-built side channel.
+    """
+
+    _run_state: RunState
+    _task_id: AgentId
+
+    @property
+    def task_id(self) -> str:
+        """Return the stable task identity (``str`` of the run's task id)."""
+        return str(self._task_id)
+
+    @property
+    def shim_state(self) -> Mapping[str, object]:
+        """Return the live persisted shim state as a read-only mapping."""
+        return MappingProxyType(self._run_state.shim_state)
+
+    @property
+    def active_skill_names(self) -> tuple[str, ...]:
+        """Return active skill names read from the documented state keys."""
+        names: list[str] = []
+        for key, value in self._run_state.shim_state.items():
+            if not key.endswith(ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX):
+                continue
+            if not isinstance(value, list):
+                continue
+            for entry in cast(list[object], value):
+                if isinstance(entry, str) and entry not in names:
+                    names.append(entry)
+        return tuple(names)

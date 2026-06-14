@@ -20,6 +20,7 @@ from ._exceptions import ModelBehaviorError
 from ._interface import ModelTracing, Tools
 from ._tool import ToolExecutionContext
 from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapter
+from ._tool_result import ToolError, ToolFailure
 from ._types import ToolCall
 
 LOGGER = structlog.get_logger("agentlane.models.tool_executor")
@@ -182,15 +183,27 @@ class ToolExecutor:
                             attempts=attempts,
                             timeout=timeout,
                         )
-                        timeout_result = (
+                        timeout_text = (
                             f"Error: Tool '{function_name}' timed out after {timeout}s "
                             f"({attempts} attempts)."
+                        )
+                        # Hand the tool-end callback a structured failure so the
+                        # runner derives ``ok=False`` for an exhausted timeout.
+                        # ``ToolFailure`` is a ``str`` subclass equal to
+                        # ``timeout_text``, so the model-facing text is unchanged.
+                        timeout_result = ToolFailure(
+                            text=timeout_text,
+                            error=ToolError(
+                                message=f"Tool '{function_name}' timed out after "
+                                f"{timeout}s ({attempts} attempts).",
+                                kind="timeout",
+                            ),
                         )
                         await _maybe_await(on_tool_end, call, timeout_result)
                         return self._adapter.format_error(
                             call.id,
                             function_name,
-                            timeout_result,
+                            timeout_text,
                         )
 
             return self._adapter.format_success(call.id, function_name, output_text)

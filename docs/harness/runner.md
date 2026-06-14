@@ -182,11 +182,164 @@ Each emitted item is a `RunEvent`, a union tagged by `RunEventKind`:
    control transfers
 7. `RunStateSnapshotEvent` carries a compact `RunStateSnapshot` at stable run
    boundaries
+8. `RunPlanUpdatedEvent` carries the structured plan after a successful
+   first-party plan-tool call
 
 `RunStateSnapshotEvent` boundaries are named by `RunStateSnapshotBoundary`:
 `run_start`, `turn_prepared`, `tool_round_end`, and `run_end`. The snapshot
 itself is compact (`turn_count`, `history_length`, `response_count`, and a copy
 of `shim_state`) rather than the full working state.
+
+### Tool success and failure
+
+`RunToolEndEvent` carries a framework-derived outcome alongside the raw
+`result`:
+
+- `ok: bool` — whether the runner considers the call successful.
+- `error: ToolError | None` — a typed failure payload (`message`, optional
+  stable `kind`) when `ok` is `False`.
+
+Consumers read `event.ok` / `event.error` directly instead of inferring success
+from result wording or reflecting over tool-specific result fields. The runner
+derives the outcome with `tool_outcome(result)`, which recognizes, in order:
+
+1. `ToolFailure` — the one public, typed way a tool implementation signals
+   failure. `ToolFailure` is a `str` subclass carrying a `ToolError`, so the
+   model still sees its text verbatim (the default formatter renders `str`
+   values unchanged) while the framework reads the structured error. The
+   first-party `bash` tool returns `ToolFailure` for timed-out, cancelled, and
+   non-zero-exit outcomes.
+2. A captured `BaseException` — a raised-and-captured tool error.
+3. A mapping with a truthy `error` entry — the structured-mapping convention
+   third-party tools commonly return.
+
+Anything else is treated as `ok`. First-party tools that render operational
+errors as plain strings stay `ok` because result wording is not a contract; a
+tool that needs a failure marked returns `ToolFailure`.
+
+`ToolFailure`, `ToolError`, the derived `ToolOutcome`, and the `tool_outcome`
+helper are exported from `agentlane.harness`:
+
+```python
+from agentlane.harness import ToolError, ToolFailure, tool_outcome
+```
+
+A tool handler signals a typed failure by returning `ToolFailure(text=...,
+error=ToolError(message=..., kind=...))`. The `text` is what the model sees; the
+`error` is what `RunToolEndEvent.error` carries.
+
+### Plan-updated events
+
+After a successful first-party plan-tool call, the runner emits a
+`RunPlanUpdatedEvent` carrying the structured plan as a tuple of `RunPlanItem`
+(`step`, `status`) plus the optional model-supplied `explanation` and the
+originating `tool_call`. Consumers render plan UX from this typed payload
+instead of string-matching the plan tool's success message. The public
+constants `PLAN_TOOL_NAME` and `PLAN_UPDATED_MESSAGE` are exported from
+`agentlane.harness.tools` for callers that still need the wire literals.
+
+### Lineage and scope semantics
+
+Every task-carrying run event exposes lineage so consumers do not latch the
+root task id and infer subagents by comparison:
+
+- `parent_task_id: str | None` — the parent run's task id, or `None` for the
+  stream root.
+- `is_root: bool` — whether the event belongs to the stream's root run.
+
+The emitter latches the first agent run's `task_id` as the stream root. In the
+default single-agent-plus-delegation topology every event in one stream is a
+root event, because a delegated child runs in its own runtime turn and surfaces
+to the parent only as a tool call.
+
+`RunToolStartEvent` / `RunToolEndEvent` additionally carry `is_delegation:
+bool`, set structurally for agent-as-tool and handoff calls (by runner
+tool-definition type, not by name heuristics), so consumers identify delegation
+without an app-side tool-name registry.
+
+Two scope contracts matter for consumers that aggregate run telemetry:
+
+- `RunAgentEndEvent` fires for child tasks too, carrying that child's `result`,
+  when an application shares run hooks across agents. Treating it as "the whole
+  run ended" records child telemetry as root telemetry; gate root-only
+  aggregation on `is_root`.
+- State snapshots are root-stream-only by contract: a delegated child never
+  emits `RunStateSnapshotEvent` into the parent stream.
+
+## Stream Cancellation And Closure
+
+`run_events(...)` and `run_stream(...)` both return a stream handle that
+exposes `aclose()` (inherited from the shared
+[`BaseRunStream`](../../src/agentlane/harness/_stream_base.py)). The
+cancellation contract is:
+
+1. **`aclose()` stops the underlying run.** When you pass a
+   `cancellation_token` to `run_events(...)`, the runner wires
+   `token.cancel` as the stream's `on_close` hook. Calling `await
+   stream.aclose()` therefore cancels that token, which propagates through the
+   async run chain and stops the in-flight provider request. `aclose()` also
+   runs the stream's cleanup callbacks (cancelling the internal run task and any
+   approval-forwarding task) and ends the iterator. Without a
+   `cancellation_token`, `aclose()` still ends the iterator and runs cleanups,
+   but there is no token to cancel, so a blocking provider call already in
+   flight is not interrupted by closure alone.
+
+2. **Cancelling the consuming task does not close the stream.** If you iterate
+   the stream from a task and cancel that task, the `CancelledError` unwinds
+   your `async for`, but it does not call `aclose()` for you. The underlying run
+   task and provider request keep going until they finish or are cancelled
+   another way. To stop the run when a consumer goes away, call `aclose()`
+   explicitly — typically in a `finally` around the consumption loop, or by
+   cancelling the same `cancellation_token` you handed to `run_events(...)`.
+
+3. **`result()` must be retrieved after `aclose()`.** `aclose()` fails the
+   stream's result future with `asyncio.CancelledError`. Await `result()` (and
+   swallow `CancelledError`) after closing so asyncio does not log a
+   "Future exception was never retrieved" warning. The shared
+   `close_stream_callback` / `_close_stream` helpers in `_stream_base.py` follow
+   exactly this close-then-drain pattern.
+
+The recommended host pattern is to own the `cancellation_token`, pass it into
+`run_events(...)`, consume the stream in a `try`/`finally`, and call
+`await stream.aclose()` in the `finally` so a dying consumer always stops the
+provider-side request:
+
+```python
+token = CancellationToken()
+stream = await agent.run_events(prompt, cancellation_token=token)
+try:
+    async for event in stream:
+        handle(event)
+finally:
+    await stream.aclose()
+    with contextlib.suppress(asyncio.CancelledError):
+        await stream.result()
+```
+
+### Cooperative cancellation for blocking I/O
+
+[`CancellationToken`](../../src/agentlane/runtime/_cancellation.py) is
+cooperative: it cannot interrupt a blocking call already running in a worker
+thread. Its surface is `is_cancelled` (poll), `await wait_cancelled()` (await
+the request), `link_future(future)` (cancel an `asyncio.Future`/task when the
+token is cancelled), and `cancel()`.
+
+For `asyncio.to_thread(...)`-style blocking calls (for example a synchronous
+HTTP client, or `urllib.request.urlopen`), the intended pattern is:
+
+1. Check `token.is_cancelled` before starting the blocking call and return early
+   if cancellation is already requested.
+2. Run the blocking call in a worker thread, keeping any per-call timeout short
+   enough that a cancelled run does not linger longer than that timeout.
+3. Check `token.is_cancelled` again after the call returns and discard the
+   result if cancellation happened while it was in flight.
+
+A blocking call such as `urlopen(...)` cannot be interrupted mid-flight by the
+token, so a cancelled run may linger up to that call's own timeout before the
+worker thread unblocks. Where you control the awaitable instead of a blocking
+thread call, prefer `token.link_future(task)` so the token cancels it directly.
+For cancellable network work, wrap the request in an `asyncio.Task` and link it,
+or use an async HTTP client whose request future the token can cancel.
 
 ## Run Result And State
 
@@ -200,6 +353,14 @@ holds `instructions`, `history`, `responses`, persisted `shim_state`
 also one of the accepted `RunInput` forms (alongside a plain `str` and a
 `list[RunHistoryItem]`), so a completed run's `run_state` can be passed back in
 to resume the conversation. The persisted `shim_state` survives across resumes.
+
+`turn_count` counts turns *started*, not completed: the runner increments it at
+the start of each turn, before shims prepare the turn and before the model is
+called. While turn N is being prepared or executed, `turn_count` is `N`, so the
+first turn observes `turn_count == 1`; after the run finishes it equals the
+total number of turns that ran (`RunResult.turn_count` is this final value).
+Gate first-turn logic on `turn_count == 1` rather than reading it as a
+completed-turns count.
 
 ## Request Ownership
 
@@ -235,6 +396,39 @@ and approval callbacks can use it for audit or UI correlation without relying
 on hidden process-local state. The executor accepts these contexts as a mapping
 keyed by model tool-call id because one model response can contain multiple
 tool calls. The tool handler receives only its own single context.
+
+### Live Run-State View
+
+The runner also stamps a read-only view of the live run onto each ordinary
+tool's context as `context.run_state`, typed as
+[`RunStateView`](../../src/agentlane/models/_tool.py) and implemented by
+[`LiveRunStateView`](../../src/agentlane/harness/_run.py). It lets a tool
+observe the run it is executing inside without an app-built side channel:
+
+- `run_state.task_id` — the stable task identity for the run. `context.run_id`
+  is guaranteed to equal `str(run_state.task_id)`, so per-run stores may be
+  keyed by either field consistently. This is the documented, stable
+  relationship between `run_id` and task identity.
+- `run_state.shim_state` — the live persisted shim-owned state, read-only. The
+  view reads through to current values, so state a shim writes earlier in the
+  run is visible to later tool calls.
+- `run_state.active_skill_names` — the names of skills active for the run. A
+  skills shim records these under a `shim_state` key ending in
+  [`ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`](../../src/agentlane/harness/_run.py)
+  (the shim name is the key prefix, so multiple skills shims never collide);
+  the accessor unions every such key. Tools resolving skill-relative resources
+  read this instead of reaching for a private state key.
+
+`context.run_state` is `None` when a tool runs outside a runner loop (for
+example a direct `tool.run(...)` call). The view is read-only; a tool that
+needs to persist state should do so through its own shim, never by mutating the
+run.
+
+The read-only boundary is enforced at the top-level `shim_state` mapping:
+inserting, replacing, or deleting keys through `context.run_state.shim_state`
+raises `TypeError`. Values stored under those keys are ordinary shim-owned
+objects. Shims that expose nested containers should expose immutable values when
+they need stronger protection.
 
 ## Agent-As-Tool
 

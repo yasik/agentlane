@@ -6,6 +6,7 @@ import pytest
 
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
+    BASE_TOOL_NAMES,
     GitignoreMatcher,
     HarnessToolDefinition,
     HarnessToolsShim,
@@ -78,6 +79,77 @@ def test_base_harness_tools_rejects_unknown_selector_name(selector: str) -> None
 def test_base_harness_tools_rejects_overlapping_include_exclude() -> None:
     with pytest.raises(ValueError, match="include/exclude selectors overlap: read"):
         base_harness_tools(include=("read", "grep"), exclude=("read",))
+
+
+def test_base_tool_names_constant_matches_built_set() -> None:
+    assert BASE_TOOL_NAMES == (
+        "read",
+        "find",
+        "grep",
+        "patch",
+        "write",
+        "write_plan",
+        "bash",
+        "agent",
+    )
+    assert tuple(definition.tool.name for definition in base_harness_tools()) == (
+        BASE_TOOL_NAMES
+    )
+
+
+def test_base_harness_tools_include_accepts_extra_names_without_building_them() -> None:
+    definitions = base_harness_tools(
+        include=("read", "web_search"),
+        extra_names=("web_search",),
+    )
+
+    assert [definition.tool.name for definition in definitions] == ["read"]
+
+
+def test_base_harness_tools_exclude_accepts_extra_names_without_raising() -> None:
+    definitions = base_harness_tools(
+        exclude=("bash", "web_search"),
+        extra_names=("web_search",),
+    )
+
+    assert [definition.tool.name for definition in definitions] == [
+        "read",
+        "find",
+        "grep",
+        "patch",
+        "write",
+        "write_plan",
+        "agent",
+    ]
+
+
+def test_base_harness_tools_accepts_single_string_extra_name() -> None:
+    definitions = base_harness_tools(
+        include=("read", "web_search"),
+        extra_names="web_search",
+    )
+
+    assert [definition.tool.name for definition in definitions] == ["read"]
+
+
+def test_base_harness_tools_still_rejects_unknown_name_outside_extra_names() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"Unknown base_harness_tools include selector\(s\): mystery",
+    ):
+        base_harness_tools(include=("read", "mystery"), extra_names=("web_search",))
+
+
+def test_base_harness_tools_overlap_check_ignores_extra_names() -> None:
+    # An extra name appearing in both selectors is dropped before the overlap
+    # check because it is not built here; only base-tool overlap should raise.
+    definitions = base_harness_tools(
+        include=("read", "web_search"),
+        exclude=("web_search",),
+        extra_names=("web_search",),
+    )
+
+    assert [definition.tool.name for definition in definitions] == ["read"]
 
 
 def test_base_harness_tools_constructs_current_tool_set_with_common_options(

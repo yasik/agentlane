@@ -23,7 +23,7 @@ from ._write import write_tool
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
 _PLAN_TOOL_NAME = "write_plan"
-_BASE_TOOL_NAMES = (
+BASE_TOOL_NAMES: tuple[str, ...] = (
     "read",
     "find",
     "grep",
@@ -33,7 +33,16 @@ _BASE_TOOL_NAMES = (
     "bash",
     "agent",
 )
-_BASE_TOOL_NAME_SET = frozenset(_BASE_TOOL_NAMES)
+"""Names of the first-party base harness tools, in standard selection order.
+
+Applications that compose `base_harness_tools` with their own tools can read
+this constant instead of re-deriving the set from `base_harness_tools()`. It is
+the same set the `include`/`exclude` selectors validate against; pass
+application tool names through `extra_names` to let those selectors reference
+tools this function does not own.
+"""
+
+_BASE_TOOL_NAME_SET = frozenset(BASE_TOOL_NAMES)
 type _BaseToolFactory = Callable[[], HarnessToolDefinition]
 
 
@@ -142,9 +151,32 @@ def base_harness_tools(
     approval_callback: ToolApprovalCallback | None = None,
     include: Iterable[str] | None = None,
     exclude: Iterable[str] | None = None,
+    extra_names: Iterable[str] | None = None,
 ) -> tuple[HarnessToolDefinition, ...]:
-    """Return currently implemented first-party base harness tools."""
-    selected_names = _select_base_tool_names(include=include, exclude=exclude)
+    """Return currently implemented first-party base harness tools.
+
+    Args:
+        cwd: Optional working directory passed to each path-aware tool factory.
+        permissions: Optional permission policy threaded into every tool.
+        approval_callback: Optional approval callback threaded into every tool.
+        include: Optional allowlist of tool names to build, in standard order.
+        exclude: Optional denylist of tool names to drop.
+        extra_names: Optional names of application-added tools that the
+            `include`/`exclude` selectors may reference. These names are
+            accepted by selector validation but never built here, so an
+            application can pass one shared selector across the base tools and
+            its own tools without the base selectors raising on names this
+            function does not own. See `BASE_TOOL_NAMES` for the owned set.
+
+    Returns:
+        tuple[HarnessToolDefinition, ...]: The selected base tools, excluding
+        any `extra_names` the selectors referenced.
+    """
+    selected_names = _select_base_tool_names(
+        include=include,
+        exclude=exclude,
+        extra_names=extra_names,
+    )
     factories: dict[str, _BaseToolFactory] = {
         "read": lambda: read_tool(
             cwd=cwd,
@@ -231,10 +263,22 @@ def _select_base_tool_names(
     *,
     include: Iterable[str] | None,
     exclude: Iterable[str] | None,
+    extra_names: Iterable[str] | None = None,
 ) -> tuple[str, ...]:
-    """Return the requested standard tool names in stable base-tool order."""
-    include_names = _validate_base_tool_selector(include, label="include")
-    exclude_names = _validate_base_tool_selector(exclude, label="exclude")
+    """Return the requested standard tool names in stable base-tool order.
+
+    Selector names that appear in `extra_names` are accepted but never
+    returned, since they belong to application-added tools rather than the
+    base set. This keeps base-tool selection valid when an application shares
+    one selector across the base tools and its own tools.
+    """
+    known_names = _BASE_TOOL_NAME_SET | _normalize_extra_names(extra_names)
+    include_names = _validate_base_tool_selector(
+        include, label="include", known_names=known_names
+    )
+    exclude_names = _validate_base_tool_selector(
+        exclude, label="exclude", known_names=known_names
+    )
 
     overlap = include_names & exclude_names
     if overlap:
@@ -245,29 +289,43 @@ def _select_base_tool_names(
 
     return tuple(
         name
-        for name in _BASE_TOOL_NAMES
+        for name in BASE_TOOL_NAMES
         if (include is None or name in include_names) and name not in exclude_names
     )
+
+
+def _normalize_extra_names(extra_names: Iterable[str] | None) -> frozenset[str]:
+    """Return application-owned selector names accepted by base validation."""
+    if extra_names is None:
+        return frozenset()
+    if isinstance(extra_names, str):
+        return frozenset((extra_names,))
+    return frozenset(extra_names)
 
 
 def _validate_base_tool_selector(
     selector: Iterable[str] | None,
     *,
     label: Literal["include", "exclude"],
+    known_names: frozenset[str],
 ) -> set[str]:
-    """Validate one base-tool selector collection."""
+    """Validate one base-tool selector collection against the base tool set.
+
+    Only base-tool names are returned; names that resolve to `extra_names`
+    application tools are dropped because they are not built here.
+    """
     if selector is None:
         return set()
 
     selected = {selector} if isinstance(selector, str) else set(selector)
-    unknown = selected - _BASE_TOOL_NAME_SET
+    unknown = selected - known_names
     if unknown:
         raise ValueError(
             f"Unknown base_harness_tools {label} selector(s): "
             f"{_format_tool_names(unknown)}. Expected one of: "
-            f"{_format_tool_names(_BASE_TOOL_NAMES)}"
+            f"{_format_tool_names(BASE_TOOL_NAMES)}"
         )
-    return selected
+    return selected & _BASE_TOOL_NAME_SET
 
 
 def _dedupe_preserving_order(items: Iterable[str]) -> tuple[str, ...]:
@@ -291,6 +349,6 @@ def _prompt_marker_key(shim_name: str) -> str:
 def _format_tool_names(names: Iterable[str]) -> str:
     """Return names in deterministic comma-separated form."""
     name_set = set(names)
-    ordered = [name for name in _BASE_TOOL_NAMES if name in name_set]
+    ordered = [name for name in BASE_TOOL_NAMES if name in name_set]
     ordered.extend(sorted(name_set - _BASE_TOOL_NAME_SET))
     return ", ".join(ordered)

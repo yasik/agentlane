@@ -63,10 +63,27 @@ class ToolApprovalBroker:
 
     The broker keeps request tracking and host resolution separate from any
     CLI, desktop, or web approval UI.
+
+    By default the broker only handles `REQUIRE_APPROVAL` decisions and raises
+    on anything else, because an `ALLOW`/`DENY` decision needs no host
+    resolution round-trip. Pass `record_immediate_decisions=True` to instead
+    record an already-decided `ALLOW`/`DENY` as a request that is resolved in
+    the same step: it emits the `PENDING` then `RESOLVED` events and returns the
+    decision unchanged. Hosts use this to route auto-allow and auto-deny modes
+    through the same observable event stream as interactive approvals instead of
+    maintaining separate shadow counters.
     """
 
-    def __init__(self) -> None:
-        """Create an approval broker."""
+    def __init__(self, *, record_immediate_decisions: bool = False) -> None:
+        """Create an approval broker.
+
+        Args:
+            record_immediate_decisions: When `True`, `callback` records an
+                already-decided `ALLOW`/`DENY` decision as an immediately
+                resolved request instead of raising. Defaults to `False` so the
+                broker only brokers `REQUIRE_APPROVAL` decisions.
+        """
+        self._record_immediate_decisions = record_immediate_decisions
         self._request_ids = count(1)
         self._records: dict[str, ToolApprovalRecord] = {}
         self._waiters: dict[str, asyncio.Future[ToolPermissionDecision]] = {}
@@ -80,6 +97,8 @@ class ToolApprovalBroker:
     ) -> ToolPermissionDecision:
         """ToolApprovalCallback-compatible approval boundary."""
         if decision.outcome != ToolPermissionOutcome.REQUIRE_APPROVAL:
+            if self._record_immediate_decisions:
+                return self._record_immediate(request, decision)
             raise ValueError("ToolApprovalBroker can only broker approvals.")
 
         request_id = self._next_request_id()
@@ -101,6 +120,34 @@ class ToolApprovalBroker:
         except asyncio.CancelledError:
             self._discard(request_id)
             raise
+
+    def _record_immediate(
+        self,
+        request: ToolPermissionRequest,
+        decision: ToolPermissionDecision,
+    ) -> ToolPermissionDecision:
+        """Record an already-decided allow/deny as a resolved request.
+
+        The pending then resolved events are emitted so subscribers observe the
+        same lifecycle they see for brokered approvals, without ever exposing a
+        pending record (the request is resolved before this method returns).
+        """
+        request_id = self._next_request_id()
+        pending_record = ToolApprovalRecord(
+            request_id=request_id,
+            request=request,
+            approval_required_decision=decision,
+            status=ToolApprovalStatus.PENDING,
+        )
+        self._emit(pending_record)
+        self._emit(
+            replace(
+                pending_record,
+                status=ToolApprovalStatus.RESOLVED,
+                final_decision=decision,
+            )
+        )
+        return decision
 
     def pending(self) -> tuple[ToolApprovalRecord, ...]:
         """Return a read-only snapshot of currently pending approvals."""

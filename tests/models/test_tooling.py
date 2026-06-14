@@ -1,6 +1,7 @@
 """Tests for the native Tool primitive and tool execution."""
 
 import asyncio
+import inspect
 import json
 from collections.abc import Callable
 from typing import Annotated, cast
@@ -12,8 +13,10 @@ from agentlane.models import (
     ModelBehaviorError,
     Tool,
     ToolCall,
+    ToolError,
     ToolExecutionContext,
     ToolExecutor,
+    ToolFailure,
     Tools,
     ToolSpec,
     as_tool,
@@ -417,3 +420,206 @@ def test_tool_executor_raises_for_unregistered_tool() -> None:
                 tools=Tools(tools=[]),
             )
         )
+
+
+def test_tool_executor_reports_exhausted_timeout_as_structured_failure() -> None:
+    """An exhausted tool timeout should reach on_tool_end as a typed failure."""
+
+    async def slow_handler(
+        args: EchoArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> EchoResult:
+        del cancellation_token, context
+        await asyncio.sleep(1.0)
+        return EchoResult(echoed=args.text)
+
+    tool: Tool[EchoArgs, EchoResult] = Tool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=slow_handler,
+    )
+    executor = ToolExecutor()
+    ended: list[object] = []
+
+    async def on_tool_end(call: ToolCall, result: object) -> None:
+        del call
+        ended.append(result)
+
+    messages = asyncio.run(
+        executor.execute(
+            tool_calls=[_make_tool_call('{"text": "hello"}')],
+            tools=Tools(
+                tools=[tool],
+                tool_call_timeout=0.01,
+                tool_call_max_retries=0,
+            ),
+            on_tool_end=on_tool_end,
+        )
+    )
+
+    expected_text = "Error: Tool 'echo' timed out after 0.01s (1 attempts)."
+    # The model-facing message stays a plain string, byte-for-byte unchanged.
+    assert messages[0]["content"] == expected_text
+    # The tool-end callback receives a structured failure so the runner derives
+    # ok=False rather than treating the timeout text as a successful result.
+    assert len(ended) == 1
+    timeout_result = ended[0]
+    assert isinstance(timeout_result, ToolFailure)
+    assert timeout_result == expected_text
+    assert timeout_result.error == ToolError(
+        message="Tool 'echo' timed out after 0.01s (1 attempts).",
+        kind="timeout",
+    )
+
+
+def _explicit_schema_tool() -> Tool[EchoArgs, EchoResult]:
+    """Build an echo tool with a custom formatter and explicit schema."""
+    return Tool(
+        name="echo",
+        description="Echo text",
+        args_model=EchoArgs,
+        handler=_echo_handler,
+        formatter=lambda result: f"<<{result.echoed}>>",
+        parameters_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+            "title": "custom",
+        },
+    )
+
+
+def test_tool_replace_preserves_unspecified_fields_returns_copy() -> None:
+    """Tool.replace should copy every field not named in the overrides."""
+    original = _explicit_schema_tool()
+
+    replaced = original.replace(name="echo_v2")
+
+    assert replaced is not original
+    assert replaced.name == "echo_v2"
+    # Description, handler, formatter, and the explicit schema all survive.
+    assert replaced.description == original.description
+    assert replaced.handler is original.handler
+    assert replaced.return_value_as_string(EchoResult(echoed="hi")) == "<<hi>>"
+    assert replaced.schema["parameters"] == original.schema["parameters"]
+    assert replaced.schema["name"] == "echo_v2"
+
+
+def test_tool_replace_does_not_drop_formatter_when_overriding_handler() -> None:
+    """Overriding the handler must keep the formatter (the Vera regression)."""
+    original = _explicit_schema_tool()
+
+    async def new_handler(
+        args: EchoArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> EchoResult:
+        del cancellation_token
+        del context
+        return EchoResult(echoed=args.text.upper())
+
+    replaced = original.replace(handler=new_handler)
+
+    result = asyncio.run(replaced.run(EchoArgs(text="hi"), CancellationToken()))
+    assert result == EchoResult(echoed="HI")
+    # Formatter is preserved by construction, not silently dropped.
+    assert replaced.return_value_as_string(result) == "<<HI>>"
+
+
+def test_tool_replace_unknown_field_raises_type_error() -> None:
+    """Tool.replace should reject overrides that are not constructor fields."""
+    original = _explicit_schema_tool()
+
+    with pytest.raises(TypeError, match="unknown field"):
+        original.replace(parameters="oops")
+
+
+def test_tool_with_handler_wraps_original_handler_preserves_fields() -> None:
+    """Tool.with_handler should pass the original handler to the wrapper."""
+    original = _explicit_schema_tool()
+    seen_handlers: list[object] = []
+
+    def wrapper(
+        inner: Callable[
+            [EchoArgs, CancellationToken, ToolExecutionContext],
+            object,
+        ],
+    ) -> Callable[[EchoArgs, CancellationToken, ToolExecutionContext], object]:
+        seen_handlers.append(inner)
+
+        async def wrapped(
+            args: EchoArgs,
+            cancellation_token: CancellationToken,
+            context: ToolExecutionContext,
+        ) -> EchoResult:
+            # Intercept arguments before calling the original handler.
+            adjusted = EchoArgs(text=f"[{args.text}]")
+            result = inner(adjusted, cancellation_token, context)
+            if inspect.isawaitable(result):
+                result = await result
+            return cast(EchoResult, result)
+
+        return wrapped
+
+    wrapped_tool = original.with_handler(wrapper)
+
+    assert seen_handlers == [original.handler]
+    result = asyncio.run(wrapped_tool.run(EchoArgs(text="hi"), CancellationToken()))
+    assert result == EchoResult(echoed="[hi]")
+    # Every non-handler field is carried through unchanged.
+    assert wrapped_tool.name == original.name
+    assert wrapped_tool.schema["parameters"] == original.schema["parameters"]
+    assert wrapped_tool.return_value_as_string(result) == "<<[hi]>>"
+
+
+def test_tool_replace_round_trips_every_observable_field() -> None:
+    """replace() with no overrides must reproduce every Tool field exactly.
+
+    This is the framework-owned version of Vera's reflection drift test: a copy
+    that silently drops a field (the ``formatter`` regression Vera hit) would
+    fail here. If a new ``Tool`` field is added, this round-trip is the place
+    that proves the copy carries it.
+    """
+    original = _explicit_schema_tool()
+
+    copy = original.replace()
+
+    assert copy is not original
+    assert copy.name == original.name
+    assert copy.description == original.description
+    assert copy.args_type() is original.args_type()
+    assert copy.handler is original.handler
+    assert copy.formatter is original.formatter
+    assert copy.schema["parameters"] == original.schema["parameters"]
+
+
+def test_tool_constructor_signature_matches_known_copy_fields() -> None:
+    """The Tool constructor keyword set must stay the fields copies forward.
+
+    ``replace``/``with_handler`` rebuild a tool from a fixed field set. If a new
+    keyword is added to ``Tool.__init__``, this assertion fails first and forces
+    the new field to be acknowledged here. That, in turn, requires extending
+    ``test_tool_replace_round_trips_every_observable_field`` to assert the field
+    survives a copy — which fails unless the copy path forwards it. Together the
+    two tests are the framework-owned replacement for Vera's
+    ``inspect.signature(Tool.__init__)`` reflection drift test, closing the
+    silent-field-drop class of bug (Vera's ``formatter`` regression) without an
+    app having to keep its own alarm.
+    """
+    constructor_fields = {
+        name
+        for name, parameter in inspect.signature(Tool).parameters.items()
+        if parameter.kind == inspect.Parameter.KEYWORD_ONLY
+    }
+
+    assert constructor_fields == {
+        "name",
+        "description",
+        "args_model",
+        "handler",
+        "formatter",
+        "parameters_schema",
+    }

@@ -70,6 +70,7 @@ from ._lifecycle import (
     HandoffTool,
 )
 from ._run import (
+    LiveRunStateView,
     RunHistoryItem,
     RunInput,
     RunResult,
@@ -340,6 +341,7 @@ class Runner:
                             hooks=resolved_hooks,
                             cancellation_token=cancellation_token,
                             parent_span=gen_span,
+                            run_state=state,
                         )
                         state.history.extend(tool_messages)
 
@@ -532,6 +534,9 @@ class Runner:
                     if shim_manager is not None:
                         await shim_manager.prepare_turn(prepared_turn)
                     if run_events is not None:
+                        run_events.register_delegation_tool_names(
+                            _delegation_tool_names(prepared_turn.tools)
+                        )
                         run_events.state_snapshot(
                             RunStateSnapshotBoundary.TURN_PREPARED,
                             state,
@@ -588,6 +593,7 @@ class Runner:
                             hooks=hooks,
                             cancellation_token=cancellation_token,
                             parent_span=gen_span,
+                            run_state=state,
                         )
                         state.history.extend(tool_messages)
 
@@ -730,6 +736,7 @@ class Runner:
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
         parent_span: Span[Any] | None = None,
+        run_state: RunState | None = None,
     ) -> list[MessageDict]:
         """Execute one model-emitted tool batch and return tool messages."""
         if tools is None:
@@ -764,6 +771,7 @@ class Runner:
                         hooks=hooks,
                         cancellation_token=cancellation_token,
                         parent_span=parent_span,
+                        run_state=run_state,
                     )
                     for tool_call in tool_calls
                 ]
@@ -781,6 +789,7 @@ class Runner:
                     hooks=hooks,
                     cancellation_token=cancellation_token,
                     parent_span=parent_span,
+                    run_state=run_state,
                 )
             )
         return tool_messages
@@ -796,6 +805,7 @@ class Runner:
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
         parent_span: Span[Any] | None = None,
+        run_state: RunState | None = None,
     ) -> MessageDict:
         """Execute one tool or delegated-agent call and return its tool message."""
         if isinstance(tool_definition, AgentTool):
@@ -824,6 +834,7 @@ class Runner:
                 agent=agent,
                 runner_task=runner_task,
                 tool_call=tool_call,
+                run_state=run_state,
             )
             tool_messages = await self._tool_executor.execute(
                 tool_calls=[tool_call],
@@ -1584,12 +1595,43 @@ def _tool_context(
     agent: Task,
     runner_task: RunnerTask,
     tool_call: ToolCall,
+    run_state: RunState | None = None,
 ) -> ToolExecutionContext:
-    """Return framework correlation fields for one local tool call."""
+    """Return framework correlation fields for one local tool call.
+
+    ``run_id`` is derived as ``str(agent.task_id)`` and, when ``run_state`` is
+    supplied, equals ``str(run_state_view.task_id)`` so per-run stores key
+    consistently by either field. ``run_state`` is the live working copy, so
+    the view reads through to current values during execution.
+    """
     return ToolExecutionContext(
         run_id=str(agent.task_id),
         agent_name=runner_task.name,
         tool_call_id=tool_call.id,
+        run_state=(
+            LiveRunStateView(run_state, agent.task_id)
+            if run_state is not None
+            else None
+        ),
+    )
+
+
+def _delegation_tool_names(tools: Tools | None) -> frozenset[str]:
+    """Return names of visible tools that delegate to another agent.
+
+    Classification is structural: agent-as-tool and handoff tools are concrete
+    runner tool-definition types, so run events can be tagged as delegation
+    without matching tool names against an app-maintained registry.
+    """
+    if tools is None:
+        return frozenset()
+    return frozenset(
+        tool.name
+        for tool in tools.normalized_tools
+        if isinstance(
+            tool,
+            (AgentTool, DefaultAgentTool, HandoffTool, DefaultHandoffTool),
+        )
     )
 
 

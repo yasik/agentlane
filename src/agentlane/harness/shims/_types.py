@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
-from agentlane.models import PromptSpec, Tools
+from agentlane.models import Tools, render_instruction_text
 from agentlane.models.run import DefaultRunContext, RunContext
 
 from .._run import RunHistoryItem, RunInstructions, RunState, copy_history_item
@@ -67,7 +67,7 @@ class PreparedTurn:
         if isinstance(current, str):
             self.run_state.instructions = f"{current}{separator}{text}"
             return
-        rendered = _render_instruction_text(current)
+        rendered = render_instruction_text(current)
         self.run_state.instructions = f"{rendered}{separator}{text}"
 
     def append_history_item(self, item: RunHistoryItem) -> None:
@@ -78,25 +78,3 @@ class PreparedTurn:
         """Append multiple items to persisted conversation history."""
         for item in items:
             self.append_history_item(item)
-
-
-def _render_instruction_text(instructions: PromptSpec[Any]) -> str:
-    """Render one prompt spec into a single system-instruction string."""
-    messages = [
-        message
-        for message in instructions.template.render_messages(instructions.values)
-        if message.get("role") == "system"
-    ]
-    if not messages:
-        raise ValueError("PromptSpec must render at least one system-role message.")
-
-    contents: list[str] = []
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, str):
-            contents.append(content)
-            continue
-        raise ValueError(
-            "System PromptSpec content must render to plain text when appended."
-        )
-    return "\n\n".join(contents)

@@ -1,16 +1,22 @@
 """Plan tool implementation for first-party harness base tools."""
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Literal
+from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool, ToolExecutionContext
+from agentlane.models import PlanStepStatus, Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "write_plan"
+PLAN_TOOL_NAME = "write_plan"
+"""Public, stable name of the first-party plan tool."""
+
+PLAN_UPDATED_MESSAGE = "Plan updated"
+"""Public, stable model-facing success message returned by the plan tool."""
+
+_TOOL_NAME = PLAN_TOOL_NAME
 _TOOL_DESCRIPTION = """Writes or updates the task plan.
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
@@ -61,16 +67,66 @@ Each step has a `status`: `pending`, `in_progress`, or `completed`. Exactly one 
 """
 
 _GENERIC_PLAN_ERROR = "failed to update plan"
-_PLAN_UPDATED_MESSAGE = "Plan updated"
+
+
+class PlanUpdate(str):
+    """Successful plan-tool result carrying the structured plan.
+
+    Subclasses ``str`` so the model-facing path is byte-for-byte unchanged: the
+    value equals ``PLAN_UPDATED_MESSAGE`` and renders as that text in the
+    conversation. The structured plan rides alongside as attributes, satisfying
+    :class:`agentlane.harness.PlanUpdateResult` so the runner can emit a typed
+    ``RunPlanUpdatedEvent`` without consumers string-matching the message.
+    """
+
+    __slots__ = ("_explanation", "_steps")
+
+    _explanation: str | None
+    _steps: tuple[tuple[str, PlanStepStatus], ...]
+
+    def __new__(
+        cls,
+        *,
+        explanation: str | None,
+        steps: tuple[tuple[str, PlanStepStatus], ...],
+    ) -> Self:
+        instance = super().__new__(cls, PLAN_UPDATED_MESSAGE)
+        instance._explanation = explanation
+        instance._steps = steps
+        return instance
+
+    def __getnewargs_ex__(self) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Return the keyword-only ``__new__`` arguments for copy and pickle.
+
+        ``PlanUpdate`` is a ``str`` subclass with a keyword-only ``__new__``.
+        Without this hook ``copy.deepcopy`` and ``pickle`` reconstruct the value
+        with positional ``str`` newargs, which the keyword-only signature
+        rejects. Returning the keyword form preserves the structured plan across
+        a round-trip.
+        """
+        return (), {"explanation": self._explanation, "steps": self._steps}
+
+    @property
+    def plan_message(self) -> str:
+        """Return the model-facing success text for the plan update."""
+        return PLAN_UPDATED_MESSAGE
+
+    @property
+    def plan_explanation(self) -> str | None:
+        """Return the optional model-supplied reason for the plan update."""
+        return self._explanation
+
+    @property
+    def plan_steps(self) -> tuple[tuple[str, PlanStepStatus], ...]:
+        """Return ordered ``(step, status)`` pairs for the current plan."""
+        return self._steps
 
 
 class _PlanItem(BaseModel):
     """Model-visible plan item."""
 
     step: str = Field(description="Concise description of this step.")
-    status: Literal["pending", "in_progress", "completed"] = Field(
-        description="Current step status."
-    )
+    status: PlanStepStatus = Field(description="Current step status.")
 
 
 class _ToolArgs(BaseModel):
@@ -133,7 +189,12 @@ def _write_plan(
     *,
     persist_to: Callable[[dict[str, object]], None] | None,
 ) -> str:
-    """Persist one plan update and return the model-facing success message."""
+    """Persist one plan update and return the structured success result.
+
+    The success value is a :class:`PlanUpdate`, which is a ``str`` equal to the
+    model-facing success message and additionally carries the structured plan
+    for typed run-event emission.
+    """
     validation_error = _validate_plan(args)
     if validation_error is not None:
         return validation_error
@@ -141,7 +202,10 @@ def _write_plan(
     if persist_to is not None:
         persist_to(_plan_snapshot(args))
 
-    return _PLAN_UPDATED_MESSAGE
+    return PlanUpdate(
+        explanation=args.explanation,
+        steps=tuple((item.step, item.status) for item in args.plan),
+    )
 
 
 def _validate_plan(args: _ToolArgs) -> str | None:

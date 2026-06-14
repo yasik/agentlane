@@ -14,6 +14,13 @@ from ._prompts import (
     PromptTemplate,
     PromptTemplateBase,
     TextPart,
+    render_instruction_text,
+)
+from ._provider_payloads import (
+    ReasoningPhase,
+    UsageTotals,
+    get_reasoning_phase,
+    get_usage_totals,
 )
 from ._rate_limiter import (
     CompositeRateLimiter,
@@ -42,9 +49,17 @@ from ._retry import (
 )
 from ._streaming import ModelStreamEvent, ModelStreamEventKind
 from ._strict_schema import ensure_strict_json_schema
-from ._tool import Tool, ToolExecutionContext, ToolSpec, as_tool
+from ._tool import (
+    RunStateView,
+    Tool,
+    ToolExecutionContext,
+    ToolHandler,
+    ToolSpec,
+    as_tool,
+)
 from ._tool_executor import ToolExecutor
 from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapter
+from ._tool_result import PlanStepStatus, ToolError, ToolFailure
 from ._types import (
     Choice,
     ChoiceLogprobs,
@@ -77,9 +92,14 @@ __all__ = [
     "PromptTemplateBase",
     "MultiPartPromptTemplate",
     "PromptSpec",
+    "render_instruction_text",
     "TextPart",
     "FilePart",
     "ImagePart",
+    "ReasoningPhase",
+    "UsageTotals",
+    "get_reasoning_phase",
+    "get_usage_totals",
     "ensure_strict_json_schema",
     "Model",
     "Config",
@@ -89,6 +109,8 @@ __all__ = [
     "ToolSpec",
     "Tool",
     "ToolExecutionContext",
+    "ToolHandler",
+    "RunStateView",
     "as_tool",
     "Tools",
     "RateLimiter",
@@ -104,6 +126,9 @@ __all__ = [
     "is_retryable_by_status_code",
     "DEFAULT_RETRY_STATUS_CODES",
     "ToolExecutor",
+    "ToolError",
+    "ToolFailure",
+    "PlanStepStatus",
     "ToolOutputAdapter",
     "ChatCompletionsOutputAdapter",
     "ModelResponse",

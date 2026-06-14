@@ -14,11 +14,15 @@ from agentlane.harness.skills import (
     DEFAULT_SKILLS_SYSTEM_PROMPT,
     FilesystemSkillLoader,
     LoadedSkill,
+    SKILL_PATH_PROMPT_GUIDANCE,
     SkillCatalog,
     SkillLoader,
     SkillManifest,
+    SkillRelativePathShim,
     SkillResource,
     SkillsShim,
+    discover_skill_catalog,
+    resolve_skill_relative_path,
     SKILL_MAX_COMPATIBILITY_LENGTH,
     SKILL_MAX_DESCRIPTION_LENGTH,
     SKILL_MAX_FILE_LINES,
@@ -190,6 +194,52 @@ to an agent instance. The catalog is a read-only container over the discovered
    catalog's loader,
 5. iteration and `len()` over the discovered manifests.
 
+### Sharing a Discovered Catalog
+
+By default `SkillsShim` discovers skills internally when it binds. When an
+application also needs the discovered manifests — for example to map skill names
+to their root directories — discover the catalog once with
+`discover_skill_catalog(...)` and pass it to the shim. The shim then reuses that
+catalog instead of discovering again, so the application and the shim cannot
+disagree about which skills exist:
+
+```python
+loader = FilesystemSkillLoader(roots=(SKILLS_ROOT,), include_default_roots=False)
+catalog = await discover_skill_catalog(loader)
+
+descriptor = AgentDescriptor(
+    name="Clinical Review",
+    model=model,
+    shims=(SkillsShim(catalog=catalog),),
+)
+
+# The same catalog is available to the application without a second loader.
+skill_roots = {manifest.name: manifest.root for manifest in catalog}
+```
+
+`SkillsShim` rejects being given both a `loader` and a `catalog`, since a catalog
+already carries its own loader.
+
+### Reading Active Skill Names
+
+`SkillsShim.active_skill_names(run_state)` returns the skill names activated so
+far in a run, in activation order. It is a convenience accessor over the
+documented state contract: the shim writes active names under a `shim_state` key
+formed from the shim `name` and
+[`ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`](../../src/agentlane/harness/_run.py),
+which is also what `RunStateView.active_skill_names` reads. Prefer this accessor
+(or the run-state view, for the union across multiple skills shims) over
+hand-building the key:
+
+```python
+shim = SkillsShim(catalog=catalog)
+# ... after a run ...
+active = shim.active_skill_names(agent.run_state)  # ("report-generator", ...)
+```
+
+The accessor honors a custom shim `name`, so a shim configured with
+`SkillsShim(name="docs")` reads the activation state it owns.
+
 ## Filesystem Loader
 
 `FilesystemSkillLoader` is the default loader.
@@ -299,6 +349,10 @@ These fields filter model exposure. The host application's sandbox,
 permissions, and approval callbacks still decide whether an exposed tool call
 is allowed to execute.
 
+`SkillRelativePathShim` preserves the same active-skill filter after it wraps
+base tools. A name listed in `disallowedTools` stays hidden from the model even
+when the resolver has rebuilt that tool with skill-relative path handling.
+
 ## State
 
 Activated skill names are persisted in `RunState.shim_state`.
@@ -312,6 +366,87 @@ That gives three important properties:
 
 The actual skill content remains visible because the activation tool result is
 already part of the persisted conversation history.
+
+## Skill-Relative Path Resolution
+
+Installed skills reference their own bundled files by paths relative to the
+skill root, but the harness filesystem tools only know the workspace root. The
+opt-in `SkillRelativePathShim` bridges that gap: while a skill is active, a plain
+relative path the model passes to a wrapped path-taking tool is resolved against
+the active skill's root before the underlying tool runs.
+
+Pair it with a `SkillsShim` and share one discovered catalog with both:
+
+```python
+from agentlane.harness.skills import (
+    SkillRelativePathShim,
+    SkillsShim,
+    discover_skill_catalog,
+    FilesystemSkillLoader,
+)
+from agentlane.harness.tools import base_harness_tools
+
+loader = FilesystemSkillLoader(roots=(SKILLS_ROOT,), include_default_roots=False)
+catalog = await discover_skill_catalog(loader)
+
+descriptor = AgentDescriptor(
+    name="Clinical Review",
+    model=model,
+    shims=(
+        SkillsShim(catalog=catalog),
+        SkillRelativePathShim(
+            base_harness_tools(cwd=WORKSPACE, include=("read", "grep", "find")),
+            catalog=catalog,
+        ),
+    ),
+)
+```
+
+By default the shim wraps `read`, `grep`, and `find`, resolving each tool's
+`path` argument. The `path_arg_fields` mapping overrides which tools are wrapped
+and which argument each one resolves; a tool is only wrapped when it appears in
+that mapping. Binding fails loudly (`ValueError`) when a wrapped tool does not
+declare its configured argument, so a renamed tool argument cannot silently turn
+resolution into a no-op.
+
+### Resolution Rules
+
+Resolution is deliberately conservative. A candidate path is resolved only when
+it is a plain workspace-style relative path. The following are returned
+unchanged:
+
+1. absolute paths,
+2. explicitly anchored paths (`./`, `../`, `~`, `~user`),
+3. empty or whitespace-only values,
+4. values carrying glob or brace metacharacters (`*`, `?`, `[`, `]`, `{`, `}`).
+
+When several skills are active, the most recently activated skill wins for a
+shared relative path. A candidate whose `..` segments collapse above the skill
+root is skipped, so the existence probe never reaches files outside the skill,
+and a path that does not exist under any active skill root is returned unchanged
+(so it still resolves against the workspace root as before). Host permission
+policies still apply to the final resolved path.
+
+### Design Limits
+
+This is a narrow, safe contract by design. In particular:
+
+1. **No shell-command rewriting.** The `bash` tool is intentionally out of
+   scope. Splicing resolved paths into a shell command requires a quote-aware
+   splitter plus glob, brace, tilde, and `$`/backtick refusal rules, which is
+   exactly the kind of subtle code that is easy to get wrong. Instead, the skill
+   root is surfaced to the model in the activation result (`Skill directory:
+   ...`) and through `SKILL_PATH_PROMPT_GUIDANCE`, so the model can reference
+   resources by absolute path or with the `read` tool inside commands.
+2. **One declared string argument per tool.** Multi-path arguments and
+   structured argument shapes are not resolved.
+3. **Resolution, not containment.** The shim resolves paths; it does not enforce
+   a workspace or skill boundary. Pass a permission policy to the wrapped tools
+   for containment.
+
+The pure rule is also exposed as `resolve_skill_relative_path(path,
+skill_roots=...)` for applications that need the same resolution outside the
+shim.
 
 ## Customization
 

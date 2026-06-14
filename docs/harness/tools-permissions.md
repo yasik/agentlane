@@ -24,8 +24,8 @@ policies are small and composable:
    allow-all policy to compose.
 2. `WorkspaceToolPermissionPolicy` is a single-root path boundary. It allows
    path operations only when the resolved target stays inside `root`. It
-   denies `ToolOperation.EXECUTE_COMMAND` unless that operation is explicitly
-   included in `allowed_operations`, because a path boundary cannot prove shell
+   denies non-path operations unless they are explicitly included in
+   `allowed_operations`, because a path boundary cannot prove shell or network
    side effects.
 3. `PathScopeToolPermissionPolicy` is an explicit set of approved files or
    directories. Use it when a coding assistant works from one `cwd` but the
@@ -33,8 +33,8 @@ policies are small and composable:
 4. `ToolPermissionGrantPolicy` is a tool and operation allowlist. It does not
    sandbox paths and does not ask for approval.
 5. `SideEffectApprovalToolPermissionPolicy` returns `require_approval` for
-   writes, patches, directory creation, and command execution. The host
-   application still owns the approval callback and UI.
+   writes, patches, directory creation, command execution, and network access.
+   The host application still owns the approval callback and UI.
 6. `AllOfToolPermissionPolicy` composes policies conservatively: deny wins,
    then approval, then allow.
 
@@ -46,6 +46,57 @@ Policy defaults are intentionally explicit:
    request it checks.
 3. `AllOfToolPermissionPolicy(())` allows because no nested policy denies; use
    it only when an empty composition is intentional.
+
+## Composition semantics (strictest wins)
+
+`AllOfToolPermissionPolicy` resolves nested decisions on the ordering
+`allow < require_approval < deny`. It scans every nested policy: a `deny` is
+terminal and returned immediately; a `require_approval` is remembered; an
+`allow` never widens a decision a stricter policy already made. The final
+outcome is the strictest decision any nested policy returned.
+
+This has one trap worth stating plainly. `SideEffectApprovalToolPermissionPolicy`
+returns `require_approval` for every side-effecting operation it covers. If you
+also compose a `ToolPermissionGrantPolicy` (or `workspace_tool_policy(grants=...)`)
+to pre-grant `bash:execute_command`, that grant is **outcome-inert** by default:
+the grant policy returns `allow`, but the side-effect policy still returns
+`require_approval`, and strictest-wins keeps the approval. The configured grant
+looks like it permits the operation but never actually skips approval.
+
+Two supported ways to make a side-effect grant meaningful:
+
+1. Pass the grants to the side-effect policy so a matching grant downgrades
+   `require_approval` to `allow` for the operations it covers:
+
+   ```python
+   AllOfToolPermissionPolicy(
+       (
+           WorkspaceToolPermissionPolicy(WORKSPACE, allowed_operations=...),
+           ToolPermissionGrantPolicy(grants),
+           SideEffectApprovalToolPermissionPolicy(grants=grants),
+       )
+   )
+   ```
+
+2. With the `workspace_tool_policy(...)` helper, opt in with
+   `grants_downgrade_side_effect_approval=True`:
+
+   ```python
+   workspace_tool_policy(
+       WORKSPACE,
+       grants=grants,
+       require_bash_approval=True,
+       grants_downgrade_side_effect_approval=True,
+   )
+   ```
+
+   With the flag set, a request matching a grant returns `allow` from the
+   side-effect policy, so `bash:execute_command` actually skips approval.
+   Without it (the default), the grant stays inert and `bash` still requires
+   approval — the conservative behavior is the default so opting into trust is
+   always explicit. `grants=None` on `SideEffectApprovalToolPermissionPolicy`
+   keeps the always-require-approval behavior; only an explicit grant list
+   downgrades.
 
 For a path-only workspace boundary, pass `WorkspaceToolPermissionPolicy`:
 
@@ -94,8 +145,9 @@ sandboxed executor, container, or remote worker. The nearest-parent check uses
 filesystem stats at permission time, which is appropriate for interactive
 agent tool calls but not a substitute for kernel-enforced isolation.
 
-For the common application policy "stay inside this workspace, apply a tool
-grant allowlist, and require app approval before side effects", use
+For the common application policy "stay inside this workspace, admit declared
+host operations, apply a tool grant allowlist, and require app approval before
+side effects", use
 `workspace_tool_policy(...)`. It is an opinionated convenience constructor for
 that workspace-app shape over the same public primitives, not a separate
 policy system:
@@ -124,8 +176,13 @@ Grant defaults are intentionally distinct. Omit `grants` or pass
 `grants=None` when you do not want a grant allowlist; the helper will compose
 only workspace and approval policies. Pass an empty iterable, `grants=()`,
 only when the grant layer should exist and deny every tool.
+`allowed_non_path_operations` is the host-extension point for operations a
+workspace root cannot scope, such as app-provided network egress tools. It does
+not admit `bash`; command execution stays controlled by
+`require_bash_approval=True`.
 `require_approval_for_side_effects=True` makes file creation, overwrites,
-patches, and directory creation require approval. `bash` is separate:
+patches, directory creation, and admitted non-path side effects require
+approval. `bash` is separate:
 `require_bash_approval=True` is the only way this helper admits
 `bash:execute_command`, and it always makes command execution require approval
 before the process starts. If grants are configured, `bash:execute_command`
@@ -134,12 +191,14 @@ must still be granted. This does not sandbox the command after startup.
 The helper composes the public low-level policies in this order:
 
 1. `WorkspaceToolPermissionPolicy` denies path operations outside the root and
-   denies `bash` unless `require_bash_approval=True`.
+   denies non-path operations unless explicitly admitted by
+   `allowed_non_path_operations` or `require_bash_approval=True`.
 2. `ToolPermissionGrantPolicy`, when provided, denies requests that do not
    match a whole-tool or operation-level grant.
 3. `SideEffectApprovalToolPermissionPolicy` returns `require_approval` for
-   file side effects when `require_approval_for_side_effects=True`, and for
-   command execution when `require_bash_approval=True`.
+   file and admitted non-path side effects when
+   `require_approval_for_side_effects=True`, and for command execution when
+   `require_bash_approval=True`.
 4. `AllOfToolPermissionPolicy` combines those decisions conservatively: deny
    wins, then approval, then allow.
 
@@ -199,6 +258,46 @@ entries override earlier ones. Callers should reject or report
 `invalid_entries` before constructing a policy. Partial success is intentional:
 CLI and environment-variable callers can collect every unsupported entry and
 report them together instead of failing on the first one.
+
+Whole-tool entries expand to that tool's declared operation set. For example,
+`write` becomes grants for `create_file`, `overwrite_file`, and
+`create_directory`; it is not an unbounded wildcard for future or undeclared
+operations. `ToolPermissionGrant.all_operations(...)` remains available for
+programmatic callers that intentionally want a wildcard grant.
+
+By default the parser only recognizes the built-in first-party tools (`read`,
+`find`, `grep`, `write`, `patch`, `bash`), so a grant for an app-registered
+egress tool such as `web_search:network_access` is reported as invalid. Pass
+`known_tools` — a mapping from each extra tool name to the `ToolOperation`
+values it exposes — to drive grants for those tools from a grant string:
+
+```python
+grants, invalid_entries = parse_tool_permission_grants(
+    "web_search",
+    known_tools={"web_search": frozenset({ToolOperation.NETWORK_ACCESS})},
+)
+```
+
+A `known_tools` entry whose name collides with a built-in is ignored; the
+built-in operation set wins. Operation names outside a tool's declared set are
+still reported as invalid, so `web_search:read_file` is rejected even when
+`web_search` is known.
+
+To use that app egress tool with the workspace convenience policy, the host
+must also admit the non-path operation at the workspace boundary:
+
+```python
+tools = base_harness_tools(
+    cwd=WORKSPACE,
+    permissions=workspace_tool_policy(
+        WORKSPACE,
+        grants=grants,
+        allowed_non_path_operations=(ToolOperation.NETWORK_ACCESS,),
+        require_approval_for_side_effects=True,
+    ),
+    approval_callback=approve,
+)
+```
 
 For programmatic grants, construct `ToolPermissionGrant` values directly.
 `ToolPermissionGrant.all_operations("read")` makes whole-tool intent explicit;
@@ -372,6 +471,10 @@ Operations are intentionally small and tool-oriented:
 | `patch` | `modify_file` |
 | `bash` | `execute_command` |
 
+Egress tools (web search, API callers) use `network_access`; it is not bound to
+a first-party local tool because the framework ships no egress tool, but the
+operation is a stable part of `ToolOperation` for application egress tools.
+
 `write` may issue two permission requests for one tool call. If the target's
 parent directory does not exist, it checks `create_directory` for that parent
 first. It then checks `create_file` for a missing target or `overwrite_file`
@@ -385,3 +488,60 @@ startup. Because `WorkspaceToolPermissionPolicy` is a path sandbox, it denies
 included in `allowed_operations` or another host policy allows it.
 Applications that need real process isolation should provide a sandboxed
 `BashExecutor`, container, remote worker, or equivalent host boundary.
+
+## Network access (egress)
+
+`ToolOperation.NETWORK_ACCESS` is the operation for tools that send data off
+the machine, such as a web search or an API caller. Network egress has no
+filesystem path for a path policy to bound, so an egress tool builds a
+`ToolPermissionRequest` with `operation=ToolOperation.NETWORK_ACCESS`, an
+optional `command`/payload describing the outbound data, and a human-readable
+`reason`. Use this operation instead of borrowing `EXECUTE_COMMAND` for network
+calls: a path or command sandbox would either deny the request or mislabel the
+payload as a shell command.
+
+`NETWORK_ACCESS` is classified as a side effect, so
+`SideEffectApprovalToolPermissionPolicy()` (with default `operations`) returns
+`require_approval` for it. The `reason` on the request flows through
+`format_tool_permission_result(...)`: when a decision carries no `reason`, the
+default approval-required text names the tool's network access rather than a
+"command", so an approval UI can render an egress prompt without special-casing
+a synthetic command shape.
+
+```python
+blocked = await evaluate_tool_permission(
+    ToolPermissionRequest(
+        tool_name="web_search",
+        operation=ToolOperation.NETWORK_ACCESS,
+        cwd=WORKSPACE,
+        command=query,
+        reason="approval required: outbound web search awaiting approval",
+    ),
+    policy=permissions,
+    approval_callback=approval_callback,
+)
+if blocked is not None:
+    return blocked
+```
+
+## Recording immediate decisions through the broker
+
+By default `ToolApprovalBroker.callback(...)` only handles `require_approval`
+decisions and raises on an already-decided `allow`/`deny`, because those need
+no host resolution round-trip. A host that runs auto-allow or auto-deny modes
+would then make those decisions outside the broker and keep its own counters,
+so they never appear in `broker.events()`.
+
+Construct the broker with `record_immediate_decisions=True` to route every
+decision through the same observable place:
+
+```python
+broker = ToolApprovalBroker(record_immediate_decisions=True)
+```
+
+With the flag set, passing an `allow`/`deny` decision to `callback(...)`
+records the request as resolved in the same step: the broker emits a `pending`
+then a `resolved` event for it and returns the decision unchanged. The request
+never lingers in `broker.pending()`. `require_approval` decisions still suspend
+for host resolution exactly as before. The default stays `False` so existing
+hosts that only broker approvals keep raising on non-approval decisions.

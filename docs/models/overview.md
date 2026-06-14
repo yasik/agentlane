@@ -64,6 +64,26 @@ overall round-trip safety limit. That policy belongs in the models layer
 because it describes what the model is allowed to ask for. The harness then
 decides how those tool calls are executed inside a run.
 
+### Wrapping And Copying Tools
+
+To adapt an existing tool without rebuilding it field by field, use the copy
+API on [`Tool`](../../src/agentlane/models/_tool.py):
+
+- `tool.replace(**overrides)` returns a copy with selected fields changed and
+  every other field preserved by construction (mirroring
+  `dataclasses.replace`). Unspecified fields — including a custom `formatter`
+  and an explicit `parameters_schema` — are carried through unchanged, so a
+  copy that only meant to change one thing cannot silently drop another.
+- `tool.with_handler(wrapper)` returns a copy whose handler is
+  `wrapper(tool.handler)`. This is the standard shape for argument
+  interception, result post-processing, sandboxing, or redaction: the wrapper
+  receives the original handler and returns the replacement. `tool.handler` and
+  `tool.formatter` are also exposed as read-only properties for composition.
+
+Prefer these over reconstructing `Tool(name=..., handler=..., ...)`: rebuilding
+from parts must enumerate every field, and a future `Tool` field would be lost
+by callers that forgot to forward it.
+
 ## Provider Boundary
 
 This layer is also where provider-specific behavior is contained.
@@ -118,6 +138,41 @@ The harness now reuses this same event type directly. High-level agent
 streaming through `DefaultAgent.run_stream(...)` yields `ModelStreamEvent`
 through a harness `RunStream` handle instead of wrapping the per-event payload.
 
+### Typed accessors for common provider shapes
+
+A few provider-native shapes are only reachable through the preserved raw
+payload. Rather than duck-typing them with `getattr`, use the typed accessors
+exported from `agentlane.models`:
+
+1. `get_reasoning_phase(event)` reads the OpenAI Responses output-message phase
+   off `ModelStreamEvent.raw` for `output_item` events. It returns a
+   `ReasoningPhase` (`COMMENTARY` or `FINAL_ANSWER`) or `None`. `None` means
+   "no usable phase reported" — the event is not an output-item event, the item
+   type carries no phase, the provider sent no phase, or the provider sent a
+   phase string this enum does not model. The preserved raw payload is not
+   re-validated, so an unmodeled phase degrades to `None` rather than raising;
+   it never signals a failure.
+2. `get_usage_totals(response)` returns a typed `UsageTotals` view over
+   `ModelResponse.usage`, exposing `prompt_tokens`, `completion_tokens`, and
+   `total_tokens`. It returns `None` when the response (or its usage) is
+   missing, which callers should treat as missing data rather than zero.
+
+```python
+from agentlane.models import (
+    ReasoningPhase,
+    get_reasoning_phase,
+    get_usage_totals,
+)
+
+phase = get_reasoning_phase(event)
+if phase is ReasoningPhase.FINAL_ANSWER:
+    ...
+
+totals = get_usage_totals(response)
+if totals is not None:
+    track(totals.total_tokens)
+```
+
 ## Run-Scoped Context
 
 Some model-adjacent helpers live under `agentlane.models.run`.
@@ -128,6 +183,38 @@ be sent to the model. The main ones are
 dictionary-backed run-local state and
 [`TraceCtxManager`](../../src/agentlane/models/run/_ctx_managers.py) for
 ensuring a trace exists when model work begins.
+
+## Tool Execution Context
+
+Tool handlers receive a
+[`ToolExecutionContext`](../../src/agentlane/models/_tool.py) carrying
+correlation identity (`run_id`, `agent_name`, `tool_call_id`) plus
+host-application `metadata`. The harness also attaches a read-only view of the
+live run on `context.run_state`, typed as
+[`RunStateView`](../../src/agentlane/models/_tool.py), so a tool can observe the
+run it is executing inside without an app-built side channel:
+
+- `run_state.task_id` — the stable task identity for the run.
+- `run_state.shim_state` — the persisted shim-owned state, read-only.
+- `run_state.active_skill_names` — the names of skills active for the run.
+
+`run_state` is `None` when a tool runs outside a runner loop (for example a
+direct `tool.run(...)` call). When present, `context.run_id` is guaranteed to
+equal `str(run_state.task_id)`, so per-run stores may be keyed by either field
+consistently. `RunStateView` is a read surface only; a tool that needs to
+persist state should do so through its own shim.
+
+The harness enforces that read surface at the top-level `shim_state` mapping:
+key insertions, replacements, and deletions through `run_state.shim_state` raise
+`TypeError`. Values under those keys are still the shim owner's objects, so shims
+should store immutable values when nested mutation would be unsafe.
+
+`RunStateView` is a structural protocol defined in the models layer; the
+harness supplies the concrete live implementation. A skills shim records active
+skill names under a `shim_state` key ending in
+`ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`
+([`agentlane.harness`](../../src/agentlane/harness/_run.py)), which is what
+`active_skill_names` reads.
 
 ## Example
 

@@ -51,14 +51,20 @@ from ._permissions import (
     parse_tool_permission_grants,
     workspace_tool_policy,
 )
-from ._plan import plan_tool
+from ._plan import (
+    PLAN_TOOL_NAME,
+    PLAN_UPDATED_MESSAGE,
+    PlanUpdate,
+    plan_tool,
+)
 from ._read import read_tool
-from ._shim import HarnessToolsShim, base_harness_tools
+from ._shim import BASE_TOOL_NAMES, HarnessToolsShim, base_harness_tools
 from ._types import HarnessToolDefinition
 from ._workspace import WorkspaceToolsShim
 from ._write import write_tool
 
 __all__ = [
+    "BASE_TOOL_NAMES",
     "BASH_MAX_BYTES",
     "BASH_MAX_LINES",
     "BashExecutionRequest",
@@ -71,6 +77,9 @@ __all__ = [
     "GitignoreMatcher",
     "HarnessToolDefinition",
     "HarnessToolsShim",
+    "PLAN_TOOL_NAME",
+    "PLAN_UPDATED_MESSAGE",
+    "PlanUpdate",
     "WorkspaceToolsShim",
     "LS_DEFAULT_LIMIT",
     "LocalBashExecutor",

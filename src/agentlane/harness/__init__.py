@@ -12,6 +12,8 @@ from ._events import (
     RunLLMEndEvent,
     RunLLMStartEvent,
     RunModelStreamEvent,
+    RunPlanItem,
+    RunPlanUpdatedEvent,
     RunStateSnapshot,
     RunStateSnapshotBoundary,
     RunStateSnapshotEvent,
@@ -21,10 +23,24 @@ from ._events import (
 )
 from ._hooks import RunnerHooks
 from ._lifecycle import AgentDescriptor, DefaultAgentTool, DefaultHandoff
-from ._run import RunInput, RunResult, RunState, ShimState
+from ._run import (
+    ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX,
+    LiveRunStateView,
+    RunInput,
+    RunResult,
+    RunState,
+    ShimState,
+)
 from ._runner import Runner
 from ._stream import RunStream
 from ._task import Task
+from ._tool_result import (
+    PlanUpdateResult,
+    ToolError,
+    ToolFailure,
+    ToolOutcome,
+    tool_outcome,
+)
 from ._tooling import (
     INHERIT_TOOLS,
     OVERRIDE_TOOLS,
@@ -37,14 +53,17 @@ from ._tooling import (
 )
 
 __all__ = [
+    "ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX",
     "Agent",
     "AgentDescriptor",
     "DefaultAgentTool",
     "DefaultHandoff",
     "INHERIT_TOOLS",
     "InheritTools",
+    "LiveRunStateView",
     "OVERRIDE_TOOLS",
     "OverrideTools",
+    "PlanUpdateResult",
     "RESTRICT_TOOLS",
     "RunAgentEndEvent",
     "RunAgentStartEvent",
@@ -57,6 +76,8 @@ __all__ = [
     "RunLLMEndEvent",
     "RunLLMStartEvent",
     "RunModelStreamEvent",
+    "RunPlanItem",
+    "RunPlanUpdatedEvent",
     "RunResult",
     "RunState",
     "RunStateSnapshot",
@@ -73,4 +94,8 @@ __all__ = [
     "RunnerHooks",
     "Task",
     "ToolConfig",
+    "ToolError",
+    "ToolFailure",
+    "ToolOutcome",
+    "tool_outcome",
 ]

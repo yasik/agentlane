@@ -20,6 +20,13 @@ class ToolOperation(StrEnum):
     MODIFY_FILE = "modify_file"
     CREATE_DIRECTORY = "create_directory"
     EXECUTE_COMMAND = "execute_command"
+    NETWORK_ACCESS = "network_access"
+    """Outbound network egress, such as a web search or an API call.
+
+    Network access has no filesystem path for a path policy to bound, so egress
+    tools set `command`/`reason` on the request to describe the outbound payload.
+    It is classified as a side effect so side-effect approval policies gate it.
+    """
 
 
 class ToolPermissionOutcome(StrEnum):
@@ -184,8 +191,10 @@ def workspace_tool_policy(
     root: str | Path,
     *,
     grants: Iterable[ToolPermissionGrant] | None = None,
+    allowed_non_path_operations: Iterable[ToolOperation | str] = (),
     require_approval_for_side_effects: bool = False,
     require_bash_approval: bool = False,
+    grants_downgrade_side_effect_approval: bool = False,
 ) -> AllOfToolPermissionPolicy:
     """Build the common workspace policy used by application harnesses.
 
@@ -197,23 +206,47 @@ def workspace_tool_policy(
     `require_bash_approval=True` is the only way this helper admits `bash`
     command execution, and it requires approval before the process can start.
     It is not process sandboxing.
+
+    `allowed_non_path_operations` admits host-registered operations that a
+    workspace path boundary cannot scope, such as `network_access`. Do not use
+    it for `execute_command`; command execution stays behind
+    `require_bash_approval=True` so the base-tool bundle keeps one explicit
+    command-execution path.
+
+    By default a grant for a side-effecting operation is outcome-inert: the
+    side-effect approval policy still requires approval and, under
+    strictest-wins composition, that approval is never widened back to allow.
+    Pass `grants_downgrade_side_effect_approval=True` to opt in to letting a
+    grant downgrade approval to allow for the operations it covers, so a
+    configured grant such as `bash:execute_command` actually skips approval.
     """
+    grant_tuple = () if grants is None else tuple(grants)
+    non_path_operations = _coerce_allowed_non_path_operations(
+        allowed_non_path_operations
+    )
     policies: list[ToolPermissionPolicy] = [
         WorkspaceToolPermissionPolicy(
             root,
             allowed_operations=_workspace_policy_operations(
                 include_execute_command=require_bash_approval,
+                allowed_non_path_operations=non_path_operations,
             ),
         )
     ]
     if grants is not None:
-        policies.append(ToolPermissionGrantPolicy(grants))
+        policies.append(ToolPermissionGrantPolicy(grant_tuple))
     approval_operations = _workspace_policy_approval_operations(
         require_approval_for_side_effects=require_approval_for_side_effects,
         require_bash_approval=require_bash_approval,
+        allowed_non_path_operations=non_path_operations,
     )
     if approval_operations:
-        policies.append(SideEffectApprovalToolPermissionPolicy(approval_operations))
+        policies.append(
+            SideEffectApprovalToolPermissionPolicy(
+                approval_operations,
+                grants=(grant_tuple if grants_downgrade_side_effect_approval else None),
+            )
+        )
 
     return AllOfToolPermissionPolicy(policies)
 
@@ -225,6 +258,14 @@ class SideEffectApprovalToolPermissionPolicy:
     a narrower approval policy. The policy returns `REQUIRE_APPROVAL`;
     `evaluate_tool_permission()` is the boundary that calls the optional host
     `approval_callback`.
+
+    Composition caveat: under `AllOfToolPermissionPolicy` (`allow` < `approval`
+    < `deny`) an unconditional `REQUIRE_APPROVAL` here is never widened by an
+    `ALLOW` from an earlier grant policy, so a grant for a side-effecting
+    operation is outcome-inert. To let a grant downgrade approval to allow for
+    operations the app trusts, pass `grants`: a request that matches one of
+    those grants returns `ALLOW` instead of `REQUIRE_APPROVAL`. `grants=None`
+    keeps the always-require-approval behavior.
     """
 
     operations: frozenset[ToolOperation]
@@ -232,17 +273,24 @@ class SideEffectApprovalToolPermissionPolicy:
     def __init__(
         self,
         operations: Iterable[ToolOperation | str] | None = None,
+        *,
+        grants: Iterable[ToolPermissionGrant] | None = None,
     ) -> None:
         self.operations = (
             _SIDE_EFFECT_OPERATIONS
             if operations is None
             else frozenset(_coerce_operation(operation) for operation in operations)
         )
+        self._grants = () if grants is None else tuple(grants)
 
     def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
-        if request.operation in self.operations:
-            return ToolPermissionDecision.require_approval()
-        return ToolPermissionDecision.allow()
+        if request.operation not in self.operations:
+            return ToolPermissionDecision.allow()
+        if any(grant.allows(request) for grant in self._grants):
+            # An app-trusted grant downgrades approval to allow so the grant is
+            # not silently inert under strictest-wins composition.
+            return ToolPermissionDecision.allow()
+        return ToolPermissionDecision.require_approval()
 
 
 class WorkspaceToolPermissionPolicy:
@@ -403,16 +451,38 @@ def format_tool_permission_result(
 
 def parse_tool_permission_grants(
     value: str | None,
+    *,
+    known_tools: Mapping[str, Iterable[ToolOperation]] | None = None,
 ) -> tuple[tuple[ToolPermissionGrant, ...], tuple[str, ...]]:
     """Parse comma-separated whole-tool and operation-level permission grants.
 
     The parser returns partial success as `(grants, invalid_entries)`, preserves
     valid duplicates, and does not apply override semantics. Callers that want
     a unique set or fail-fast behavior should layer that policy explicitly.
+
+    The built-in first-party tools (`read`, `find`, `grep`, `write`, `patch`,
+    `bash`) are always recognized. Pass `known_tools` to also accept grants for
+    app-registered tools — each entry maps a tool name to the operations that
+    tool exposes — so a grant string can drive operations the built-in map does
+    not list, such as `"web_search:network_access"` for an egress tool. A
+    `known_tools` entry whose name collides with a built-in is ignored; the
+    built-in operation set wins. Whole-tool entries expand to the operation set
+    declared for that tool. Operation names outside a tool's declared set, and
+    operation names that are not valid `ToolOperation` values, are still
+    reported as invalid entries.
+
+    Args:
+        value: Comma-separated grant string, or `None`.
+        known_tools: Optional extra tool-to-operations map for app-registered
+            tools. Defaults to `None`, which keeps the built-in-only behavior.
+
+    Returns:
+        A `(grants, invalid_entries)` pair.
     """
     if value is None or value.strip() == "":
         return (), ()
 
+    operations_by_tool = _operations_by_tool(known_tools)
     grants: list[ToolPermissionGrant] = []
     invalid_entries: list[str] = []
     for raw_entry in value.split(","):
@@ -420,22 +490,43 @@ def parse_tool_permission_grants(
         if entry == "":
             continue
 
-        grant = _parse_permission_grant(entry)
-        if grant is None:
+        parsed = _parse_permission_grant(entry, operations_by_tool=operations_by_tool)
+        if parsed is None:
             invalid_entries.append(entry)
             continue
-        grants.append(grant)
+        grants.extend(parsed)
 
     return tuple(grants), tuple(invalid_entries)
 
 
-def _parse_permission_grant(entry: str) -> ToolPermissionGrant | None:
+def _operations_by_tool(
+    known_tools: Mapping[str, Iterable[ToolOperation]] | None,
+) -> Mapping[str, tuple[ToolOperation, ...]]:
+    """Merge app-registered tools under the built-in map, built-ins winning."""
+    if known_tools is None:
+        return _TOOL_OPERATIONS_BY_TOOL
+    merged: dict[str, tuple[ToolOperation, ...]] = {
+        tool_name: _normalize_tool_operations(operations)
+        for tool_name, operations in known_tools.items()
+    }
+    merged.update(_TOOL_OPERATIONS_BY_TOOL)
+    return merged
+
+
+def _parse_permission_grant(
+    entry: str,
+    *,
+    operations_by_tool: Mapping[str, tuple[ToolOperation, ...]],
+) -> tuple[ToolPermissionGrant, ...] | None:
     tool_name, separator, operation_name = entry.partition(":")
-    operations = _TOOL_OPERATIONS_BY_TOOL.get(tool_name)
+    operations = operations_by_tool.get(tool_name)
     if operations is None:
         return None
     if separator == "":
-        return ToolPermissionGrant.all_operations(tool_name)
+        return tuple(
+            ToolPermissionGrant(tool_name=tool_name, operation=operation)
+            for operation in operations
+        )
 
     try:
         operation = ToolOperation(operation_name)
@@ -443,7 +534,7 @@ def _parse_permission_grant(entry: str) -> ToolPermissionGrant | None:
         return None
     if operation not in operations:
         return None
-    return ToolPermissionGrant(tool_name=tool_name, operation=operation)
+    return (ToolPermissionGrant(tool_name=tool_name, operation=operation),)
 
 
 async def _resolve_permission_result(
@@ -488,6 +579,11 @@ def _format_approval_required(request: ToolPermissionRequest) -> str:
         return (
             "approval required: bash command requires application approval "
             "before execution"
+        )
+    if request.operation == ToolOperation.NETWORK_ACCESS:
+        return (
+            f"approval required: {request.tool_name} network access requires "
+            "application approval before execution"
         )
     subject = _permission_subject(request)
     if subject is None:
@@ -553,6 +649,40 @@ def _coerce_operation(operation: ToolOperation | str) -> ToolOperation:
     return ToolOperation(operation)
 
 
+def _normalize_tool_operations(
+    operations: Iterable[ToolOperation | str],
+) -> tuple[ToolOperation, ...]:
+    """Return operations in stable first-seen order with duplicates removed."""
+    normalized: list[ToolOperation] = []
+    seen: set[ToolOperation] = set()
+    for operation in operations:
+        coerced = _coerce_operation(operation)
+        if coerced in seen:
+            continue
+        seen.add(coerced)
+        normalized.append(coerced)
+    return tuple(normalized)
+
+
+def _coerce_allowed_non_path_operations(
+    operations: Iterable[ToolOperation | str],
+) -> tuple[ToolOperation, ...]:
+    """Return host-approved non-path operations for `workspace_tool_policy`."""
+    normalized = _normalize_tool_operations(operations)
+    disallowed = tuple(
+        operation
+        for operation in normalized
+        if operation in _PATH_OPERATIONS or operation == ToolOperation.EXECUTE_COMMAND
+    )
+    if disallowed:
+        names = ", ".join(operation.value for operation in disallowed)
+        raise ValueError(
+            "allowed_non_path_operations only accepts non-path operations other "
+            f"than execute_command; got: {names}"
+        )
+    return normalized
+
+
 _PATH_OPERATIONS = (
     ToolOperation.READ_FILE,
     ToolOperation.SEARCH_FILES,
@@ -581,6 +711,7 @@ _SIDE_EFFECT_OPERATIONS = frozenset(
     {
         *_PATH_SIDE_EFFECT_OPERATIONS,
         ToolOperation.EXECUTE_COMMAND,
+        ToolOperation.NETWORK_ACCESS,
     }
 )
 
@@ -588,38 +719,44 @@ _SIDE_EFFECT_OPERATIONS = frozenset(
 def _workspace_policy_operations(
     *,
     include_execute_command: bool,
+    allowed_non_path_operations: Iterable[ToolOperation],
 ) -> tuple[ToolOperation, ...]:
     # `bash` is deliberately outside the default path-operation set. The
     # workspace helper includes it only for the `require_bash_approval` path.
+    operations = (*_PATH_OPERATIONS, *allowed_non_path_operations)
     if include_execute_command:
-        return (*_PATH_OPERATIONS, ToolOperation.EXECUTE_COMMAND)
-    return _PATH_OPERATIONS
+        return (*operations, ToolOperation.EXECUTE_COMMAND)
+    return operations
 
 
 def _workspace_policy_approval_operations(
     *,
     require_approval_for_side_effects: bool,
     require_bash_approval: bool,
+    allowed_non_path_operations: Iterable[ToolOperation],
 ) -> tuple[ToolOperation, ...]:
     operations: list[ToolOperation] = []
     if require_approval_for_side_effects:
         operations.extend(_PATH_SIDE_EFFECT_OPERATIONS)
+        operations.extend(
+            operation
+            for operation in allowed_non_path_operations
+            if operation in _SIDE_EFFECT_OPERATIONS
+        )
     if require_bash_approval:
         operations.append(ToolOperation.EXECUTE_COMMAND)
     return tuple(operations)
 
 
-_TOOL_OPERATIONS_BY_TOOL: dict[str, frozenset[ToolOperation]] = {
-    "read": frozenset({ToolOperation.READ_FILE}),
-    "find": frozenset({ToolOperation.SEARCH_FILES}),
-    "grep": frozenset({ToolOperation.READ_FILE, ToolOperation.SEARCH_FILES}),
-    "write": frozenset(
-        {
-            ToolOperation.CREATE_FILE,
-            ToolOperation.OVERWRITE_FILE,
-            ToolOperation.CREATE_DIRECTORY,
-        }
+_TOOL_OPERATIONS_BY_TOOL: dict[str, tuple[ToolOperation, ...]] = {
+    "read": (ToolOperation.READ_FILE,),
+    "find": (ToolOperation.SEARCH_FILES,),
+    "grep": (ToolOperation.READ_FILE, ToolOperation.SEARCH_FILES),
+    "write": (
+        ToolOperation.CREATE_FILE,
+        ToolOperation.OVERWRITE_FILE,
+        ToolOperation.CREATE_DIRECTORY,
     ),
-    "patch": frozenset({ToolOperation.MODIFY_FILE}),
-    "bash": frozenset({ToolOperation.EXECUTE_COMMAND}),
+    "patch": (ToolOperation.MODIFY_FILE,),
+    "bash": (ToolOperation.EXECUTE_COMMAND,),
 }

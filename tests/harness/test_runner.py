@@ -507,7 +507,7 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
     async def scenario() -> None:
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
-        echo = Tool(
+        echo: Tool[_TracingToolArgs, str] = Tool(
             name="echo",
             description="Echo text",
             args_model=_TracingToolArgs,
@@ -2057,5 +2057,134 @@ def test_runner_raises_when_model_returns_tool_calls_without_tools() -> None:
             match="agent exposes no tools",
         ):
             await runner.run(agent, state)
+
+    asyncio.run(scenario())
+
+
+class _RunStateArgs(BaseModel):
+    """Arguments for the run-state observing tool."""
+
+    text: str
+
+
+def _seeded_run_state(history_item: str) -> RunState:
+    """Return a run state pre-seeded with active-skill names for assertions."""
+    state = RunState(
+        instructions=None,
+        history=[history_item],
+        responses=[],
+    )
+    state.shim_state["skills:active-skill-names"] = ["alpha", "beta"]
+    return state
+
+
+def _run_state_observing_tool(
+    sink: list[ToolExecutionContext],
+) -> Tool[_RunStateArgs, str]:
+    """Return a tool whose handler records the context it executed with."""
+
+    async def handler(
+        args: _RunStateArgs,
+        cancellation_token: CancellationToken,
+        context: ToolExecutionContext,
+    ) -> str:
+        del cancellation_token
+        sink.append(context)
+        return f"observed:{args.text}"
+
+    return Tool(
+        name="echo",
+        description="Echo text",
+        args_model=_RunStateArgs,
+        handler=handler,
+    )
+
+
+def test_runner_run_exposes_live_run_state_to_tool_handler() -> None:
+    """A tool handler should see run identity, shim state, and active skills."""
+
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        seen: list[ToolExecutionContext] = []
+        tool = _run_state_observing_tool(seen)
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="Observer",
+                model=model,
+                tools=Tools(tools=[tool]),
+            ),
+        )
+        state = _seeded_run_state("please echo")
+
+        await runner.run(agent, state)
+
+        assert len(seen) == 1
+        context = seen[0]
+        assert context.run_state is not None
+        # run_id is the documented str(task_id); the view confirms it.
+        assert context.run_id == str(agent.task_id)
+        assert context.run_state.task_id == context.run_id
+        assert context.run_state.active_skill_names == ("alpha", "beta")
+        assert context.run_state.shim_state.get("skills:active-skill-names") == [
+            "alpha",
+            "beta",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_runner_run_stream_exposes_live_run_state_to_tool_handler() -> None:
+    """The streaming loop should expose the same live run-state view."""
+
+    async def scenario() -> None:
+        runtime = SingleThreadedRuntimeEngine()
+        runner = Runner()
+        seen: list[ToolExecutionContext] = []
+        tool = _run_state_observing_tool(seen)
+        model = _StreamingSequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
+                    ],
+                ),
+                make_assistant_response(content="done"),
+            ]
+        )
+        agent = Agent(
+            runtime,
+            runner,
+            descriptor=AgentDescriptor(
+                name="StreamObserver",
+                model=model,
+                tools=Tools(tools=[tool]),
+            ),
+        )
+        state = _seeded_run_state("please echo")
+
+        stream = runner.run_stream(agent, state)
+        await _collect_runner_stream(stream)
+
+        assert len(seen) == 1
+        context = seen[0]
+        assert context.run_state is not None
+        assert context.run_id == str(agent.task_id)
+        assert context.run_state.task_id == context.run_id
+        assert context.run_state.active_skill_names == ("alpha", "beta")
 
     asyncio.run(scenario())

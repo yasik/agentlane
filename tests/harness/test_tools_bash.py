@@ -13,7 +13,16 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from agentlane.harness import Agent, AgentDescriptor, Runner, RunState
+from agentlane.harness import (
+    Agent,
+    AgentDescriptor,
+    Runner,
+    RunState,
+    ToolError,
+    ToolFailure,
+    ToolOutcome,
+    tool_outcome,
+)
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     BashExecutionRequest,
@@ -297,6 +306,51 @@ def test_bash_tool_returns_nonzero_exit_code() -> None:
     assert output == "before fail\n\n[Command exited with code 7]"
 
 
+def test_bash_tool_nonzero_exit_returns_typed_failure_with_unchanged_text() -> None:
+    output = _run_bash("printf 'before fail\\n'; exit 7")
+
+    # The model-facing text is byte-for-byte unchanged...
+    assert output == "before fail\n\n[Command exited with code 7]"
+    # ...while the framework reads a typed failure off the same result.
+    assert isinstance(output, ToolFailure)
+    assert output.error == ToolError(
+        message="Command exited with code 7",
+        kind="nonzero_exit",
+    )
+    assert tool_outcome(output) == ToolOutcome(ok=False, error=output.error)
+
+
+def test_bash_tool_success_returns_plain_string_outcome() -> None:
+    output = _run_bash("printf 'hello\\n'")
+
+    assert output == "hello"
+    assert not isinstance(output, ToolFailure)
+    assert tool_outcome(output).ok is True
+
+
+def test_bash_tool_timeout_returns_timeout_failure(tmp_path: Path) -> None:
+    output = _run_bash("sleep 5", cwd=tmp_path, timeout=0.1)
+
+    assert isinstance(output, ToolFailure)
+    assert output.error.kind == "timeout"
+    assert "[Command timed out after 0.1 seconds]" in output
+
+
+def test_bash_tool_cancelled_returns_cancelled_failure(tmp_path: Path) -> None:
+    async def scenario() -> str:
+        definition = bash_tool(cwd=tmp_path)
+        tool = _executable_tool(definition)
+        token = CancellationToken()
+        token.cancel()
+        return await tool.run(tool.args_type()(command="echo hi"), token)
+
+    output = asyncio.run(scenario())
+
+    assert isinstance(output, ToolFailure)
+    assert output.error.kind == "cancelled"
+    assert output == "(no output)\n\n[Command cancelled]"
+
+
 def test_bash_tool_renders_empty_successful_output() -> None:
     output = _run_bash(":")
 
@@ -494,7 +548,17 @@ def test_bash_tool_sanitizes_unexpected_error_text(
 
     output = _run_bash("printf 'hidden\\n'", cwd=tmp_path)
 
+    # The model-facing text is the sanitized generic message, byte-for-byte
+    # unchanged...
     assert output == "failed to execute bash command"
+    # ...while a crashed handler now marks the call as failed instead of
+    # returning a plain string the runner would read as success.
+    assert isinstance(output, ToolFailure)
+    assert output.error == ToolError(
+        message="failed to execute bash command",
+        kind="error",
+    )
+    assert tool_outcome(output) == ToolOutcome(ok=False, error=output.error)
 
 
 def test_bash_tool_executes_through_tool_executor() -> None:
