@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-06-14
+
+AgentLane `0.11.0` makes harness runs easier for host applications to observe and control: tool calls now have typed success/failure outcomes, plan updates and delegation show up as structured run events, tools can read live run state, skills can resolve bundled resources by relative paths, and permission helpers cover app tools and network egress.
+
+### Added
+
+- Added structured tool-result primitives (`ToolError`, `ToolFailure`, `ToolOutcome`, `tool_outcome`) and `RunToolEndEvent.ok` / `error` so host UIs can distinguish failed tool calls without parsing model-facing text ([`6a75f4d`](https://github.com/yasik/agentlane/commit/6a75f4d), [`0587ff5`](https://github.com/yasik/agentlane/commit/0587ff5), [`cbeb50b`](https://github.com/yasik/agentlane/commit/cbeb50b))
+- Added `RunPlanUpdatedEvent`, `RunPlanItem`, `PLAN_TOOL_NAME`, `PLAN_UPDATED_MESSAGE`, and structured `PlanUpdate` results for first-party plan tool updates ([`e73f922`](https://github.com/yasik/agentlane/commit/e73f922), [`626ef78`](https://github.com/yasik/agentlane/commit/626ef78))
+- Added run-event lineage fields and `is_delegation` tagging for agent-as-tool and handoff calls so consumers can aggregate root-run telemetry correctly ([`626ef78`](https://github.com/yasik/agentlane/commit/626ef78), [`04c7f39`](https://github.com/yasik/agentlane/commit/04c7f39))
+- Added live run-state access on `ToolExecutionContext.run_state`, `LiveRunStateView`, and `RunStateView` so tools can inspect task identity, shim state, and active skills during execution ([`3e37a0a`](https://github.com/yasik/agentlane/commit/3e37a0a), [`82690ac`](https://github.com/yasik/agentlane/commit/82690ac), [`ca129e5`](https://github.com/yasik/agentlane/commit/ca129e5))
+- Added skill catalog sharing, active-skill accessors, and `SkillRelativePathShim` / `resolve_skill_relative_path` so active skills can reference bundled resources through `read`, `grep`, and `find` without duplicate discovery ([`7df701c`](https://github.com/yasik/agentlane/commit/7df701c), [`496f392`](https://github.com/yasik/agentlane/commit/496f392), [`398f532`](https://github.com/yasik/agentlane/commit/398f532))
+- Added provider payload helpers `ReasoningPhase`, `UsageTotals`, `get_reasoning_phase`, and `get_usage_totals` for typed access to Responses reasoning phases and token totals ([`5423ea7`](https://github.com/yasik/agentlane/commit/5423ea7), [`5a83e3f`](https://github.com/yasik/agentlane/commit/5a83e3f))
+
+### Changed
+
+- Made `PromptTemplate` and `MultiPartPromptTemplate` default to plain string output and exported `render_instruction_text` for shared system-instruction rendering ([`5e82f83`](https://github.com/yasik/agentlane/commit/5e82f83))
+- Added `Tool.handler`, `Tool.formatter`, `Tool.replace`, and `Tool.with_handler` plus `DelegatingShim` / `DelegatingBoundShim` to make wrapper shims and tools preserve future framework fields ([`d5b62ca`](https://github.com/yasik/agentlane/commit/d5b62ca), [`3e37a0a`](https://github.com/yasik/agentlane/commit/3e37a0a), [`398f532`](https://github.com/yasik/agentlane/commit/398f532))
+- Exposed `BASE_TOOL_NAMES` and `extra_names` support in `base_harness_tools(...)` so applications can apply shared include/exclude selectors across base and app tools ([`cd595aa`](https://github.com/yasik/agentlane/commit/cd595aa))
+- Expanded permission policies with `ToolOperation.NETWORK_ACCESS`, app-tool grant parsing, non-path operation admission, and grant-aware side-effect approval downgrades for trusted host operations ([`0db0e44`](https://github.com/yasik/agentlane/commit/0db0e44), [`fc68915`](https://github.com/yasik/agentlane/commit/fc68915), [`6fe8d92`](https://github.com/yasik/agentlane/commit/6fe8d92))
+- Refreshed docs for run events, structured tool outcomes, skills, permission composition, prompt templates, model helpers, and tool design ([`7b615c9`](https://github.com/yasik/agentlane/commit/7b615c9), [`073ca37`](https://github.com/yasik/agentlane/commit/073ca37), [`4712b41`](https://github.com/yasik/agentlane/commit/4712b41), [`3ef299d`](https://github.com/yasik/agentlane/commit/3ef299d))
+
+### Fixed
+
+- Fixed structured failure reporting for bash timeouts, cancelled commands, crashes, and non-zero exits so run events carry typed errors while model-facing text stays unchanged ([`0587ff5`](https://github.com/yasik/agentlane/commit/0587ff5), [`cbeb50b`](https://github.com/yasik/agentlane/commit/cbeb50b))
+- Fixed permission grant wildcard expansion and prevented disallowed tools from being re-added to the active context by skill/tool filtering ([`6fe8d92`](https://github.com/yasik/agentlane/commit/6fe8d92), [`ba70df8`](https://github.com/yasik/agentlane/commit/ba70df8))
+- Fixed active-skill state key drift and made shim state exposed through live run-state views read-only ([`496f392`](https://github.com/yasik/agentlane/commit/496f392), [`ca129e5`](https://github.com/yasik/agentlane/commit/ca129e5))
+- Fixed unrecognized provider reasoning phases to degrade to `None` instead of raising ([`5a83e3f`](https://github.com/yasik/agentlane/commit/5a83e3f))
+- Fixed pre-existing mypy errors and a contradicting immediate-decision approval test that blocked the verification gate ([`a7dccc6`](https://github.com/yasik/agentlane/commit/a7dccc6), [`5d8ecd7`](https://github.com/yasik/agentlane/commit/5d8ecd7))
+
 ## [0.10.0] - 2026-06-11
 
 AgentLane `0.10.0` makes tracing across model calls and tool execution consistent: harness runs now keep tool spans under the active generation span, provider clients reuse propagated tracing context, and documentation better explains the harness, runtime, serialization, and tracing surfaces.
@@ -180,6 +209,7 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
+[0.11.0]: https://github.com/yasik/agentlane/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/yasik/agentlane/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/yasik/agentlane/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/yasik/agentlane/compare/v0.7.0...v0.8.0
