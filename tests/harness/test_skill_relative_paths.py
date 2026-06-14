@@ -147,6 +147,12 @@ def _binding_context() -> ShimBindingContext:
     return ShimBindingContext(task=cast(Task, SimpleNamespace(task_id="run-skill")))
 
 
+def _tool_names(tools: Tools | None) -> list[str]:
+    if tools is None:
+        return []
+    return [tool.name for tool in tools.normalized_tools]
+
+
 def test_skill_relative_path_shim_resolves_read_after_activation(
     tmp_path: Path,
 ) -> None:
@@ -205,6 +211,78 @@ def test_skill_relative_path_shim_resolves_read_after_activation(
             ToolExecutionContext(),
         )
         assert "guide body marker" in resolved
+
+    asyncio.run(scenario())
+
+
+def test_skill_relative_path_shim_honors_disallowed_tools_filter(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    skill_root = _write_skill(tmp_path / "skills", "restricted-reader", {})
+    manifest = SkillManifest(
+        name="restricted-reader",
+        description="Restricted reader.",
+        skill_file=skill_root / "SKILL.md",
+        root=skill_root,
+        disallowed_tools=("read",),
+    )
+    catalog = SkillCatalog(manifests=(manifest,), loader=cast(Any, _DummyLoader()))
+
+    async def scenario() -> None:
+        skills_shim = SkillsShim(catalog=catalog)
+        resolver_shim = SkillRelativePathShim(
+            base_harness_tools(cwd=workspace, include=("read", "grep")),
+            catalog=catalog,
+        )
+        bound_skills = await skills_shim.bind(_binding_context())
+        bound_resolver = await resolver_shim.bind(_binding_context())
+
+        run_state = RunState(instructions=None, history=[], responses=[])
+        run_state.shim_state["skills:active-skill-names"] = ["restricted-reader"]
+        turn = PreparedTurn(run_state=run_state, tools=None, model_args=None)
+
+        await bound_skills.prepare_turn(turn)
+        await bound_resolver.prepare_turn(turn)
+
+        assert _tool_names(turn.tools) == ["activate_skill", "grep"]
+
+    asyncio.run(scenario())
+
+
+def test_skill_relative_path_shim_honors_tools_allowlist_filter(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    skill_root = _write_skill(tmp_path / "skills", "workspace-reader", {})
+    manifest = SkillManifest(
+        name="workspace-reader",
+        description="Workspace reader.",
+        skill_file=skill_root / "SKILL.md",
+        root=skill_root,
+        tools=("read",),
+    )
+    catalog = SkillCatalog(manifests=(manifest,), loader=cast(Any, _DummyLoader()))
+
+    async def scenario() -> None:
+        skills_shim = SkillsShim(catalog=catalog)
+        resolver_shim = SkillRelativePathShim(
+            base_harness_tools(cwd=workspace, include=("read", "grep")),
+            catalog=catalog,
+        )
+        bound_skills = await skills_shim.bind(_binding_context())
+        bound_resolver = await resolver_shim.bind(_binding_context())
+
+        run_state = RunState(instructions=None, history=[], responses=[])
+        run_state.shim_state["skills:active-skill-names"] = ["workspace-reader"]
+        turn = PreparedTurn(run_state=run_state, tools=None, model_args=None)
+
+        await bound_skills.prepare_turn(turn)
+        await bound_resolver.prepare_turn(turn)
+
+        assert _tool_names(turn.tools) == ["read"]
 
     asyncio.run(scenario())
 

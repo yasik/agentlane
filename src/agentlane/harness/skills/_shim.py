@@ -77,11 +77,11 @@ class _BoundSkillsShim(BoundShim):
             turn.append_system_instruction(skills_prompt)
 
         turn.tools = merge_tools(turn.tools, (self._tool,))
-        turn.tools = _apply_active_skill_tool_filters(
+        turn.tools = apply_active_skill_tool_filters(
             tools=turn.tools,
             catalog=self._catalog,
             shim_state=turn.run_state.shim_state,
-            active_names_key=_active_names_key(self._shim_name),
+            active_names_key=active_skill_names_key(self._shim_name),
         )
 
     async def _activate_skill(
@@ -102,7 +102,7 @@ class _BoundSkillsShim(BoundShim):
             )
 
         shim_state = self._require_shim_state()
-        active_names_key = _active_names_key(self._shim_name)
+        active_names_key = active_skill_names_key(self._shim_name)
         if skill_name in _active_skill_names(
             shim_state=shim_state, key=active_names_key
         ):
@@ -187,7 +187,7 @@ class SkillsShim(Shim):
         """
         return _active_skill_names(
             shim_state=run_state.shim_state,
-            key=_active_names_key(self._name),
+            key=active_skill_names_key(self._name),
         )
 
     async def bind(self, context: ShimBindingContext) -> BoundShim:
@@ -251,7 +251,7 @@ def _build_activate_skill_tool(
     )
 
 
-def _active_names_key(shim_name: str) -> str:
+def active_skill_names_key(shim_name: str) -> str:
     """Return the persisted shim-state key for activated skill names.
 
     The key is the shim name followed by the public
@@ -285,7 +285,7 @@ def _already_active_message(skill_name: str) -> str:
     )
 
 
-def _apply_active_skill_tool_filters(
+def apply_active_skill_tool_filters(
     *,
     tools: Tools | None,
     catalog: SkillCatalog,

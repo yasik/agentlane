@@ -35,7 +35,7 @@ from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ..tools import HarnessToolDefinition
 from ._catalog import SkillCatalog
 from ._resolver import active_skill_roots, resolve_skill_relative_path
-from ._shim import SkillsShim
+from ._shim import SkillsShim, active_skill_names_key, apply_active_skill_tool_filters
 
 SKILL_PATH_PROMPT_GUIDANCE = (
     "When a skill is active, a relative resource path you pass to read, grep, or "
@@ -100,6 +100,7 @@ class SkillRelativePathShim(Shim):
                 rather than an executable tool.
         """
         self._name = name
+        self._catalog = catalog
         self._skill_roots = {manifest.name: manifest.root for manifest in catalog}
         # A name-only SkillsShim is used purely as the public accessor for the
         # paired shim's active-skill names; this reads the same documented
@@ -122,6 +123,8 @@ class SkillRelativePathShim(Shim):
         return _BoundSkillRelativePathShim(
             definitions=self._definitions,
             path_arg_fields=self._path_arg_fields,
+            catalog=self._catalog,
+            active_names_key=active_skill_names_key(self._active_names_reader.name),
             skill_roots=self._skill_roots,
             active_names_reader=self._active_names_reader,
         )
@@ -135,9 +138,13 @@ class _BoundSkillRelativePathShim(BoundShim):
         *,
         definitions: tuple[HarnessToolDefinition, ...],
         path_arg_fields: Mapping[str, str],
+        catalog: SkillCatalog,
+        active_names_key: str,
         skill_roots: Mapping[str, Path],
         active_names_reader: SkillsShim,
     ) -> None:
+        self._catalog = catalog
+        self._active_names_key = active_names_key
         self._skill_roots = skill_roots
         self._active_names_reader = active_names_reader
         self._run_state: RunState | None = None
@@ -166,6 +173,12 @@ class _BoundSkillRelativePathShim(BoundShim):
         self._run_state = turn.run_state
         tool_specs = tuple(definition.tool for definition in self._definitions)
         turn.tools = merge_tools(turn.tools, tool_specs)
+        turn.tools = apply_active_skill_tool_filters(
+            tools=turn.tools,
+            catalog=self._catalog,
+            shim_state=turn.run_state.shim_state,
+            active_names_key=self._active_names_key,
+        )
 
     def _active_skill_roots(self) -> tuple[Path, ...]:
         """Return resolved roots for the skills active in the current run.
