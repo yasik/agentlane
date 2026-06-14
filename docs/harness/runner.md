@@ -424,6 +424,12 @@ example a direct `tool.run(...)` call). The view is read-only; a tool that
 needs to persist state should do so through its own shim, never by mutating the
 run.
 
+The read-only boundary is enforced at the top-level `shim_state` mapping:
+inserting, replacing, or deleting keys through `context.run_state.shim_state`
+raises `TypeError`. Values stored under those keys are ordinary shim-owned
+objects. Shims that expose nested containers should expose immutable values when
+they need stronger protection.
+
 ## Agent-As-Tool
 
 Agent-as-tool uses the same model-facing pattern as any other tool: the model

@@ -349,6 +349,10 @@ These fields filter model exposure. The host application's sandbox,
 permissions, and approval callbacks still decide whether an exposed tool call
 is allowed to execute.
 
+`SkillRelativePathShim` preserves the same active-skill filter after it wraps
+base tools. A name listed in `disallowedTools` stays hidden from the model even
+when the resolver has rebuilt that tool with skill-relative path handling.
+
 ## State
 
 Activated skill names are persisted in `RunState.shim_state`.

@@ -204,6 +204,11 @@ equal `str(run_state.task_id)`, so per-run stores may be keyed by either field
 consistently. `RunStateView` is a read surface only; a tool that needs to
 persist state should do so through its own shim.
 
+The harness enforces that read surface at the top-level `shim_state` mapping:
+key insertions, replacements, and deletions through `run_state.shim_state` raise
+`TypeError`. Values under those keys are still the shim owner's objects, so shims
+should store immutable values when nested mutation would be unsafe.
+
 `RunStateView` is a structural protocol defined in the models layer; the
 harness supplies the concrete live implementation. A skills shim records active
 skill names under a `shim_state` key ending in
