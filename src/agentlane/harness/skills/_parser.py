@@ -31,7 +31,7 @@ class ParsedSkillFile:
 
 
 def parse_skill_file(path: Path) -> ParsedSkillFile | None:
-    """Parse one `SKILL.md` file into a manifest and instructions body."""
+    """Read and parse one `SKILL.md` file into a manifest and instructions body."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
@@ -42,10 +42,23 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
         )
         return None
 
+    return parse_skill_text(text, skill_file=path.resolve(), root=path.parent.resolve())
+
+
+def parse_skill_text(
+    text: str, *, skill_file: Path, root: Path
+) -> ParsedSkillFile | None:
+    """Parse `SKILL.md` text into a manifest and instructions body.
+
+    Holds the frontmatter parsing, validation, and manifest construction shared by every skill
+    source. The caller supplies the already-read `text` plus the `skill_file`/`root` paths recorded
+    on the manifest (neither is read from here), so a non-filesystem source can reuse the same
+    skill contract by reading its own bytes first. `parse_skill_file` is the filesystem caller.
+    """
     if _exceeds_file_size_limit(text):
         LOGGER.warning(
             "skipping oversized skill file",
-            skill_file=str(path),
+            skill_file=str(skill_file),
             max_lines=SKILL_MAX_FILE_LINES,
         )
         return None
@@ -54,7 +67,7 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
     if split_result is None:
         LOGGER.warning(
             "skipping skill file without parseable frontmatter",
-            skill_file=str(path),
+            skill_file=str(skill_file),
         )
         return None
 
@@ -65,7 +78,7 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
     except yaml.YAMLError as error:
         LOGGER.warning(
             "skipping skill file with invalid frontmatter YAML",
-            skill_file=str(path),
+            skill_file=str(skill_file),
             error=str(error),
         )
         return None
@@ -73,20 +86,18 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
     if not isinstance(raw_frontmatter, dict):
         LOGGER.warning(
             "skipping skill file with non-mapping frontmatter",
-            skill_file=str(path),
+            skill_file=str(skill_file),
             frontmatter_type=type(raw_frontmatter).__name__,
         )
         return None
 
     frontmatter = cast(dict[str, object], raw_frontmatter)
-    root = path.parent.resolve()
-    skill_file = path.resolve()
 
     name = _coerce_required_string(frontmatter, "name")
     if not name:
         LOGGER.warning(
             "skipping skill file with missing name",
-            skill_file=str(path),
+            skill_file=str(skill_file),
         )
         return None
 
@@ -94,7 +105,7 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
     if not description:
         LOGGER.warning(
             "skipping skill file with missing description",
-            skill_file=str(path),
+            skill_file=str(skill_file),
         )
         return None
 

@@ -30,7 +30,7 @@ from agentlane.harness.skills._constraints import (
     SKILL_MAX_DESCRIPTION_LENGTH,
     SKILL_MAX_FILE_LINES,
 )
-from agentlane.harness.skills._parser import parse_skill_file
+from agentlane.harness.skills._parser import parse_skill_file, parse_skill_text
 from agentlane.harness.skills._prompt import (
     SkillsSystemPromptContext,
     render_loaded_skill,
@@ -294,6 +294,40 @@ def test_parse_skill_file_returns_manifest_and_body(tmp_path: Path) -> None:
     assert parsed.instructions == (
         "# Refund Policy\n\nUse this skill for return-window questions."
     )
+
+
+def test_parse_skill_text_parses_provided_text_without_reading_disk() -> None:
+    skill_file = Path("/skills/refund-policy/SKILL.md")
+    text = (
+        "---\n"
+        "name: refund-policy\n"
+        "description: Explain the refund policy.\n"
+        "---\n\n"
+        "# Refund Policy\n\nUse this skill for return-window questions."
+    )
+
+    parsed = parse_skill_text(text, skill_file=skill_file, root=skill_file.parent)
+    if parsed is None:
+        raise AssertionError("Expected skill text to parse.")
+
+    assert parsed.manifest.name == "refund-policy"
+    assert parsed.manifest.description == "Explain the refund policy."
+    # The provided paths are recorded verbatim; parse_skill_text never touches the disk.
+    assert parsed.manifest.skill_file == skill_file
+    assert parsed.manifest.root == skill_file.parent
+    assert parsed.instructions == (
+        "# Refund Policy\n\nUse this skill for return-window questions."
+    )
+
+
+def test_parse_skill_text_returns_none_for_missing_frontmatter() -> None:
+    parsed = parse_skill_text(
+        "# Refund Policy\n",
+        skill_file=Path("/skills/refund-policy/SKILL.md"),
+        root=Path("/skills/refund-policy"),
+    )
+
+    assert parsed is None
 
 
 def test_parse_skill_file_normalizes_tool_filters(
