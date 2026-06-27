@@ -2,6 +2,8 @@
 
 from typing import Any, cast
 
+from openai.types.responses.response_reasoning_item import ResponseReasoningItem
+
 from agentlane.harness import RunResult
 from agentlane.models import Choice, Message, ModelResponse
 
@@ -67,3 +69,22 @@ def test_reasoning_returns_none_for_empty_responses() -> None:
     result = _result([])
 
     assert result.reasoning is None
+
+
+def test_reasoning_returns_present_payload_even_when_its_text_is_empty() -> None:
+    """A latest reasoning payload that renders to empty text is still returned."""
+    latest = _response(None)
+    # A structured reasoning item can carry encrypted content but render to empty
+    # text, so it is falsy yet present; it must still win over an earlier turn.
+    cast(Any, latest).reasoning_content = ResponseReasoningItem(
+        id="rs_1",
+        summary=[],
+        type="reasoning",
+        encrypted_content="opaque",
+    )
+    result = _result([_response("earlier reasoning"), latest])
+
+    reasoning = result.reasoning
+
+    assert reasoning is not None
+    assert str(reasoning) == ""

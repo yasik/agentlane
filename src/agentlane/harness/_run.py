@@ -153,10 +153,14 @@ class RunResult:
         carries no reasoning, so this scans ``responses`` in reverse and returns the
         last one that does. Reading ``responses[-1]`` alone would drop reasoning
         emitted on an earlier turn (for example, before a tool or skill turn).
+
+        A reasoning payload is returned even when it has no readable text (for
+        example, an encrypted thinking trace with an empty summary). Only a response
+        that carries no reasoning payload at all is passed over.
         """
         for response in reversed(self.responses):
             reasoning = get_reasoning_content_or_none(response)
-            if reasoning:
+            if reasoning is not None:
                 return reasoning
         return None
 
