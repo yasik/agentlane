@@ -12,7 +12,14 @@ from typing import Any, cast
 from pydantic import BaseModel
 
 from agentlane.messaging import AgentId
-from agentlane.models import MessageDict, ModelResponse, PromptSpec, RunStateView
+from agentlane.models import (
+    MessageDict,
+    ModelResponse,
+    PromptSpec,
+    ReasoningContent,
+    RunStateView,
+    get_reasoning_content_or_none,
+)
 from agentlane.models.run import DefaultRunContext
 
 ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX = ":active-skill-names"
@@ -137,6 +144,21 @@ class RunResult:
 
     run_state: RunState | None = None
     """Final resumable run state for this completed run when available."""
+
+    @property
+    def reasoning(self) -> ReasoningContent | None:
+        """Reasoning from the most recent response that carries it.
+
+        The terminal turn is often a tool call or a structured-output emission that
+        carries no reasoning, so this scans ``responses`` in reverse and returns the
+        last one that does. Reading ``responses[-1]`` alone would drop reasoning
+        emitted on an earlier turn (for example, before a tool or skill turn).
+        """
+        for response in reversed(self.responses):
+            reasoning = get_reasoning_content_or_none(response)
+            if reasoning:
+                return reasoning
+        return None
 
 
 def copy_run_state(run_state: RunState | None) -> RunState | None:

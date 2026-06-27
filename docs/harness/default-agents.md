@@ -141,6 +141,11 @@ result = await agent.run("I feel dizzy after starting a new medication.")
 print(result.final_output)
 ```
 
+`result.reasoning` returns the reasoning from the most recent response that
+carries it. The terminal turn is often a tool call or structured-output
+emission with no reasoning, so this scans `responses` in reverse rather than
+reading `responses[-1]`, which would drop reasoning emitted on an earlier turn.
+
 ## Runtime Behavior
 
 If no runtime is supplied:

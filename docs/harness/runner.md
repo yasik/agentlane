@@ -345,7 +345,9 @@ or use an async HTTP client whose request future the token can cancel.
 
 [`RunResult`](../../src/agentlane/harness/_run.py) records what came out of the
 loop. Its fields are `final_output`, `responses`, `turn_count`, and an optional
-`run_state`.
+`run_state`. The `reasoning` property derives the latest reasoning from
+`responses`, scanning in reverse so a final tool or structured-output turn that
+carries none does not mask reasoning emitted on an earlier turn.
 
 [`RunState`](../../src/agentlane/harness/_run.py) is the resumable shape. It
 holds `instructions`, `history`, `responses`, persisted `shim_state`
