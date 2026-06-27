@@ -1,104 +1,193 @@
-"""Default filesystem-backed skill loader."""
+"""Default skill loader over a pluggable `SkillFilesystem`."""
 
 from collections.abc import Sequence
-from pathlib import Path
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 
 from ._discovery import default_skill_roots
+from ._filesystem import LocalSkillFilesystem, SkillFilesystem
 from ._loader import SkillLoader
-from ._parser import ParsedSkillFile, parse_skill_file
+from ._parser import ParsedSkillFile, parse_skill_text
 from ._types import LoadedSkill, SkillManifest, SkillResource
+
+_SKILL_FILE = "SKILL.md"
+_PREFERRED_RESOURCE_DIRECTORIES = {
+    "scripts": 0,
+    "references": 1,
+    "assets": 2,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _DiscoveredSkill:
+    """One parsed skill plus the filesystem location it was discovered under."""
+
+    root: str
+    """Root the skill was discovered under, addressed by the filesystem."""
+
+    skill_dir: str
+    """Skill directory relative to its root."""
+
+    parsed: ParsedSkillFile
+    """Parsed manifest and instructions body."""
 
 
 class FilesystemSkillLoader(SkillLoader):
-    """Default filesystem-backed implementation of `SkillLoader`."""
+    """Discover and load skills from a `SkillFilesystem`, across ordered roots.
+
+    Storage is pluggable through `filesystem`; the discovery, parsing policy,
+    first-wins de-duplication, and resource ordering are identical regardless of
+    where the skills live. The default `LocalSkillFilesystem` reads the local
+    disk, so omitting `filesystem` preserves the previous local-only behavior.
+    """
 
     def __init__(
         self,
         *,
         roots: Sequence[str | Path] | None = None,
         include_default_roots: bool = True,
+        filesystem: SkillFilesystem | None = None,
     ) -> None:
-        self._roots = _resolve_roots(
-            roots=roots,
-            include_default_roots=include_default_roots,
-        )
-        self._parsed_by_name: dict[str, ParsedSkillFile] = {}
+        """Initialize the loader.
+
+        Args:
+            roots: Roots to search, in precedence order (an earlier root wins on
+                a name clash). For the default local filesystem these are local
+                directories normalized to absolute paths; for a custom
+                filesystem they are that store's opaque root identifiers.
+            include_default_roots: Whether to also search the standard local
+                skill roots (`./.agents/skills`, `~/.agents/skills`). Only the
+                default local filesystem has standard roots, so this is ignored
+                when a custom `filesystem` is supplied.
+            filesystem: Storage the skills are read from. Defaults to
+                `LocalSkillFilesystem`, which reads the local disk.
+        """
+        if filesystem is None:
+            self._fs: SkillFilesystem = LocalSkillFilesystem()
+            self._roots = tuple(
+                str(root)
+                for root in _resolve_local_roots(
+                    roots=roots,
+                    include_default_roots=include_default_roots,
+                )
+            )
+        else:
+            self._fs = filesystem
+            self._roots = tuple(str(root) for root in roots or ())
+        self._discovered_by_name: dict[str, _DiscoveredSkill] = {}
 
     async def discover(self) -> Sequence[SkillManifest]:
-        """Discover valid skills from the configured filesystem roots."""
+        """Discover valid skills across all roots, in precedence order."""
+        discovered: dict[str, _DiscoveredSkill] = {}
         manifests: list[SkillManifest] = []
-        parsed_by_name: dict[str, ParsedSkillFile] = {}
 
         for root in self._roots:
-            if not root.exists() or not root.is_dir():
+            try:
+                entries = await self._fs.list_dir(root, "")
+            except (FileNotFoundError, NotADirectoryError):
                 continue
 
-            for child in sorted(root.iterdir(), key=lambda path: path.name):
-                if not child.is_dir():
+            for entry in sorted(entries, key=lambda item: item.name):
+                if not entry.is_dir:
                     continue
 
-                skill_file = child / "SKILL.md"
-                if not skill_file.is_file():
-                    continue
-
-                parsed = parse_skill_file(skill_file)
+                parsed = await self._parse_skill(root, entry.name)
                 if parsed is None:
                     continue
 
-                if parsed.manifest.name in parsed_by_name:
+                if parsed.manifest.name in discovered:
                     continue
 
-                parsed_by_name[parsed.manifest.name] = parsed
+                discovered[parsed.manifest.name] = _DiscoveredSkill(
+                    root=root,
+                    skill_dir=entry.name,
+                    parsed=parsed,
+                )
                 manifests.append(parsed.manifest)
 
-        self._parsed_by_name = parsed_by_name
+        self._discovered_by_name = discovered
         return tuple(manifests)
 
     async def load(self, name: str) -> LoadedSkill:
-        """Load one discovered skill by name."""
-        cached = self._parsed_by_name.get(name)
-        if cached is not None:
-            return LoadedSkill(
-                manifest=cached.manifest,
-                instructions=cached.instructions,
-                resources=_list_skill_resources(cached.manifest.root),
-            )
+        """Load one discovered skill by name, enumerating its bundled resources."""
+        if name not in self._discovered_by_name:
+            await self.discover()
 
-        # Fallback scan for skills loaded without a prior discover() call.
-        for root in self._roots:
-            if not root.exists() or not root.is_dir():
-                continue
+        discovered = self._discovered_by_name.get(name)
+        if discovered is None:
+            raise KeyError(name)
 
-            for child in sorted(root.iterdir(), key=lambda path: path.name):
-                if not child.is_dir():
-                    continue
+        return LoadedSkill(
+            manifest=discovered.parsed.manifest,
+            instructions=discovered.parsed.instructions,
+            resources=await self._list_resources(
+                discovered.root,
+                discovered.skill_dir,
+            ),
+        )
 
-                skill_file = child / "SKILL.md"
-                if not skill_file.is_file():
-                    continue
+    async def _parse_skill(self, root: str, skill_dir: str) -> ParsedSkillFile | None:
+        """Read and parse one `SKILL.md`, skipping unreadable or invalid files."""
+        try:
+            raw = await self._fs.read_bytes(root, f"{skill_dir}/{_SKILL_FILE}")
+        except (FileNotFoundError, IsADirectoryError):
+            return None
 
-                parsed = parse_skill_file(skill_file)
-                if parsed is None:
-                    continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
 
-                if parsed.manifest.name != name:
-                    continue
+        skill_root = Path(root) / skill_dir
+        return parse_skill_text(
+            text,
+            skill_file=skill_root / _SKILL_FILE,
+            root=skill_root,
+        )
 
-                return LoadedSkill(
-                    manifest=parsed.manifest,
-                    instructions=parsed.instructions,
-                    resources=_list_skill_resources(parsed.manifest.root),
-                )
+    async def _list_resources(
+        self, root: str, skill_dir: str
+    ) -> tuple[SkillResource, ...]:
+        """Enumerate bundled skill resources lazily on activation."""
+        relative_paths: list[str] = []
+        await self._collect_files(root, skill_dir, "", relative_paths)
+        resources = [path for path in relative_paths if path != _SKILL_FILE]
+        return tuple(
+            SkillResource(path=path)
+            for path in sorted(resources, key=_resource_sort_key)
+        )
 
-        raise KeyError(name)
+    async def _collect_files(
+        self, root: str, skill_dir: str, sub_path: str, found: list[str]
+    ) -> None:
+        """Walk one skill subtree, appending file paths relative to the skill directory."""
+        listing = f"{skill_dir}/{sub_path}" if sub_path else skill_dir
+        for entry in await self._fs.list_dir(root, listing):
+            relative = f"{sub_path}/{entry.name}" if sub_path else entry.name
+            if entry.is_dir:
+                await self._collect_files(root, skill_dir, relative, found)
+            else:
+                found.append(relative)
 
 
-def _resolve_roots(
+def _resource_sort_key(path: str) -> tuple[int, str]:
+    """Order resources by preferred top-level directory, then path."""
+    parts = PurePosixPath(path).parts
+    top_level_directory = parts[0] if parts else ""
+    return (
+        _PREFERRED_RESOURCE_DIRECTORIES.get(
+            top_level_directory, len(_PREFERRED_RESOURCE_DIRECTORIES)
+        ),
+        path,
+    )
+
+
+def _resolve_local_roots(
     *,
     roots: Sequence[str | Path] | None,
     include_default_roots: bool,
 ) -> tuple[Path, ...]:
-    """Normalize configured and default skill roots to absolute paths."""
+    """Normalize configured and default local skill roots to absolute paths."""
     resolved_roots: list[Path] = []
     seen: set[Path] = set()
 
@@ -119,27 +208,3 @@ def _resolve_roots(
             resolved_roots.append(root)
 
     return tuple(resolved_roots)
-
-
-def _list_skill_resources(root: Path) -> tuple[SkillResource, ...]:
-    """Enumerate bundled skill resources lazily on activation."""
-    preferred_directories = {
-        "scripts": 0,
-        "references": 1,
-        "assets": 2,
-    }
-    skill_file = root / "SKILL.md"
-    files = [path for path in root.rglob("*") if path.is_file() and path != skill_file]
-
-    def sort_key(path: Path) -> tuple[int, str]:
-        relative_path = path.relative_to(root)
-        top_level_directory = relative_path.parts[0] if relative_path.parts else ""
-        return (
-            preferred_directories.get(top_level_directory, len(preferred_directories)),
-            relative_path.as_posix(),
-        )
-
-    return tuple(
-        SkillResource(path=path.relative_to(root).as_posix())
-        for path in sorted(files, key=sort_key)
-    )

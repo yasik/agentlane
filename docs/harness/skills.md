@@ -14,14 +14,18 @@ from agentlane.harness.skills import (
     DEFAULT_SKILLS_SYSTEM_PROMPT,
     FilesystemSkillLoader,
     LoadedSkill,
+    LocalSkillFilesystem,
     SKILL_PATH_PROMPT_GUIDANCE,
     SkillCatalog,
+    SkillFilesystem,
+    SkillFilesystemEntry,
     SkillLoader,
     SkillManifest,
     SkillRelativePathShim,
     SkillResource,
     SkillsShim,
     discover_skill_catalog,
+    filesystem_read_tool,
     resolve_skill_relative_path,
     SKILL_MAX_COMPATIBILITY_LENGTH,
     SKILL_MAX_DESCRIPTION_LENGTH,
@@ -263,6 +267,33 @@ Or let it include the standard local roots:
 Discovered `SKILL.md` files are normalized to absolute paths. Activated skill
 payloads expose resource file paths relative to the skill directory so the
 model can resolve them against the emitted `Skill directory: ...` line.
+
+### Pluggable Storage
+
+`FilesystemSkillLoader` reads its skills through a `SkillFilesystem` — a small
+storage seam exposing `read_bytes(root, path)` and `list_dir(root, path)`. The
+default is `LocalSkillFilesystem`, which reads the local disk, so omitting
+`filesystem` keeps the local-only behavior above unchanged. Supplying one points
+the same discovery, parsing policy, first-wins de-duplication, and resource
+ordering at any path-based store (a remote repository, an object store):
+
+```python
+loader = FilesystemSkillLoader(
+    roots=("practitioner", "shared"),
+    filesystem=my_filesystem,
+)
+```
+
+For a custom filesystem, `roots` are that store's own root identifiers, searched
+in precedence order (an earlier root wins on a name clash); `include_default_roots`
+applies only to the default local filesystem, which is the only one with standard
+roots.
+
+A custom filesystem's resources are not on the local disk, so the disk-based
+`SkillRelativePathShim` cannot reach them. Pair the loader with
+`filesystem_read_tool(filesystem, roots)` instead: it reads a skill resource by
+the root-relative path the model builds from the `Skill directory: ...` line,
+trying each root in order and rejecting absolute paths and `..` traversal.
 
 ### Filesystem Parsing Policy
 
