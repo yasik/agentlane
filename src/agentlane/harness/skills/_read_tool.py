@@ -4,8 +4,10 @@ The first-party `read` tool reads the local disk. When skills live on a custom
 `SkillFilesystem` (a remote repository, an object store), their bundled
 resources are not on disk, so this tool reads them through the same filesystem
 the loader uses. The model joins the `Skill directory: ...` line from an
-activated skill with a listed resource path and passes the result here; the tool
-reads that root-relative path from the first root that has it.
+activated skill with a listed resource path and passes the result here. The
+loader records a skill's directory as ``<root>/<skill dir>``, so that path's
+leading segment names the root the skill was discovered under; the tool reads
+the remaining path from that root and rejects roots it was not configured with.
 """
 
 from collections.abc import Sequence
@@ -38,8 +40,8 @@ class _ToolArgs(BaseModel):
 
     path: str = Field(
         description=(
-            "Root-relative path of a skill resource: the skill directory shown "
-            "when the skill activated, joined with a listed resource path."
+            "Path of a skill resource: the skill directory shown when the skill "
+            "activated, joined with a listed resource path."
         )
     )
     offset: int | None = Field(
@@ -63,14 +65,14 @@ def filesystem_read_tool(
 
     Args:
         filesystem: Storage the skill resources are read from.
-        roots: Roots to search, in precedence order (an earlier root wins). Match
-            the roots a `FilesystemSkillLoader` discovers from so the model can
-            read any resource it was shown.
+        roots: Allowed roots, addressed by a path's leading segment. Match the
+            roots a `FilesystemSkillLoader` discovers from so the model can read
+            any resource it was shown, and no path outside them.
 
     Returns:
         HarnessToolDefinition: Executable read tool with prompt metadata.
     """
-    search_roots = tuple(roots)
+    allowed_roots = tuple(roots)
 
     async def run_read(
         args: _ToolArgs,
@@ -91,7 +93,7 @@ def filesystem_read_tool(
 
         return await _read_resource(
             filesystem,
-            roots=search_roots,
+            roots=allowed_roots,
             path=normalized,
             offset=args.offset or 1,
             limit=args.limit,
@@ -117,18 +119,17 @@ async def _read_resource(
     offset: int,
     limit: int | None,
 ) -> str:
-    """Read one resource across the roots and render a plain-text tool result."""
-    data: bytes | None = None
-    for root in roots:
-        try:
-            data = await filesystem.read_bytes(root, path)
-            break
-        except FileNotFoundError:
-            continue
-        except IsADirectoryError:
-            return f"path is a directory: `{path}`"
-    if data is None:
+    """Read one resource, selecting its root from the path's leading segment."""
+    root, _, in_root_path = path.partition("/")
+    if root not in roots or not in_root_path:
         return f"file not found: `{path}`"
+
+    try:
+        data = await filesystem.read_bytes(root, in_root_path)
+    except FileNotFoundError:
+        return f"file not found: `{path}`"
+    except IsADirectoryError:
+        return f"path is a directory: `{path}`"
 
     if b"\x00" in data[:_BINARY_SAMPLE_BYTES]:
         return f"file appears to be binary and cannot be read as text: `{path}`"

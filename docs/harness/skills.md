@@ -279,7 +279,7 @@ ordering at any path-based store (a remote repository, an object store):
 
 ```python
 loader = FilesystemSkillLoader(
-    roots=("practitioner", "shared"),
+    roots=("primary", "fallback"),
     filesystem=my_filesystem,
 )
 ```

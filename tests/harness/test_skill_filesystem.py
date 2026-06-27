@@ -107,7 +107,7 @@ def test_filesystem_skill_loader_over_custom_filesystem_discovers_and_loads() ->
     """The loader discovers and loads skills, with resource ordering preserved."""
     filesystem = _InMemoryFilesystem(
         {
-            "practitioner": {
+            "primary": {
                 "refund-policy/SKILL.md": _skill_bytes(
                     "refund-policy",
                     "Handle refunds.",
@@ -119,14 +119,14 @@ def test_filesystem_skill_loader_over_custom_filesystem_discovers_and_loads() ->
             },
         }
     )
-    loader = FilesystemSkillLoader(roots=("practitioner",), filesystem=filesystem)
+    loader = FilesystemSkillLoader(roots=("primary",), filesystem=filesystem)
 
     async def scenario() -> None:
         manifests = await loader.discover()
         assert [manifest.name for manifest in manifests] == ["refund-policy"]
 
         loaded = await loader.load("refund-policy")
-        assert loaded.manifest.root == Path("practitioner/refund-policy")
+        assert loaded.manifest.root == Path("primary/refund-policy")
         assert loaded.instructions == "# Refund Policy"
         assert loaded.resources == (
             SkillResource(path="scripts/run.py"),
@@ -141,29 +141,27 @@ def test_filesystem_skill_loader_first_root_wins_on_name_clash() -> None:
     """An earlier root keeps a clashing skill name over a later root."""
     filesystem = _InMemoryFilesystem(
         {
-            "practitioner": {
+            "primary": {
                 "refund-policy/SKILL.md": _skill_bytes(
-                    "refund-policy", "Practitioner copy.", body="# Practitioner"
+                    "refund-policy", "Primary copy.", body="# Primary"
                 ),
             },
-            "shared": {
+            "fallback": {
                 "refund-policy/SKILL.md": _skill_bytes(
-                    "refund-policy", "Shared copy.", body="# Shared"
+                    "refund-policy", "Fallback copy.", body="# Fallback"
                 ),
             },
         }
     )
-    loader = FilesystemSkillLoader(
-        roots=("practitioner", "shared"), filesystem=filesystem
-    )
+    loader = FilesystemSkillLoader(roots=("primary", "fallback"), filesystem=filesystem)
 
     async def scenario() -> None:
         manifests = await loader.discover()
         assert [manifest.name for manifest in manifests] == ["refund-policy"]
 
         loaded = await loader.load("refund-policy")
-        assert loaded.instructions == "# Practitioner"
-        assert loaded.manifest.root == Path("practitioner/refund-policy")
+        assert loaded.instructions == "# Primary"
+        assert loaded.manifest.root == Path("primary/refund-policy")
 
     asyncio.run(scenario())
 
@@ -172,13 +170,13 @@ def test_filesystem_skill_loader_skips_malformed_skill_over_custom_filesystem() 
     """A skill whose frontmatter is invalid is skipped, not raised."""
     filesystem = _InMemoryFilesystem(
         {
-            "shared": {
+            "primary": {
                 "broken/SKILL.md": b"---\ndescription: missing name\n---\n\nBroken",
                 "valid/SKILL.md": _skill_bytes("valid", "Valid skill.", body="# Valid"),
             },
         }
     )
-    loader = FilesystemSkillLoader(roots=("shared",), filesystem=filesystem)
+    loader = FilesystemSkillLoader(roots=("primary",), filesystem=filesystem)
 
     async def scenario() -> None:
         manifests = await loader.discover()
@@ -187,17 +185,19 @@ def test_filesystem_skill_loader_skips_malformed_skill_over_custom_filesystem() 
     asyncio.run(scenario())
 
 
-def test_filesystem_read_tool_reads_resource_from_matching_root() -> None:
-    """The read tool returns the first root that has the resource."""
+def test_filesystem_read_tool_reads_resource_under_its_root() -> None:
+    """The leading path segment names the root the resource is read from."""
     filesystem = _InMemoryFilesystem(
         {
-            "practitioner": {},
-            "shared": {"refund-policy/references/policy.md": b"line1\nline2\nline3\n"},
+            "primary": {},
+            "fallback": {
+                "refund-policy/references/policy.md": b"line1\nline2\nline3\n"
+            },
         }
     )
-    tool = filesystem_read_tool(filesystem, roots=("practitioner", "shared"))
+    tool = filesystem_read_tool(filesystem, roots=("primary", "fallback"))
 
-    result = run_tool(tool, path="refund-policy/references/policy.md")
+    result = run_tool(tool, path="fallback/refund-policy/references/policy.md")
 
     assert result == "line1\nline2\nline3"
 
@@ -205,10 +205,10 @@ def test_filesystem_read_tool_reads_resource_from_matching_root() -> None:
 def test_filesystem_read_tool_windows_with_offset_and_limit() -> None:
     """Offset and limit return a bounded window with a continuation note."""
     content = "\n".join(f"line{number}" for number in range(1, 6)) + "\n"
-    filesystem = _InMemoryFilesystem({"shared": {"doc.md": content.encode("utf-8")}})
-    tool = filesystem_read_tool(filesystem, roots=("shared",))
+    filesystem = _InMemoryFilesystem({"primary": {"doc.md": content.encode("utf-8")}})
+    tool = filesystem_read_tool(filesystem, roots=("primary",))
 
-    result = run_tool(tool, path="doc.md", offset=2, limit=2)
+    result = run_tool(tool, path="primary/doc.md", offset=2, limit=2)
 
     assert result == "line2\nline3\n\n[Showing lines 2-3. Use offset=4 to continue.]"
 
@@ -217,38 +217,45 @@ def test_filesystem_read_tool_reports_missing_directory_and_binary() -> None:
     """Missing files, directories, and binary content each return a tool error."""
     filesystem = _InMemoryFilesystem(
         {
-            "shared": {
+            "primary": {
                 "dir/inner.txt": b"x",
                 "bin.dat": b"\x00\x01\x02",
                 "ok.txt": b"hi",
             },
         }
     )
-    tool = filesystem_read_tool(filesystem, roots=("shared",))
+    tool = filesystem_read_tool(filesystem, roots=("primary",))
 
-    assert run_tool(tool, path="missing.txt") == "file not found: `missing.txt`"
-    assert run_tool(tool, path="dir") == "path is a directory: `dir`"
     assert (
-        run_tool(tool, path="bin.dat")
-        == "file appears to be binary and cannot be read as text: `bin.dat`"
+        run_tool(tool, path="primary/missing.txt")
+        == "file not found: `primary/missing.txt`"
+    )
+    assert run_tool(tool, path="primary/dir") == "path is a directory: `primary/dir`"
+    assert (
+        run_tool(tool, path="primary/bin.dat")
+        == "file appears to be binary and cannot be read as text: `primary/bin.dat`"
     )
 
 
-def test_filesystem_read_tool_rejects_unsafe_and_invalid_arguments() -> None:
-    """Absolute paths, traversal, empty paths, and bad windows are rejected."""
-    filesystem = _InMemoryFilesystem({"shared": {"ok.txt": b"hi"}})
-    tool = filesystem_read_tool(filesystem, roots=("shared",))
+def test_filesystem_read_tool_rejects_unknown_root_and_unsafe_arguments() -> None:
+    """Unconfigured roots, absolute paths, traversal, and bad windows are rejected."""
+    filesystem = _InMemoryFilesystem({"primary": {"ok.txt": b"hi"}})
+    tool = filesystem_read_tool(filesystem, roots=("primary",))
 
+    assert run_tool(tool, path="other/ok.txt") == "file not found: `other/ok.txt`"
     assert (
         run_tool(tool, path="/etc/passwd")
         == "path is not a valid skill-relative path: `/etc/passwd`"
     )
     assert (
-        run_tool(tool, path="../secrets")
-        == "path is not a valid skill-relative path: `../secrets`"
+        run_tool(tool, path="primary/../secrets")
+        == "path is not a valid skill-relative path: `primary/../secrets`"
     )
     assert run_tool(tool, path="   ") == "path must not be empty"
-    assert run_tool(tool, path="ok.txt", offset=0) == (
+    assert run_tool(tool, path="primary/ok.txt", offset=0) == (
         "offset must be a 1-indexed line number"
     )
-    assert run_tool(tool, path="ok.txt", limit=0) == "limit must be greater than zero"
+    assert (
+        run_tool(tool, path="primary/ok.txt", limit=0)
+        == "limit must be greater than zero"
+    )
