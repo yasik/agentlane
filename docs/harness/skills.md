@@ -291,9 +291,10 @@ roots.
 
 A custom filesystem's resources are not on the local disk, so the disk-based
 `SkillRelativePathShim` cannot reach them. Pair the loader with
-`filesystem_read_tool(filesystem, roots)` instead: it reads a skill resource by
-the root-relative path the model builds from the `Skill directory: ...` line,
-trying each root in order and rejecting absolute paths and `..` traversal.
+`filesystem_read_tool(filesystem, roots)` instead: the model joins the
+`Skill directory: ...` line (recorded as `<root>/<skill dir>`) with a resource
+path, and the tool strips the configured root that prefixes it, reads the
+remainder from that root, and rejects absolute paths and `..` traversal.
 
 ### Filesystem Parsing Policy
 

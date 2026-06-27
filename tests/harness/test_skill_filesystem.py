@@ -202,6 +202,18 @@ def test_filesystem_read_tool_reads_resource_under_its_root() -> None:
     assert result == "line1\nline2\nline3"
 
 
+def test_filesystem_read_tool_matches_path_like_roots() -> None:
+    """A root that itself contains '/' is matched as a whole prefix, not one segment."""
+    filesystem = _InMemoryFilesystem(
+        {"org/repo": {"refund-policy/references/policy.md": b"hello"}}
+    )
+    tool = filesystem_read_tool(filesystem, roots=("org/repo",))
+
+    result = run_tool(tool, path="org/repo/refund-policy/references/policy.md")
+
+    assert result == "hello"
+
+
 def test_filesystem_read_tool_windows_with_offset_and_limit() -> None:
     """Offset and limit return a bounded window with a continuation note."""
     content = "\n".join(f"line{number}" for number in range(1, 6)) + "\n"
