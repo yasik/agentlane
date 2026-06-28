@@ -1,11 +1,14 @@
 """Tests for response utility functions."""
 
-from typing import Any
+from typing import Any, cast
+
+from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 
 from agentlane.models import (
     Choice,
     Message,
     ModelResponse,
+    get_latest_reasoning_content_or_none,
     has_escape_sequence_explosion,
     parse_content_filter_block,
 )
@@ -26,6 +29,54 @@ def _make_response(content: str) -> ModelResponse:
         model="test",
         object="chat.completion",
     )
+
+
+def _make_response_with_reasoning(
+    reasoning: str | ResponseReasoningItem | None,
+) -> ModelResponse:
+    """Build a minimal ModelResponse, optionally carrying reasoning content."""
+    response = _make_response("done")
+    if reasoning is not None:
+        cast(Any, response).reasoning_content = reasoning
+    return response
+
+
+def test_get_latest_reasoning_content_prefers_most_recent_present_payload() -> None:
+    responses = [
+        _make_response_with_reasoning("earlier"),
+        _make_response_with_reasoning("later"),
+        _make_response_with_reasoning(None),
+    ]
+
+    reasoning = get_latest_reasoning_content_or_none(responses)
+
+    assert reasoning is not None
+    assert str(reasoning) == "later"
+
+
+def test_get_latest_reasoning_content_returns_none_when_no_reasoning_exists() -> None:
+    assert get_latest_reasoning_content_or_none([]) is None
+    assert get_latest_reasoning_content_or_none(
+        [_make_response_with_reasoning(None), _make_response_with_reasoning(None)]
+    ) is None
+
+
+def test_get_latest_reasoning_content_keeps_empty_text_structured_payload() -> None:
+    reasoning_item = ResponseReasoningItem(
+        id="rs_1",
+        summary=[],
+        type="reasoning",
+        encrypted_content="opaque",
+    )
+    responses = [
+        _make_response_with_reasoning("earlier reasoning"),
+        _make_response_with_reasoning(reasoning_item),
+    ]
+
+    reasoning = get_latest_reasoning_content_or_none(responses)
+
+    assert reasoning is not None
+    assert str(reasoning) == ""
 
 
 def test_has_escape_sequence_explosion_returns_false_for_normal_text() -> None:

@@ -2,6 +2,7 @@
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from typing import Any
 
 from openai.types.responses.response_reasoning_item import ResponseReasoningItem
@@ -249,6 +250,17 @@ def get_reasoning_content_or_none(
     if raw is not None:
         return ReasoningContent(raw)
 
+    return None
+
+
+def get_latest_reasoning_content_or_none(
+    responses: Sequence[ModelResponse],
+) -> ReasoningContent | None:
+    """Get reasoning content from the latest response that carries it."""
+    for response in reversed(responses):
+        reasoning = get_reasoning_content_or_none(response)
+        if reasoning is not None:
+            return reasoning
     return None
 
 

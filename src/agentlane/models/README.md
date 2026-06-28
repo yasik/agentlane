@@ -101,7 +101,9 @@ Rate limiters:
 
 Response utilities:
 
-- `get_content_or_none`, `get_json_dict_or_none`, `get_reasoning_content_or_none`, `get_search_results_or_none` — safe extraction helpers over a `ModelResponse`.
+- `get_content_or_none`, `get_json_dict_or_none`,
+  `get_reasoning_content_or_none`, `get_latest_reasoning_content_or_none`,
+  `get_search_results_or_none` — safe extraction helpers over model responses.
 - `has_escape_sequence_explosion`, `parse_content_filter_block`, `parse_json_dict`, `ReasoningContent`, `ResponseReasoningItem` — content-quality checks, content-filter parsing, JSON repair, and reasoning payload types.
 
 Exceptions:
