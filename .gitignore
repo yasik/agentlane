@@ -36,8 +36,3 @@ src/agentlane/harness/memory
 
 # AI
 .superset
-
-# model validation local artifacts
-model_validation/secrets.env
-model_validation/results/
-model_validation/perf_results/
