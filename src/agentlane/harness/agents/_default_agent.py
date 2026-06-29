@@ -7,10 +7,13 @@ branch execution on top of the runtime-facing harness ``Agent``.
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
-from typing import TYPE_CHECKING
+from dataclasses import replace
+from pathlib import Path
+from typing import TYPE_CHECKING, Self
 from uuid import uuid4
 
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
+from agentlane.models import Model, ModelResponse
 from agentlane.runtime import (
     CancellationToken,
     RuntimeEngine,
@@ -28,6 +31,12 @@ from .._runner import Runner
 from .._stream import RunStream
 from .._stream_base import close_stream_callback
 from ._base import AgentBase
+from .definitions import (
+    AgentFileError,
+    ModelResolver,
+    SubagentLink,
+    descriptor_from_markdown,
+)
 
 if TYPE_CHECKING:
     from ..tools import ToolApprovalEvent
@@ -94,6 +103,75 @@ class DefaultAgent(AgentBase):
         #
         # The full-run lock is intentional for one stateful agent instance.
         self._run_lock = asyncio.Lock()
+
+    @classmethod
+    def from_markdown(
+        cls,
+        path: str | Path,
+        *,
+        model_resolver: ModelResolver | None = None,
+        model: Model[ModelResponse] | None = None,
+        subagent_link: SubagentLink = SubagentLink.AS_TOOL,
+        subagents: Sequence[AgentDescriptor | str | Path] = (),
+        runtime: RuntimeEngine | None = None,
+        runner: Runner | None = None,
+        hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
+        agent_id: AgentId | None = None,
+        run_state: RunState | None = None,
+    ) -> Self:
+        """Build a runnable agent from a Claude-Code-style markdown file.
+
+        Parses `path` into a descriptor (attaching any `subagents`) and
+        constructs a `DefaultAgent`. The root agent must resolve to a model: it
+        comes from the explicit `model` argument, or from the frontmatter `model`
+        spec via `model_resolver`. If neither yields a model, this raises — an
+        agent cannot run without one. Sub-agents may omit a model to inherit the
+        parent's at runtime.
+
+        Args:
+            path: Path to the `AGENT.md` file.
+            model_resolver: Optional resolver for the frontmatter `model` spec.
+            model: Optional pre-built client; supplies or overrides the root model.
+            subagent_link: How resolved sub-agents attach; defaults to as-tool.
+            subagents: Child descriptors or paths to attach as sub-agents.
+            runtime: Optional runtime to reuse across runs.
+            runner: Optional runner to reuse across runs.
+            hooks: Optional runner hook or ordered hook list.
+            agent_id: Optional stable runtime id override.
+            run_state: Optional initial resumable state.
+
+        Returns:
+            DefaultAgent: A runnable agent bound to the parsed descriptor.
+
+        Raises:
+            FileNotFoundError: When `path` or a sub-agent path does not exist.
+            AgentFileError: When a file is unparseable, sub-agent nesting is too
+                deep or cyclic, or the root agent resolves to no model.
+        """
+        descriptor = descriptor_from_markdown(
+            path,
+            model_resolver=model_resolver,
+            subagent_link=subagent_link,
+            subagents=subagents,
+        )
+
+        if model is not None:
+            descriptor = replace(descriptor, model=model)
+
+        if descriptor.model is None:
+            raise AgentFileError(
+                f"agent file `{path}` does not resolve to a model; a top-level "
+                "agent cannot run without one. Declare a `model:` and pass "
+                "`model_resolver=`, or pass `model=`."
+            )
+        return cls(
+            descriptor=descriptor,
+            runtime=runtime,
+            runner=runner,
+            hooks=hooks,
+            agent_id=agent_id,
+            run_state=run_state,
+        )
 
     @property
     def resolved_descriptor(self) -> AgentDescriptor:

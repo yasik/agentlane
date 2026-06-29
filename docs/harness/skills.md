@@ -277,11 +277,11 @@ It skips a skill entirely when:
 5. `description` is missing or empty,
 6. the file exceeds `SKILL_MAX_FILE_LINES`.
 
-It logs a warning and continues for softer issues such as:
+It silently tolerates softer issues, keeping the skill:
 
-1. name-spec drift,
-2. oversized `description` or `compatibility` values,
-3. non-mapping metadata,
+1. name-spec drift (a non-compliant or directory-mismatched name is kept as-is),
+2. oversized `description` or `compatibility` values (truncated to their limit),
+3. non-mapping metadata (ignored),
 4. loose field types that can be coerced safely.
 
 One malformed skill does not fail discovery or break the agent loop. The loader

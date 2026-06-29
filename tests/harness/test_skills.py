@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pytest import CaptureFixture, MonkeyPatch
+from pytest import MonkeyPatch
 
 from agentlane.harness import (
     AgentDescriptor,
@@ -345,10 +345,7 @@ def test_parse_skill_file_trims_oversize_fields_and_body(tmp_path: Path) -> None
     assert f"line {SKILL_MAX_FILE_LINES - 11}" in parsed.instructions
 
 
-def test_parse_skill_file_warns_but_keeps_non_compliant_skill_name(
-    tmp_path: Path,
-    capsys: CaptureFixture[str],
-) -> None:
+def test_parse_skill_file_keeps_non_compliant_skill_name(tmp_path: Path) -> None:
     skill_root = _write_skill(
         root=tmp_path,
         name="refund--policy",
@@ -359,9 +356,8 @@ def test_parse_skill_file_warns_but_keeps_non_compliant_skill_name(
     parsed = parse_skill_file(skill_root / "SKILL.md")
 
     if parsed is None:
-        raise AssertionError("Expected malformed name to warn but still parse.")
+        raise AssertionError("Expected a non-compliant name to still parse.")
     assert parsed.manifest.name == "refund--policy"
-    assert "consecutive hyphens" in capsys.readouterr().out
 
 
 def test_parse_skill_file_returns_none_for_missing_frontmatter(tmp_path: Path) -> None:
@@ -420,7 +416,6 @@ def test_parse_skill_file_returns_none_when_file_exceeds_size_limit(
 
 def test_filesystem_skill_loader_loads_skill_by_manifest_name_when_directory_differs(
     tmp_path: Path,
-    capsys: CaptureFixture[str],
 ) -> None:
     skill_root = tmp_path / "refund-policy-dir"
     skill_root.mkdir(parents=True)
@@ -447,7 +442,6 @@ def test_filesystem_skill_loader_loads_skill_by_manifest_name_when_directory_dif
         assert [manifest.name for manifest in manifests] == ["refund-policy"]
         assert loaded.manifest.name == "refund-policy"
         assert loaded.manifest.root == skill_root.resolve()
-        assert "does not match parent directory" in capsys.readouterr().out
 
     asyncio.run(scenario())
 
