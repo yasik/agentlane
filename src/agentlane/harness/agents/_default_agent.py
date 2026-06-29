@@ -36,6 +36,7 @@ from .definitions import (
     ModelResolver,
     SubagentLink,
     descriptor_from_markdown,
+    with_subagents,
 )
 
 if TYPE_CHECKING:
@@ -64,6 +65,8 @@ class DefaultAgent(AgentBase):
         self,
         *,
         descriptor: AgentDescriptor | None = None,
+        subagents: Sequence[AgentDescriptor] = (),
+        subagent_link: SubagentLink = SubagentLink.AS_TOOL,
         runtime: RuntimeEngine | None = None,
         runner: Runner | None = None,
         hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
@@ -75,6 +78,14 @@ class DefaultAgent(AgentBase):
         Args:
             descriptor: Optional instance-level descriptor override. When
                 omitted, the agent uses ``type(self).descriptor``.
+            subagents: Agent descriptors to attach as sub-agents. ``DefaultAgent``
+                wires each one in (no manual ``as_tool()`` needed) per
+                ``subagent_link``. Pass a ``DefaultAgent``'s ``resolved_descriptor``
+                to reuse a built agent; use ``from_markdown(subagents=...)`` to
+                load sub-agents from markdown files. ``tools=[child.as_tool()]``
+                remains an alternative for fine-grained control.
+            subagent_link: How sub-agents attach — ``AS_TOOL`` (subroutine,
+                default) or ``HANDOFF`` (control transfer).
             runtime: Optional runtime to reuse across runs.
             runner: Optional runner to reuse across runs.
             hooks: Optional runner hook or ordered hook list forwarded to the
@@ -82,9 +93,13 @@ class DefaultAgent(AgentBase):
             agent_id: Optional stable runtime id override.
             run_state: Optional initial resumable state.
         """
-        self._descriptor = _resolve_descriptor(
-            descriptor=descriptor,
-            class_descriptor=type(self).descriptor,
+        self._descriptor = with_subagents(
+            _resolve_descriptor(
+                descriptor=descriptor,
+                class_descriptor=type(self).descriptor,
+            ),
+            _coerce_subagents(subagents),
+            link=subagent_link,
         )
         self._runtime = runtime
         self._runner = runner
@@ -577,6 +592,29 @@ class DefaultAgent(AgentBase):
         )
 
 
+def _coerce_subagents(
+    subagents: Sequence[object],
+) -> tuple[AgentDescriptor, ...]:
+    """Validate that programmatic sub-agents are agent descriptors.
+
+    Typed against `object` because this is the runtime guard for the public
+    `subagents` argument: it gives callers without a type checker a clear error
+    instead of an opaque failure deeper in attachment.
+    """
+    children: list[AgentDescriptor] = []
+    for item in subagents:
+        if not isinstance(item, AgentDescriptor):
+            raise TypeError(
+                "DefaultAgent(subagents=...) accepts AgentDescriptor values. "
+                "Pass a DefaultAgent's `resolved_descriptor`, or load sub-agents "
+                "from markdown files with DefaultAgent.from_markdown(subagents=[...])."
+            )
+
+        children.append(item)
+
+    return tuple(children)
+
+
 def _resolve_descriptor(
     *,
     descriptor: AgentDescriptor | None,
@@ -585,8 +623,10 @@ def _resolve_descriptor(
     """Resolve the agent descriptor from instance or class configuration."""
     if descriptor is not None:
         return descriptor
+
     if class_descriptor is not None:
         return class_descriptor
+
     raise ValueError(
         "DefaultAgent requires an `AgentDescriptor`, either via `descriptor=` "
         "or a class-level `descriptor` attribute."

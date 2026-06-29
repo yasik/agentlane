@@ -12,7 +12,7 @@ from ._constraints import (
     AGENT_MAX_SUBAGENT_DEPTH,
 )
 from ._errors import AgentFileError
-from ._loader import descriptor_from_markdown
+from ._loader import descriptor_from_markdown, with_subagents
 from ._model import FactoryModelResolver, ModelResolver
 from ._parser import parse_agent_file
 from ._tools import resolve_tool_config
@@ -31,4 +31,5 @@ __all__ = [
     "descriptor_from_markdown",
     "parse_agent_file",
     "resolve_tool_config",
+    "with_subagents",
 ]

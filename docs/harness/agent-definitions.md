@@ -155,14 +155,29 @@ the visible set are tolerated, which is correct for custom and MCP tool names.
 
 ## Sub-agents
 
-`from_markdown` accepts `subagents` — paths or `AgentDescriptor` values — and
-attaches them to the parent:
+`subagents=` is the one way to attach a sub-agent — `DefaultAgent` does the
+`as_tool()` conversion for you. It is available wherever you build a
+`DefaultAgent`:
+
+- `DefaultAgent.from_markdown(..., subagents=[...])` and the module-level
+  `descriptor_from_markdown(..., subagents=[...])` accept markdown **paths** or
+  `AgentDescriptor` values (paths are resolved with the same `model_resolver`).
+- `DefaultAgent(descriptor=..., subagents=[...])` accepts `AgentDescriptor`
+  values for fully programmatic agents (no markdown). Pass a built agent's
+  `resolved_descriptor` to reuse it.
 
 ```python
+# From markdown:
 agent = DefaultAgent.from_markdown(
     Path("agents/triage_lead.md"),
     model_resolver=resolver,
     subagents=[Path("agents/med_safety.md"), Path("agents/guidelines.md")],
+)
+
+# Programmatic:
+agent = DefaultAgent(
+    descriptor=triage_lead,
+    subagents=[med_safety, guidelines],
 )
 ```
 
@@ -174,11 +189,14 @@ agent = DefaultAgent.from_markdown(
 2. `SubagentLink.HANDOFF` — each sub-agent becomes a first-class handoff target
    (control transfers to the child).
 
+For fine-grained control, `tools=[child.as_tool(...)]` on the descriptor remains
+an alternative — `as_tool` takes an explicit name, description, and args model.
+
 There is no inline `subagents:` frontmatter key: one file describes one agent,
-and trees are composed by the caller passing child paths. Sub-agent loading is
-guarded at load time against cycles, against nesting deeper than
-`AGENT_MAX_SUBAGENT_DEPTH`, and against two sub-agents whose names normalize to
-the same delegation tool name — all raising `AgentFileError`.
+and trees are composed by the caller. Attaching sub-agents is guarded against two
+sub-agents whose names normalize to the same delegation tool name; markdown
+loading additionally guards against cycles and nesting deeper than
+`AGENT_MAX_SUBAGENT_DEPTH` — all raising `AgentFileError`.
 
 ## Scope and Limitations
 

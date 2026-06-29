@@ -225,9 +225,10 @@ is the fast path, the descriptor is the full surface.
 
 ### 4. A multi-agent team on a distributed runtime
 
-Compose specialists as tools on a coordinator and run the team on a distributed
-runtime. The coordinator owns the model loop; each specialist runs as an
-addressed agent the runtime can place on its own worker:
+Attach specialists with `subagents=` and run the team on a distributed runtime.
+`DefaultAgent` wires each sub-agent in for you — no manual `as_tool()`. The
+coordinator owns the model loop; each specialist runs as an addressed agent the
+runtime can place on its own worker:
 
 ```python
 med_safety = AgentDescriptor(
@@ -251,8 +252,8 @@ async def main() -> None:
                 name="triage-lead",
                 model=model,
                 instructions="Send medication questions to `med_safety` and symptom questions to `guidelines`, then give one next step.",
-                tools=Tools(tools=[med_safety.as_tool(), guidelines.as_tool()]),
             ),
+            subagents=[med_safety, guidelines],
             runtime=runtime,
         )
         result = await triage.run(
@@ -264,8 +265,10 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The same `as_tool()` and runtime concepts scale on to background specialists,
-pub/sub fan-out, and multi-process workers — see
+`subagents=` is the one way to attach sub-agents — markdown paths via
+`from_markdown` (step 2) or descriptors here — and `tools=[child.as_tool()]`
+stays as a manual escape hatch. The same runtime concepts scale on to background
+specialists, pub/sub fan-out, and multi-process workers — see
 [Harness Distributed Agents](docs/harness/distributed-agents.md).
 
 ## Repository examples

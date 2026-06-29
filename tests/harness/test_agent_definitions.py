@@ -482,6 +482,55 @@ def test_descriptor_from_markdown_raises_on_duplicate_subagent_tool_names(
 
 
 # --------------------------------------------------------------------------- #
+# Programmatic sub-agents on DefaultAgent (subagents=, no manual as_tool)
+# --------------------------------------------------------------------------- #
+
+
+def test_default_agent_attaches_subagents_as_tools() -> None:
+    child = AgentDescriptor(name="med-safety")
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(name="triage-lead"),
+        subagents=[child],
+    )
+
+    tools = agent.resolved_descriptor.tools
+    assert isinstance(tools, InheritTools)
+    if tools.tools is None:
+        raise AssertionError("expected the sub-agent tool to be attached")
+    assert "med_safety" in [tool.name for tool in tools.tools.normalized_tools]
+
+
+def test_default_agent_attaches_subagents_as_handoffs() -> None:
+    child = AgentDescriptor(name="escalation")
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(name="triage-lead"),
+        subagents=[child],
+        subagent_link=SubagentLink.HANDOFF,
+    )
+
+    assert agent.resolved_descriptor.handoffs == (child,)
+
+
+def test_default_agent_subagents_rejects_markdown_path() -> None:
+    with pytest.raises(TypeError, match="from_markdown"):
+        DefaultAgent(
+            descriptor=AgentDescriptor(name="triage-lead"),
+            subagents=["med_safety.md"],  # type: ignore[list-item]
+        )
+
+
+def test_default_agent_subagents_rejects_duplicate_tool_names() -> None:
+    with pytest.raises(AgentFileError, match="duplicate sub-agent"):
+        DefaultAgent(
+            descriptor=AgentDescriptor(name="triage-lead"),
+            subagents=[
+                AgentDescriptor(name="med-safety"),
+                AgentDescriptor(name="Med Safety"),
+            ],
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Phase 6 — classmethods
 # --------------------------------------------------------------------------- #
 
