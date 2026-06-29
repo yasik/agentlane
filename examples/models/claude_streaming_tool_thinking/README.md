@@ -20,8 +20,13 @@ behaves like a normal chat session.
 
 The example uses `tool_choice="auto"` with a strong instruction to call the
 tool. Anthropic rejects forced tool choice when extended thinking is enabled.
-It also sets `max_tokens` higher than `thinking.budget_tokens`, which Anthropic
-requires for extended thinking requests.
+
+Thinking is requested with `reasoning_effort="low"` rather than the legacy
+`thinking={"type": "enabled", "budget_tokens": N}` shape. `reasoning_effort` is
+portable: LiteLLM maps it to the correct per-model thinking control (an
+extended-thinking budget for Sonnet/Haiku, adaptive thinking for Opus 4.8, which
+rejects `thinking.type.enabled`). `max_tokens` is kept comfortably above the
+thinking budget, which Anthropic requires for extended-thinking requests.
 
 Run:
 

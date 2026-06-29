@@ -252,12 +252,14 @@ async def run_demo() -> None:
         tool_choice="auto",
         parallel_tool_calls=False,
     )
+    # `reasoning_effort` is the portable way to request extended thinking: LiteLLM
+    # maps it to the right per-model thinking control (an extended-thinking budget
+    # for Sonnet/Haiku, adaptive thinking for Opus 4.8). The legacy
+    # `thinking={"type": "enabled", "budget_tokens": N}` shape is rejected by
+    # Opus 4.8 ("thinking.type.enabled is not supported for this model").
     call_args: dict[str, Any] = {
-        "thinking": {
-            "type": "enabled",
-            "budget_tokens": 1024,
-        },
-        "max_tokens": 1400,
+        "reasoning_effort": "low",
+        "max_tokens": 2048,
     }
 
     conversation: list[dict[str, Any]] = [
