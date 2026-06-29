@@ -5,9 +5,6 @@ frontmatter plus a system-prompt body — and turn it into an
 [`AgentDescriptor`](./agents.md) or a runnable
 [`DefaultAgent`](./default-agents.md) without constructing one in code.
 
-It mirrors the **file format** of Claude Code subagents. It does not reproduce
-Claude Code's runtime (directory discovery, permission modes, worktrees); it is
-a parser and a descriptor builder.
 
 ## Entry Points
 
@@ -88,8 +85,8 @@ section you used.
 
 Limits used by the parser:
 
-1. `AGENT_MAX_DESCRIPTION_LENGTH` (`1024`) — mirrors the Claude Code subagent
-   description limit; an over-length description is truncated to it,
+1. `AGENT_MAX_DESCRIPTION_LENGTH` (`1024`) — agent description limit; 
+2. an over-length description is truncated to it,
 2. `AGENT_MAX_INSTRUCTIONS_LINES` (`1000`) — a longer instruction body is
    truncated to this many lines with a pointer back to the source file, rather
    than the agent being dropped,
@@ -184,8 +181,7 @@ agent = DefaultAgent(
 `subagent_link` selects how they attach:
 
 1. `SubagentLink.AS_TOOL` (default) — each sub-agent becomes an agent-as-tool;
-   the parent calls it, gets the result back, and continues (subroutine
-   semantics, the closest match to a Claude Code Task subagent),
+   the parent calls it, gets the result back, and continues,
 2. `SubagentLink.HANDOFF` — each sub-agent becomes a first-class handoff target
    (control transfers to the child).
 
@@ -201,8 +197,8 @@ loading additionally guards against cycles and nesting deeper than
 ## Scope and Limitations
 
 - **`disallowedTools` (and `tools`) scope to the declaring agent only — they do
-  not cascade to sub-agents.** Each agent owns its own tool policy, matching the
-  Claude Code subagent model. A parent's `disallowedTools: bash` does not stop
+  not cascade to sub-agents.** Each agent owns its own tool policy.
+  A parent's `disallowedTools: bash` does not stop
   an attached sub-agent that inherits tools from reaching `bash`; constrain the
   child by giving its own file a `tools` allowlist or `disallowedTools` entry.
   The deny-list is a per-turn model-visibility filter (`ExcludeToolsShim`), not a
