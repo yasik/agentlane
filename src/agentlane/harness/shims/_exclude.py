@@ -19,6 +19,9 @@ class ExcludeToolsShim(Shim):
     This is the single, reusable exclusion primitive. Features that need a
     static tool denylist (for example markdown agent definitions) compose this
     shim instead of re-implementing per-turn exclusion.
+
+    When composing more than one `ExcludeToolsShim` on the same agent, pass a
+    distinct `name=` to each so their persisted shim-state keys do not collide.
     """
 
     def __init__(

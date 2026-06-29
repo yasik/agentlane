@@ -6,12 +6,13 @@ from typing import Any
 
 import pytest
 
-from agentlane.harness import AgentDescriptor
-from agentlane.harness._tooling import (
+import agentlane.harness.agents.definitions as definitions_pkg
+from agentlane.harness import (
     INHERIT_TOOLS,
     OVERRIDE_TOOLS,
+    AgentDescriptor,
+    InheritTools,
     RestrictTools,
-    resolve_tools,
 )
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.agents.definitions import (
@@ -327,8 +328,6 @@ def test_factory_model_resolver_does_not_fold_model_args_into_client() -> None:
 
 
 def test_definitions_package_does_not_import_provider_packages() -> None:
-    import agentlane.harness.agents.definitions as definitions_pkg
-
     package_dir = Path(definitions_pkg.__file__).resolve().parent
     forbidden = ("agentlane_litellm", "agentlane_openai", "import litellm", "litellm.")
     for module_path in package_dir.glob("*.py"):
@@ -402,10 +401,11 @@ def test_descriptor_from_markdown_attaches_subagent_as_tool(tmp_path: Path) -> N
     )
 
     assert descriptor.handoffs is None
-    resolved = resolve_tools(descriptor.tools, parent_tools=None)
-    if resolved is None:
+    assert isinstance(descriptor.tools, InheritTools)
+    child_tools = descriptor.tools.tools
+    if child_tools is None:
         raise AssertionError("expected the sub-agent tool to be exposed")
-    assert "helper" in [tool.name for tool in resolved.normalized_tools]
+    assert "helper" in [tool.name for tool in child_tools.normalized_tools]
 
 
 def test_descriptor_from_markdown_attaches_subagent_as_handoff(tmp_path: Path) -> None:
@@ -463,6 +463,22 @@ def test_descriptor_from_markdown_raises_on_cycle(tmp_path: Path) -> None:
     parent = _write_agent_md(tmp_path / "parent.md", "name: parent")
     with pytest.raises(AgentFileError, match="cycle"):
         descriptor_from_markdown(parent, subagents=[parent])
+
+
+def test_descriptor_from_markdown_raises_on_duplicate_subagent_tool_names(
+    tmp_path: Path,
+) -> None:
+    # Two distinct files whose names normalize to the same delegation tool name
+    # would silently shadow each other and make runtime dispatch ambiguous.
+    _write_agent_md(tmp_path / "a.md", "name: code-review")
+    _write_agent_md(tmp_path / "b.md", "name: Code Review")
+    parent = _write_agent_md(tmp_path / "parent.md", "name: parent")
+
+    with pytest.raises(AgentFileError, match="duplicate sub-agent"):
+        descriptor_from_markdown(
+            parent,
+            subagents=[tmp_path / "a.md", tmp_path / "b.md"],
+        )
 
 
 # --------------------------------------------------------------------------- #

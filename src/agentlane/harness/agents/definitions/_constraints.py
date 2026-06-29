@@ -22,11 +22,3 @@ AGENT_MAX_SUBAGENT_DEPTH = 4
 Matches the runner's default `agent_max_depth` so a tree that loads cleanly
 cannot exceed the runtime delegation cap.
 """
-
-
-class AgentFileError(ValueError):
-    """Raised when a named agent markdown file cannot be loaded.
-
-    Subclasses `ValueError` so callers that already guard descriptor
-    construction with `except ValueError` keep working unchanged.
-    """

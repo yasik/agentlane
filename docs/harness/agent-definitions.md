@@ -175,8 +175,30 @@ agent = DefaultAgent.from_markdown(
 
 There is no inline `subagents:` frontmatter key: one file describes one agent,
 and trees are composed by the caller passing child paths. Sub-agent loading is
-guarded at load time against cycles and nesting deeper than
-`AGENT_MAX_SUBAGENT_DEPTH`, both raising `AgentFileError`.
+guarded at load time against cycles, against nesting deeper than
+`AGENT_MAX_SUBAGENT_DEPTH`, and against two sub-agents whose names normalize to
+the same delegation tool name — all raising `AgentFileError`.
+
+## Scope and Limitations
+
+- **`disallowedTools` (and `tools`) scope to the declaring agent only — they do
+  not cascade to sub-agents.** Each agent owns its own tool policy, matching the
+  Claude Code subagent model. A parent's `disallowedTools: bash` does not stop
+  an attached sub-agent that inherits tools from reaching `bash`; constrain the
+  child by giving its own file a `tools` allowlist or `disallowedTools` entry.
+  The deny-list is a per-turn model-visibility filter (`ExcludeToolsShim`), not a
+  runtime authorization boundary — tool permissions/approvals remain the real
+  authz control. Naming a sub-agent's own delegation tool in `disallowedTools`
+  will hide that sub-agent.
+- **One `subagent_link` per call.** `subagent_link` applies uniformly to every
+  entry in `subagents`. To mix attachment styles (one child as a tool, another
+  as a handoff), compose `AgentDescriptor` values directly rather than loading a
+  single mixed tree from one call.
+- **Not every descriptor field is expressible in frontmatter.** The frontmatter
+  covers `name`, `description`, `model`, `model_args`, `tools`, and
+  `disallowedTools`. Fields such as the structured-output `schema` and
+  `default_handoff` are Python-level and must be set programmatically on the
+  returned `AgentDescriptor`.
 
 ## Validation
 
