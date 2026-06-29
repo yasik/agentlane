@@ -32,8 +32,9 @@ AgentLane is organized into layers that can be used together or independently:
    workers.
 2. **[Models](src/agentlane/models/)** — prompt templates, schemas, structured
    outputs, native tools, and provider clients.
-3. **[Harness](src/agentlane/harness/)** — `DefaultAgent`, resumable run state,
-   tool execution, handoffs, agent-as-tool delegation, shims, and skills.
+3. **[Harness](src/agentlane/harness/)** — `DefaultAgent`, markdown agent
+   definitions, resumable run state, tool execution, handoffs, agent-as-tool
+   delegation, shims, and skills.
 4. **[Transport](src/agentlane/transport/)** — wire-safe serialization
    boundaries for distributed payloads.
 5. **[Tracing](src/agentlane/tracing/)** — observability across runtime, model,
@@ -93,13 +94,12 @@ uv sync --all-extras
 
 ## Quick Start
 
-The harness gives you a small, local agent interface when you want one, and the
-same runtime model underneath when your system grows into addressed,
-distributed work.
+Define an agent in a markdown file — frontmatter for config, the body as its
+system prompt — and run it. The four steps below are one progression: the same
+agent grows from a single file to a coordinated team, and from one local
+process to a distributed runtime, without changing the model or the run loop.
 
-A local agent is one class with a descriptor, then `await agent.run(...)`. No
-runtime, runner, or message wiring needed. Give it a model client and
-instructions, then run one turn:
+All four reuse one model client:
 
 ```python
 import asyncio
@@ -107,96 +107,166 @@ import os
 
 from agentlane_openai import ResponsesClient
 
-from agentlane.harness import AgentDescriptor
 from agentlane.harness.agents import DefaultAgent
 from agentlane.models import Config
 
 model = ResponsesClient(
-    config=Config(api_key=os.environ["OPENAI_API_KEY"], model="gpt-5.4-mini")
+    config=Config(api_key=os.environ["OPENAI_API_KEY"], model="gpt-5.4-mini"),
 )
+```
 
+### 1. An agent from a markdown file
 
-class CareNavigationAgent(DefaultAgent):
-    descriptor = AgentDescriptor(
-        name="Care Navigation",
-        model=model,
-        instructions="You are a concise patient care navigation agent.",
-    )
+`care_navigator.md`:
 
+```markdown
+---
+name: care-navigator
+description: Guides patients to a clear next step for a new symptom or concern.
+---
+You are a concise patient care navigation agent. Give one clear next step. When
+a clinical tool is available, use it before advising on a medication.
+```
 
+```python
 async def main() -> None:
-    agent = CareNavigationAgent()
-    result = await agent.run("I feel dizzy after a new medication. What first?")
+    agent = DefaultAgent.from_markdown("care_navigator.md", model=model)
+    result = await agent.run(
+        "I feel dizzy after starting a new blood-pressure medication. What first?"
+    )
     print(result.final_output)
 
 
 asyncio.run(main())
 ```
 
-That is the whole loop: one descriptor, one `run(...)` call. Each `run(...)`
-executes one user turn and stores resumable state on the agent.
+One file, one `run(...)`. The frontmatter configures the agent; the body is its
+system prompt. It runs on a local single-threaded runtime by default, and each
+`run(...)` stores resumable state on the agent.
 
-### Add a tool
+### 2. Two markdown agents on a distributed runtime
 
-Give the agent a plain Python function and it becomes a callable tool — no
-decorators or registration:
+Add a specialist as a sub-agent and bind the pair to a distributed runtime. The
+specialist becomes an addressed agent the lead delegates to — ready to move onto
+its own worker later. Only `subagents=` and `runtime=` change.
 
-```python
-from agentlane.models import Config, Tools
+`med_safety.md`:
 
-
-def lookup_medication(name: str) -> str:
-    """Return basic guidance for a medication by name."""
-    return f"{name}: take with food; report severe dizziness to your care team."
-
-
-agent = DefaultAgent(
-    descriptor=AgentDescriptor(
-        name="Care Navigation",
-        model=model,
-        instructions="Use `lookup_medication` before advising on a medication.",
-        tools=Tools(tools=[lookup_medication]),
-    )
-)
+```markdown
+---
+name: med-safety
+description: Use to check a medication for interactions and safety flags before advising.
+model: inherit
+---
+You review a medication for interactions and safety flags, and return a short
+note that says clearly when something is urgent.
 ```
 
-### Route work to an addressed agent
-
-The same agent can hand focused work to another agent addressed on the runtime.
-This is the entry point to background workers, pub/sub, and distributed
-execution — the communication model does not change as you scale:
-
 ```python
-from agentlane.messaging import AgentId
-from agentlane.runtime import BaseAgent, MessageContext, distributed_runtime, on_message
-
-
-class SafetyReviewAgent(BaseAgent):
-    @on_message
-    async def handle(self, case: str, context: MessageContext) -> object:
-        return {"recommendation": "same-day clinician review"}
+from agentlane.runtime import distributed_runtime
 
 
 async def main() -> None:
     async with distributed_runtime() as runtime:
-        runtime.register_factory("safety_review", SafetyReviewAgent)
-
-        outcome = await runtime.send_message(
-            "new BP medication, lightheaded this morning",
-            recipient=AgentId.from_values("safety_review", "case-1"),
+        agent = DefaultAgent.from_markdown(
+            "care_navigator.md",
+            model=model,
+            subagents=["med_safety.md"],
+            runtime=runtime,
         )
-        print(outcome.response_payload)
+        result = await agent.run(
+            "I started lisinopril yesterday and feel lightheaded. Is that expected?"
+        )
+        print(result.final_output)
 
 
 asyncio.run(main())
 ```
 
-To let the model-facing agent call that worker, pass a tool that bridges into
-`runtime.send_message(...)` and run the `DefaultAgent` on the same runtime
-(`DefaultAgent(descriptor=..., runtime=runtime)`).
+The lead calls the `med_safety` specialist as a tool, gets its result, and
+answers. `model: inherit` lets the specialist reuse the lead's model.
 
-For explicit worker placement, pub/sub, or multi-process execution, use the
-runtime layer directly.
+### 3. Full programmatic control
+
+When you need real Python tools, tuned model calls, and run-loop limits, build
+the descriptor directly. A plain function becomes a tool — no decorators or
+registration:
+
+```python
+from agentlane.harness import AgentDescriptor, Runner
+from agentlane.models import Tools
+
+
+def lookup_medication(name: str) -> str:
+    """Return basic guidance for a medication by name."""
+    return f"{name}: take with food; report severe dizziness or fainting to your care team."
+
+
+async def main() -> None:
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="care-navigator",
+            model=model,
+            instructions="Call lookup_medication before advising on a medication. Give one next step.",
+            tools=Tools(tools=[lookup_medication]),
+            model_args={"reasoning_effort": "low"},
+        ),
+        runner=Runner(max_turns=6),
+    )
+    result = await agent.run("Can I keep taking metformin if it upsets my stomach?")
+    print(result.final_output)
+
+
+asyncio.run(main())
+```
+
+The markdown agent and this one share the same `DefaultAgent` contract — markdown
+is the fast path, the descriptor is the full surface.
+
+### 4. A multi-agent team on a distributed runtime
+
+Compose specialists as tools on a coordinator and run the team on a distributed
+runtime. The coordinator owns the model loop; each specialist runs as an
+addressed agent the runtime can place on its own worker:
+
+```python
+med_safety = AgentDescriptor(
+    name="med-safety",
+    model=model,
+    tools=None,
+    instructions="Flag medication interactions or safety concerns in one sentence.",
+)
+guidelines = AgentDescriptor(
+    name="guidelines",
+    model=model,
+    tools=None,
+    instructions="Cite the relevant care guideline for the symptom in one sentence.",
+)
+
+
+async def main() -> None:
+    async with distributed_runtime() as runtime:
+        triage = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="triage-lead",
+                model=model,
+                instructions="Send medication questions to `med_safety` and symptom questions to `guidelines`, then give one next step.",
+                tools=Tools(tools=[med_safety.as_tool(), guidelines.as_tool()]),
+            ),
+            runtime=runtime,
+        )
+        result = await triage.run(
+            "New chest tightness after a dose increase of my heart medication. What should I do?"
+        )
+        print(result.final_output)
+
+
+asyncio.run(main())
+```
+
+The same `as_tool()` and runtime concepts scale on to background specialists,
+pub/sub fan-out, and multi-process workers — see
+[Harness Distributed Agents](docs/harness/distributed-agents.md).
 
 ## Repository examples
 
@@ -252,11 +322,12 @@ Use the harness when you want high-level agents, reusable loops, tool execution,
 Start here:
 
 1. [Default Agents](docs/harness/default-agents.md)
-2. [Architecture](docs/harness/architecture.md)
-3. [Tools](docs/harness/tools.md)
-4. [Shims](docs/harness/shims.md)
-5. [Skills](docs/harness/skills.md)
-6. [Distributed Agents](docs/harness/distributed-agents.md)
+2. [Markdown Agent Definitions](docs/harness/agent-definitions.md)
+3. [Architecture](docs/harness/architecture.md)
+4. [Tools](docs/harness/tools.md)
+5. [Shims](docs/harness/shims.md)
+6. [Skills](docs/harness/skills.md)
+7. [Distributed Agents](docs/harness/distributed-agents.md)
 
 ## Documentation
 

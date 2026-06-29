@@ -57,7 +57,7 @@ types. It defines four shared execution controls:
 streaming without requiring every future `AgentBase` implementation to support
 that broader event surface immediately.
 
-## Two Authoring Styles
+## Authoring Styles
 
 ### Subclass-Based
 
@@ -105,6 +105,24 @@ agent = DefaultAgent(
 
 result = await agent.run("Review semiconductor exposure before rebalancing.")
 ```
+
+### From A Markdown File
+
+`DefaultAgent.from_markdown(...)` builds the descriptor from a Claude-Code-style
+`AGENT.md` file (YAML frontmatter + a system-prompt body) instead of in code. A
+top-level agent must resolve to a model, supplied by the `model=` argument or by
+a `model_resolver` that builds the frontmatter `model` spec:
+
+```python
+from agentlane.harness.agents import DefaultAgent
+
+agent = DefaultAgent.from_markdown("care_navigator.md", model=model)
+result = await agent.run("I feel dizzy after starting a new medication. What first?")
+```
+
+Pass `subagents=[...]` to attach markdown (or descriptor) sub-agents. See
+[Markdown Agent Definitions](./agent-definitions.md) for the frontmatter schema,
+model resolution, tool policy, and sub-agent wiring.
 
 ## What `DefaultAgent` Owns
 

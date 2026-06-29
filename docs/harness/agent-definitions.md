@@ -18,10 +18,10 @@ from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.agents.definitions import descriptor_from_markdown
 
 # A descriptor you can compose, inspect, or wire as a sub-agent.
-descriptor = descriptor_from_markdown(Path("agents/reviewer.md"))
+descriptor = descriptor_from_markdown(Path("agents/chart_reviewer.md"))
 
 # A runnable agent (requires a model — see Model Resolution).
-agent = DefaultAgent.from_markdown(Path("agents/reviewer.md"), model=model)
+agent = DefaultAgent.from_markdown(Path("agents/chart_reviewer.md"), model=model)
 ```
 
 ## Import Path
@@ -70,17 +70,18 @@ Unknown frontmatter keys are ignored.
 
 ```markdown
 ---
-name: code-reviewer
-description: Reviews diffs for correctness and style. Use proactively after code changes.
+name: chart-reviewer
+description: Reviews a patient chart for medication-safety flags. Use before clinician sign-off.
 model: anthropic/claude-sonnet-4-5
 model_args:
   temperature: 0.2
   max_tokens: 4096
-tools: [read, grep, bash]
+tools: [read, grep]
 disallowedTools: write
 ---
-You are a meticulous senior code reviewer. Read the diff, identify correctness
-bugs first, then style issues. Be concise and cite file:line.
+You are a meticulous clinical chart reviewer. Read the chart, surface
+medication-safety flags first, then note guideline gaps. Be concise and cite the
+section you used.
 ```
 
 ## Constants
@@ -113,7 +114,7 @@ credentials and provider routing):
 from agentlane.harness.agents.definitions import FactoryModelResolver
 
 resolver = FactoryModelResolver(factory=my_factory)
-agent = DefaultAgent.from_markdown(Path("agents/reviewer.md"), model_resolver=resolver)
+agent = DefaultAgent.from_markdown(Path("agents/chart_reviewer.md"), model_resolver=resolver)
 ```
 
 Rules:
@@ -159,9 +160,9 @@ attaches them to the parent:
 
 ```python
 agent = DefaultAgent.from_markdown(
-    Path("agents/lead.md"),
+    Path("agents/triage_lead.md"),
     model_resolver=resolver,
-    subagents=[Path("agents/reviewer.md"), Path("agents/researcher.md")],
+    subagents=[Path("agents/med_safety.md"), Path("agents/guidelines.md")],
 )
 ```
 
