@@ -1,6 +1,6 @@
 [project]
 name = "agentlane"
-version = "0.11.0"
+version = "0.12.0"
 description = "An event-based runtime and messaging framework for AI agents."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -16,6 +16,7 @@ dependencies = [
   "protobuf>=5.29.0,<6.0.0",
   "grpcio>=1.71.0,<2.0.0",
   "structlog>=25.1.0,<26.0.0",
+  "strenum>=0.4.15,<0.5.0",
   "tenacity>=9.0.0,<10.0.0",
   "typing-extensions>=4.12.0",
   "rich>=14.2.0",
@@ -79,6 +80,7 @@ packages = [
   "packages/braintrust/src/agentlane_braintrust",
   "packages/litellm/src/agentlane_litellm",
   "packages/openai/src/agentlane_openai",
+  "packages/process_bridge/src/agentlane_process_bridge",
 ]
 
 [tool.hatch.build.targets.wheel.sources]
@@ -86,6 +88,7 @@ packages = [
 "packages/braintrust/src" = ""
 "packages/litellm/src" = ""
 "packages/openai/src" = ""
+"packages/process_bridge/src" = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages"]

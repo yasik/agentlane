@@ -1,20 +1,33 @@
-.PHONY: init sync sync-upgrade format lint lint-python lint-static tests tree
+.PHONY: init sync sync-upgrade
+.PHONY: format format-python format-ts
+.PHONY: lint lint-python lint-static lint-ts
+.PHONY: mypy pyright typecheck typecheck-python typecheck-ts
+.PHONY: tests tests-python test-ts check-ts tree
+
+TS_BRIDGE_DIR := packages/process_bridge_ts
 
 init:
-	uv sync --all-extras
+	$(MAKE) sync
 
 sync:
 	uv sync --all-extras
+	cd $(TS_BRIDGE_DIR) && bun install
 
 sync-upgrade:
 	uv lock --upgrade
 	uv sync --all-extras
+	cd $(TS_BRIDGE_DIR) && bun update
 
-format:
+format: format-python format-ts
+
+format-python:
 	uv run isort src packages tests .agents/skills/release/scripts
 	uv run black src packages tests .agents/skills/release/scripts
 
-lint: lint-python lint-static
+format-ts:
+	cd $(TS_BRIDGE_DIR) && bun run format
+
+lint: lint-python lint-ts lint-static
 
 lint-python:
 	uv run isort --check-only src packages tests .agents/skills/release/scripts
@@ -30,16 +43,18 @@ lint-static:
 		echo "markdownlint not installed; skipping markdown lint"; \
 	fi
 
-.PHONY: mypy
+lint-ts:
+	cd $(TS_BRIDGE_DIR) && bun run lint
+
 mypy:
 	uv run mypy src packages tests
 
-.PHONY: pyright
 pyright:
 	uv run pyright --project pyrightconfig.json
 
-.PHONY: typecheck
-typecheck:
+typecheck: typecheck-python typecheck-ts
+
+typecheck-python:
 	@set -eu; \
 	mypy_pid=''; \
 	pyright_pid=''; \
@@ -51,8 +66,18 @@ typecheck:
 	wait $$pyright_pid; \
 	trap - EXIT
 
-tests:
+typecheck-ts:
+	cd $(TS_BRIDGE_DIR) && bun run typecheck
+
+tests: tests-python test-ts
+
+tests-python:
 	uv run pytest
+
+test-ts:
+	cd $(TS_BRIDGE_DIR) && bun run test
+
+check-ts: lint-ts typecheck-ts test-ts
 
 tree:
 	find . -maxdepth 4 -type d | sort

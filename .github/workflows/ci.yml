@@ -25,6 +25,11 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.9
+
       - name: Install Python 3.12
         run: uv python install 3.12
 
@@ -36,6 +41,9 @@ jobs:
 
       - name: Run lint
         run: /usr/bin/make lint
+
+      - name: Run typecheck
+        run: /usr/bin/make typecheck
 
       - name: Run tests
         run: /usr/bin/make tests

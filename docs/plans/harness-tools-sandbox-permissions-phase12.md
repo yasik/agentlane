@@ -25,7 +25,7 @@ operations should return stable tool-result text so the agent loop can recover.
 
 ## Sources Reviewed
 
-1. `docs/code-style/tool-design.md`
+1. `docs/code-style/python/tool-design.md`
 2. `docs/harness/tools.md`
 3. Phase 12 in `docs/plans/agentic-harness-implementation-v1.md`
 4. Current tool implementations under `src/agentlane/harness/tools/`
@@ -420,7 +420,7 @@ host-provided policy layer.
       exposure.
 - [x] Add tests for skill tool replacement, inherited tool filtering, and
       deny-first behavior.
-- [x] Update `docs/code-style/tool-design.md` with the approved permission
+- [x] Update `docs/code-style/python/tool-design.md` with the approved permission
       guidance.
 - [x] Update `docs/harness/tools.md` with the new sandbox and permission
       behavior.

@@ -171,6 +171,11 @@ stream.
 provided, brokered tool-approval lifecycle events are forwarded into the same
 stream as `RunToolApprovalEvent`.
 
+For local TypeScript apps that need these events from a Python backend process,
+use the stdio bridge documented in
+[Harness Process Bridge](./process-bridge.md). It serializes this same
+`RunEvent` vocabulary instead of defining a second lifecycle model.
+
 Each emitted item is a `RunEvent`, a union tagged by `RunEventKind`:
 
 1. `RunModelStreamEvent` wraps one underlying `ModelStreamEvent`

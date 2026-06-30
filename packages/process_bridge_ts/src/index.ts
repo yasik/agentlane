@@ -1,0 +1,68 @@
+export type {
+  BridgeChannel,
+  BridgeChannelOptions,
+  BridgeChildLike,
+  ChannelScheduler,
+} from "./channel.ts";
+export { createBridgeChannel } from "./channel.ts";
+export {
+  decodeBridgeEventLine,
+  isKnownEventType,
+  KNOWN_EVENT_TYPES,
+} from "./decoders.ts";
+export type {
+  BridgeProcessCallbacks,
+  BridgeProcessOptions,
+  BridgeProcessWiring,
+  BridgeReadableProcess,
+} from "./process.ts";
+export { spawnBridgeProcess, wireBridgeProcess } from "./process.ts";
+export type {
+  AgentEndEvent,
+  AgentStartEvent,
+  ApprovalRequestEvent,
+  ApprovalRequestPayload,
+  ApprovalResolvedEvent,
+  AssistantDeltaEvent,
+  BridgeCommand,
+  BridgeCommandType,
+  BridgeEnvelope,
+  BridgeEvent,
+  CancelIgnoredEvent,
+  CancelRequestedEvent,
+  DecodedBridgeEvent,
+  ErrorEvent,
+  ErrorScope,
+  HandoffEndEvent,
+  HandoffStartEvent,
+  KnownBridgeEvent,
+  LineageFields,
+  LlmEndEvent,
+  LlmStartEvent,
+  PlanStep,
+  PlanUpdatedEvent,
+  ProviderEvent,
+  ReadyEvent,
+  ReasoningDeltaEvent,
+  ResetEvent,
+  RunCancelledEvent,
+  RunCompleteEvent,
+  RunEventEvent,
+  RunStartEvent,
+  ShutdownEvent,
+  StateSnapshotEvent,
+  TokenUsage,
+  ToolArgumentsDeltaEvent,
+  ToolEndEvent,
+  ToolErrorPayload,
+  ToolStartEvent,
+  UnknownBridgeEvent,
+  VersionedBridgeCommand,
+} from "./protocol.ts";
+export {
+  encodeBridgeCommand,
+  isSupportedProtocolVersion,
+  KNOWN_COMMAND_TYPES,
+  PROTOCOL_MAJOR,
+  PROTOCOL_VERSION,
+} from "./protocol.ts";

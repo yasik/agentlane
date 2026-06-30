@@ -1,0 +1,285 @@
+[
+  {
+    "protocol_version": "1.0",
+    "type": "ready",
+    "ts": 1,
+    "version": "0.11.0",
+    "package": "agentlane-process-bridge",
+    "metadata": {
+      "app": "demo"
+    }
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "run_start",
+    "ts": 2,
+    "prompt": "Summarize the chart."
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "assistant_delta",
+    "ts": 3,
+    "text": "The chart shows"
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "reasoning_delta",
+    "ts": 4,
+    "text": "Need compare trend.",
+    "provider_event_type": "response.reasoning.delta",
+    "reasoning_signature": null
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "tool_arguments_delta",
+    "ts": 5,
+    "tool_call_id": "call_1",
+    "tool_call_index": 0,
+    "delta": "{\"path\""
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "provider_event",
+    "ts": 6,
+    "provider_event_type": "response.output_item.added",
+    "item_index": 0,
+    "item_type": "reasoning",
+    "phase": null
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "agent_start",
+    "ts": 7,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "next_turn": 1
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "agent_end",
+    "ts": 8,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "final_preview": "Done"
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "llm_start",
+    "ts": 9,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "message_count": 2
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "llm_end",
+    "ts": 10,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "output_preview": "Done",
+    "usage": {
+      "prompt_tokens": 1200,
+      "completion_tokens": 340,
+      "total_tokens": 1540
+    }
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "tool_start",
+    "ts": 11,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "tool": "read",
+    "tool_call_id": "call_1",
+    "arguments": {
+      "path": "README.md"
+    },
+    "is_plan": false,
+    "is_delegation": false
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "tool_end",
+    "ts": 12,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "tool": "read",
+    "tool_call_id": "call_1",
+    "result": "not found",
+    "ok": false,
+    "error": {
+      "message": "not found",
+      "kind": "missing"
+    },
+    "is_plan": false,
+    "is_delegation": false
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "plan_updated",
+    "ts": 13,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "tool_call_id": "call_plan",
+    "explanation": "Track work.",
+    "steps": [
+      {
+        "step": "Inspect",
+        "status": "completed"
+      }
+    ],
+    "title": null,
+    "raw": null
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "approval_request",
+    "ts": 14,
+    "id": "tool-approval-1",
+    "request": {
+      "tool_name": "write",
+      "operation": "create_file",
+      "cwd": "/tmp/work",
+      "path": "/tmp/work/a.txt",
+      "command": null,
+      "skill_name": null,
+      "reason": "Create a file.",
+      "run_id": null,
+      "agent_name": null,
+      "tool_call_id": "call_2",
+      "metadata": {}
+    },
+    "reason": "Create a file."
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "approval_resolved",
+    "ts": 15,
+    "id": "tool-approval-1",
+    "allowed": false,
+    "request": {
+      "tool_name": "write",
+      "operation": "create_file",
+      "cwd": "/tmp/work",
+      "path": "/tmp/work/a.txt",
+      "command": null,
+      "skill_name": null,
+      "reason": "Create a file.",
+      "run_id": null,
+      "agent_name": null,
+      "tool_call_id": "call_2",
+      "metadata": {}
+    },
+    "reason": "Denied."
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "state_snapshot",
+    "ts": 16,
+    "boundary": "turn_prepared",
+    "turn_count": 1,
+    "history_length": 2,
+    "response_count": 0,
+    "shim_state": {
+      "skills": [
+        "triage"
+      ]
+    }
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "handoff_start",
+    "ts": 17,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "target": "Reviewer",
+    "tool": "handoff",
+    "tool_call_id": "call_handoff"
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "handoff_end",
+    "ts": 18,
+    "agent": "Researcher",
+    "task_id": "task_root",
+    "parent_task_id": null,
+    "is_root": true,
+    "is_subagent": false,
+    "target": "Reviewer",
+    "tool": "handoff",
+    "tool_call_id": "call_handoff",
+    "final_preview": "Reviewed"
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "run_complete",
+    "ts": 19,
+    "final_output": "Done",
+    "turn_count": 1,
+    "response_count": 1,
+    "shim_state": {}
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "run_cancelled",
+    "ts": 20
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "error",
+    "ts": 21,
+    "message": "A run is already active.",
+    "scope": "command"
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "reset",
+    "ts": 22
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "cancel_requested",
+    "ts": 23
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "cancel_ignored",
+    "ts": 24,
+    "reason": "no active run"
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "shutdown",
+    "ts": 25
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "run_event",
+    "ts": 26,
+    "run_event_type": "FutureRunEvent"
+  }
+]

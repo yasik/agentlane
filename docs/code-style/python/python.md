@@ -10,6 +10,30 @@ These rules apply to Python code across the repository.
   functions, classes, and methods.
 - Prefer explicit, readable code over overly clever or implicit code.
 - Keep implementations simple and Pythonic.
+- Separate logical control-flow blocks with blank lines when an early return,
+  guard branch, or state transition finishes one idea and the next branch starts
+  another. Do not pack adjacent `if`/`return` blocks together when spacing would
+  make the flow easier to scan.
+- Catch exceptions at the highest practical boundary for the operation, such as
+  request, command-loop, run, worker, or I/O boundaries. Avoid catching broad
+  exceptions inside low-level helpers unless the helper is itself that boundary;
+  let actionable failures surface as typed errors or user-visible diagnostics.
+- Do not model top-level domain, protocol, command, or response entities as
+  generic `Mapping`/`dict` values that are passed between methods and read with
+  `.get("field")`. Parse raw JSON or external dictionaries once at the trust
+  boundary, then pass explicit dataclasses, Pydantic models, enums, or typed
+  value objects through the rest of the code. Reserve dictionary access for
+  true dynamic maps, caches, and low-level serialization helpers.
+- Downstream adapters must not define their own string vocabulary for
+  framework events. Expose supported event types from the upstream AgentLane
+  package, then have bridges, transports, and apps consume those enums or
+  constants so renames and additions are caught in one place. If multiple
+  public enums need the same event name, define the literal in exactly one
+  canonical enum and derive the other enum values from that source.
+- For bridge, protocol, or transport dispatch, prefer explicit handler
+  registries over long `isinstance` ladders. Each handler should declare the
+  command or event type it handles, own that type's processing, and make its
+  downstream side effects visible in the handler contract.
 
 ## Naming and structure
 

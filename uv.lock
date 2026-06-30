@@ -4,7 +4,7 @@ requires-python = "==3.12.*"
 
 [[package]]
 name = "agentlane"
-version = "0.11.0"
+version = "0.12.0"
 source = { editable = "." }
 dependencies = [
     { name = "demjson3" },
@@ -21,6 +21,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
     { name = "ripgrepy" },
+    { name = "strenum" },
     { name = "structlog" },
     { name = "tenacity" },
     { name = "types-grpcio" },
@@ -73,6 +74,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.0,<7.0.0" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "ripgrepy", specifier = ">=2.2.0,<3.0.0" },
+    { name = "strenum", specifier = ">=0.4.15,<0.5.0" },
     { name = "structlog", specifier = ">=25.1.0,<26.0.0" },
     { name = "tenacity", specifier = ">=9.0.0,<10.0.0" },
     { name = "types-grpcio", specifier = ">=1.0.0.20251009" },
@@ -1178,6 +1180,15 @@ version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/2e/59920f7d66b7f9932a3d83dd0ec53fab001be1e058bf582606fe414a5198/sseclient_py-1.9.0-py3-none-any.whl", hash = "sha256:340062b1587fc2880892811e2ab5b176d98ef3eee98b3672ff3a3ba1e8ed0f6f", size = 8351, upload-time = "2026-01-02T23:39:30.995Z" },
+]
+
+[[package]]
+name = "strenum"
+version = "0.4.15"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/85/ad/430fb60d90e1d112a62ff57bdd1f286ec73a2a0331272febfddd21f330e1/StrEnum-0.4.15.tar.gz", hash = "sha256:878fb5ab705442070e4dd1929bb5e2249511c0bcf2b0eeacf3bcd80875c82eff", size = 23384, upload-time = "2023-06-29T22:02:58.399Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/69/297302c5f5f59c862faa31e6cb9a4cd74721cd1e052b38e464c5b402df8b/StrEnum-0.4.15-py3-none-any.whl", hash = "sha256:a30cda4af7cc6b5bf52c8055bc4bf4b2b6b14a93b574626da33df53cf7740659", size = 8851, upload-time = "2023-06-29T22:02:56.947Z" },
 ]
 
 [[package]]
