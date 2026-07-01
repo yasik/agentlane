@@ -94,8 +94,10 @@ Lineage fields such as `task_id`, `parent_task_id`, `is_root`, and
 the framework-derived `ok` flag and typed `error` payload instead of asking the
 app to infer success from result text.
 
-Unknown future run-event classes encode as `run_event`. Unknown future protocol
-events decode on the TypeScript side as `unknown_event` with the raw payload.
+Unhandled AgentLane run-event classes encode as the explicit `run_event`
+diagnostic event. Unknown bridge protocol event names and invalid payloads fail
+strict TypeScript decoding and are reported as `BridgeDecodeError` values
+instead of being delivered to app reducers.
 
 ## TypeScript Consumer
 

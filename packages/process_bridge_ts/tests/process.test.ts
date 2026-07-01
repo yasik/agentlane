@@ -2,15 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { createBridgeChannel } from "../src/channel.ts";
+import type { BridgeDecodeError } from "../src/decoders.ts";
 import { spawnBridgeProcess, wireBridgeProcess } from "../src/process.ts";
 import type { BridgeEvent } from "../src/protocol.ts";
 
 describe("process wiring", () => {
-  test("routes events, fallbacks, invalid lines, and stderr separately", async () => {
+  test("routes events, decode errors, invalid lines, and stderr separately", async () => {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
     const events: BridgeEvent[] = [];
-    const fallbacks: string[][] = [];
+    const decodeErrors: BridgeDecodeError[] = [];
     const invalid: string[] = [];
     const diagnostics: string[] = [];
 
@@ -20,8 +21,8 @@ describe("process wiring", () => {
         onEvent: (event: BridgeEvent): void => {
           events.push(event);
         },
-        onDecodeFallback: (_type: string, fields: string[]): void => {
-          fallbacks.push(fields);
+        onDecodeError: (error: BridgeDecodeError): void => {
+          decodeErrors.push(error);
         },
         onInvalidLine: (line: string): void => {
           invalid.push(line);
@@ -47,8 +48,14 @@ describe("process wiring", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(events.map((event) => event.type)).toEqual(["run_start"]);
-    expect(fallbacks).toEqual([["protocol_version", "prompt"]]);
-    expect(invalid).toEqual(["not-json"]);
+    expect(decodeErrors.map((error) => error.fields)).toEqual([
+      ["protocol_version"],
+      [],
+    ]);
+    expect(invalid).toEqual([
+      JSON.stringify({ type: "run_start", ts: 2 }),
+      "not-json",
+    ]);
     expect(diagnostics).toEqual(["diagnostic"]);
 
     wiring.dispose();
@@ -102,7 +109,6 @@ describe("process wiring", () => {
   test("drives the Python stdio backend through the channel API", async () => {
     const repoRoot = resolve(import.meta.dir, "../../..");
     const events: BridgeEvent[] = [];
-    const fallbacks: string[][] = [];
     const invalid: string[] = [];
     const stderr: string[] = [];
     let channel: ReturnType<typeof createBridgeChannel> | null = null;
@@ -158,9 +164,6 @@ describe("process wiring", () => {
           cwd: repoRoot,
         },
         {
-          onDecodeFallback: (_type: string, fields: string[]): void => {
-            fallbacks.push(fields);
-          },
           onEvent: (event: BridgeEvent): void => {
             events.push(event);
 
@@ -180,7 +183,6 @@ describe("process wiring", () => {
             finish(() => {
               expect(code).toBe(0);
               expect(signal).toBeNull();
-              expect(fallbacks).toEqual([]);
               expect(invalid).toEqual([]);
               expect(stderr).toEqual([]);
               expect(events.map((event) => event.type)).toEqual([

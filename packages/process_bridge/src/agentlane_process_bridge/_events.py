@@ -140,8 +140,8 @@ class RunEventEncoder:
             if isinstance(event, handler.event_type):
                 return handler.encode(self, event)
 
-        # Unknown future run events still reach the app as structured fallback
-        # events so clients can log or display them before this bridge upgrades.
+        # `run_event` is the explicit diagnostic event for framework events
+        # that do not have downstream UI semantics in this bridge yet.
         return BridgeRunEvent(
             BridgeEventType.RUN_EVENT,
             {"run_event_type": type(event).__name__},

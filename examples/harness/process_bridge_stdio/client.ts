@@ -27,8 +27,7 @@ const child = spawnBridgeProcess(
       }
     },
     onInvalidLine: (line) => console.error(`invalid stdout: ${line}`),
-    onDecodeFallback: (type, fields) =>
-      console.error(`decode fallback for ${type}: ${fields.join(",")}`),
+    onDecodeError: (error) => console.error(`decode error: ${error.message}`),
     onStderr: (line) => console.error(line),
   },
 );

@@ -1,3 +1,9 @@
+/**
+ * Public entrypoint for the TypeScript process bridge package.
+ *
+ * Exports stay explicit so app consumers see the supported surface and internal
+ * helpers do not become accidental API.
+ */
 export type {
   BridgeChannel,
   BridgeChannelOptions,
@@ -6,9 +12,11 @@ export type {
 } from "./channel.ts";
 export { createBridgeChannel } from "./channel.ts";
 export {
+  BridgeDecodeError,
   decodeBridgeEventLine,
   isKnownEventType,
   KNOWN_EVENT_TYPES,
+  tryDecodeBridgeEventLine,
 } from "./decoders.ts";
 export type {
   BridgeProcessCallbacks,
@@ -56,7 +64,6 @@ export type {
   ToolEndEvent,
   ToolErrorPayload,
   ToolStartEvent,
-  UnknownBridgeEvent,
   VersionedBridgeCommand,
 } from "./protocol.ts";
 export {

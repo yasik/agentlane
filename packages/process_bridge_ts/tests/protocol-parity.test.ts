@@ -17,18 +17,11 @@ describe("protocol fixtures", () => {
     );
   });
 
-  test("decode every fixture without fallbacks", async () => {
+  test("decode every fixture strictly", async () => {
     const fixtures = (await Bun.file(fixtureUrl).json()) as unknown[];
     const fixtureTypes = fixtures.map((fixture: unknown): string => {
       const decoded = decodeBridgeEventLine(JSON.stringify(fixture));
-      expect(decoded).not.toBeNull();
-
-      if (decoded === null) {
-        throw new Error("Fixture did not decode.");
-      }
-
-      expect(decoded.fallbacks).toEqual([]);
-      return decoded.event.type;
+      return decoded.type;
     });
 
     expectSameSet(
@@ -39,18 +32,16 @@ describe("protocol fixtures", () => {
     );
   });
 
-  test("missing required fixture fields produce named fallbacks", () => {
-    const decoded = decodeBridgeEventLine(
-      JSON.stringify({
-        protocol_version: "1.0",
-        type: "tool_end",
-        ts: 1,
-      }),
-    );
-
-    expect(decoded?.fallbacks).toContain("tool_call_id");
-    expect(decoded?.fallbacks).toContain("result");
-    expect(decoded?.fallbacks).toContain("is_delegation");
+  test("missing required fixture fields fail loudly with named paths", () => {
+    expect(() =>
+      decodeBridgeEventLine(
+        JSON.stringify({
+          protocol_version: "1.0",
+          type: "tool_end",
+          ts: 1,
+        }),
+      ),
+    ).toThrow("tool_call_id");
   });
 });
 

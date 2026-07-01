@@ -113,8 +113,8 @@ the emitted `BridgeEventType` values, and its encoder implementation.
 2. Emit it from the command handler or backend operation that owns the side
    effect.
 3. Add the TypeScript event shape to `packages/process_bridge_ts/src/protocol.ts`.
-4. Add the decoder entry to `DECODERS` in
-   `packages/process_bridge_ts/src/decoders.ts`.
+4. Add the matching strict schema entry to `BRIDGE_EVENT_SCHEMAS` in
+   `packages/process_bridge_ts/src/protocol.ts`.
 5. Add a representative event object to `fixtures/protocol/events.json`.
 6. Add or update Python protocol/backend tests and TypeScript decoder/parity
    tests.
@@ -127,8 +127,8 @@ handler, one downstream decoder shape, and one representative fixture.
 
 The remaining manual work is intentional: Python dataclasses and TypeScript
 types stay hand-authored because they are small and readable. The parity tests
-compare parser registries, event registries, fixtures, and TypeScript decoder
-lists so missing command or event updates fail with concrete missing/extra
-names. TypeScript process wiring reports malformed fallback-decoded frames
-without delivering them to app reducers, so schema drift is visible instead of
-silently turning into default state.
+compare parser registries, event registries, fixtures, and TypeScript schema
+keys so missing command or event updates fail with concrete missing/extra names.
+TypeScript process wiring reports malformed frames as `BridgeDecodeError`
+values without delivering them to app reducers, so schema drift is visible
+instead of silently turning into default state.

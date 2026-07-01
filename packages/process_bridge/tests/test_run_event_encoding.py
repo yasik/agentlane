@@ -238,7 +238,7 @@ def test_encoder_maps_llm_and_handoff_lifecycle_events() -> None:
     assert handoff_end.payload["final_preview"] == "child done"
 
 
-def test_encoder_maps_plan_approval_snapshot_and_fallback_events() -> None:
+def test_encoder_maps_plan_approval_snapshot_and_diagnostic_run_events() -> None:
     encoder = RunEventEncoder()
     call = _tool_call(arguments="{}")
     request = ToolPermissionRequest(

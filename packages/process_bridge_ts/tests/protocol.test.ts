@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { decodeBridgeEventLine, KNOWN_EVENT_TYPES } from "../src/decoders.ts";
+import {
+  BridgeDecodeError,
+  decodeBridgeEventLine,
+  KNOWN_EVENT_TYPES,
+  tryDecodeBridgeEventLine,
+} from "../src/decoders.ts";
 import { encodeBridgeCommand, PROTOCOL_VERSION } from "../src/protocol.ts";
 
 describe("protocol commands", () => {
@@ -27,8 +32,7 @@ describe("event decoding", () => {
       }),
     );
 
-    expect(decoded?.fallbacks).toEqual([]);
-    expect(decoded?.event).toMatchObject({
+    expect(decoded).toMatchObject({
       protocol_version: "1.0",
       type: "error",
       ts: 1,
@@ -64,8 +68,7 @@ describe("event decoding", () => {
       JSON.stringify({ ...base, usage: null }),
     );
 
-    expect(withUsage?.fallbacks).toEqual([]);
-    expect(withUsage?.event).toMatchObject({
+    expect(withUsage).toMatchObject({
       type: "llm_end",
       usage: {
         prompt_tokens: 1200,
@@ -73,21 +76,19 @@ describe("event decoding", () => {
         total_tokens: 1540,
       },
     });
-    expect(withoutUsage?.fallbacks).toEqual([]);
-    expect(withoutUsage?.event).toMatchObject({ type: "llm_end", usage: null });
+    expect(withoutUsage).toMatchObject({ type: "llm_end", usage: null });
   });
 
-  test("records missing typed fields as fallbacks", () => {
-    const decoded = decodeBridgeEventLine(
-      JSON.stringify({ type: "run_start", ts: 1 }),
+  test("rejects missing typed fields", () => {
+    const error = decodeErrorFor(
+      JSON.stringify({ protocol_version: "1.0", type: "run_start", ts: 1 }),
     );
 
-    expect(decoded?.event.type).toBe("run_start");
-    expect(decoded?.fallbacks).toEqual(["protocol_version", "prompt"]);
+    expect(error.fields).toEqual(["prompt"]);
   });
 
-  test("records missing raw fields as fallbacks", () => {
-    const toolStart = decodeBridgeEventLine(
+  test("rejects missing raw fields", () => {
+    const toolStartError = decodeErrorFor(
       JSON.stringify({
         protocol_version: "1.0",
         type: "tool_start",
@@ -103,7 +104,7 @@ describe("event decoding", () => {
         is_delegation: false,
       }),
     );
-    const planUpdate = decodeBridgeEventLine(
+    const planUpdateError = decodeErrorFor(
       JSON.stringify({
         protocol_version: "1.0",
         type: "plan_updated",
@@ -119,12 +120,12 @@ describe("event decoding", () => {
       }),
     );
 
-    expect(toolStart?.fallbacks).toContain("arguments");
-    expect(planUpdate?.fallbacks).toEqual(["steps", "raw"]);
+    expect(toolStartError.fields).toContain("arguments");
+    expect(planUpdateError.fields).toEqual(["raw", "steps"]);
   });
 
-  test("records approval request payload drift as nested fallbacks", () => {
-    const decoded = decodeBridgeEventLine(
+  test("rejects approval request payload drift with nested field paths", () => {
+    const error = decodeErrorFor(
       JSON.stringify({
         protocol_version: "1.0",
         type: "approval_request",
@@ -135,13 +136,12 @@ describe("event decoding", () => {
       }),
     );
 
-    expect(decoded?.event.type).toBe("approval_request");
-    expect(decoded?.fallbacks).toContain("request.tool_name");
-    expect(decoded?.fallbacks).toContain("request.metadata");
+    expect(error.fields).toContain("request.tool_name");
+    expect(error.fields).toContain("request.metadata");
   });
 
-  test("decodes unknown events without crashing", () => {
-    const decoded = decodeBridgeEventLine(
+  test("rejects unknown events", () => {
+    const error = decodeErrorFor(
       JSON.stringify({
         protocol_version: "1.0",
         type: "new_event",
@@ -150,21 +150,13 @@ describe("event decoding", () => {
       }),
     );
 
-    expect(decoded?.event).toMatchObject({
-      type: "unknown_event",
-      event_type: "new_event",
-      payload: {
-        protocol_version: "1.0",
-        type: "new_event",
-        ts: 1,
-        value: true,
-      },
-    });
+    expect(error.fields).toEqual(["type"]);
+    expect(error.message).toContain("Unknown bridge event type");
   });
 
   test("rejects unsupported protocol major versions", () => {
     expect(
-      decodeBridgeEventLine(
+      tryDecodeBridgeEventLine(
         JSON.stringify({ protocol_version: "2.0", type: "ready", ts: 1 }),
       ),
     ).toBeNull();
@@ -175,3 +167,15 @@ describe("event decoding", () => {
     expect(KNOWN_EVENT_TYPES).toContain("run_complete");
   });
 });
+
+function decodeErrorFor(line: string): BridgeDecodeError {
+  try {
+    decodeBridgeEventLine(line);
+  } catch (error) {
+    if (error instanceof BridgeDecodeError) return error;
+
+    throw error;
+  }
+
+  throw new Error("Expected bridge decode to fail.");
+}
