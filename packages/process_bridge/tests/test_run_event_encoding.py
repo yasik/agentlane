@@ -7,6 +7,7 @@ from agentlane_process_bridge import (
     RunEventEncoder,
     RunEventEncodingContext,
 )
+from pydantic import BaseModel
 
 from agentlane.harness import (
     RunAgentEndEvent,
@@ -325,6 +326,52 @@ def test_encoder_maps_plan_approval_snapshot_and_diagnostic_run_events() -> None
     assert agent_end is not None and agent_end.payload["final_preview"] == "done"
     assert unknown is not None and unknown.type == BridgeEventType.RUN_EVENT
     assert unknown.payload["run_event_type"] == "object"
+
+
+def test_encoder_serializes_approval_request_metadata() -> None:
+    encoder = RunEventEncoder()
+    request = ToolPermissionRequest(
+        tool_name="write",
+        operation=ToolOperation.CREATE_FILE,
+        cwd=Path("/workspace"),
+        path=Path("/workspace/a.txt"),
+        metadata={
+            "model": _ApprovalMetadata(path=Path("/workspace/meta.txt")),
+            "operation": ToolOperation.CREATE_FILE,
+            "path": Path("/workspace/meta.txt"),
+        },
+    )
+    record = ToolApprovalRecord(
+        request_id="approval-1",
+        request=request,
+        approval_required_decision=ToolPermissionDecision.require_approval(),
+        status=ToolApprovalStatus.PENDING,
+    )
+
+    approval = encoder.encode(RunToolApprovalEvent(event=ToolApprovalEvent(record)))
+
+    assert approval is not None and approval.type == BridgeEventType.APPROVAL_REQUEST
+    assert approval.payload["request"] == {
+        "tool_name": "write",
+        "operation": "create_file",
+        "cwd": "/workspace",
+        "path": "/workspace/a.txt",
+        "command": None,
+        "skill_name": None,
+        "reason": None,
+        "run_id": None,
+        "agent_name": None,
+        "tool_call_id": None,
+        "metadata": {
+            "model": {"path": "/workspace/meta.txt"},
+            "operation": "create_file",
+            "path": "/workspace/meta.txt",
+        },
+    }
+
+
+class _ApprovalMetadata(BaseModel):
+    path: Path
 
 
 def _tool_call(*, arguments: str) -> ToolCall:

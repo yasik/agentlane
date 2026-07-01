@@ -2,8 +2,7 @@
 
 import json
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, is_dataclass
-from enum import Enum
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 import structlog
@@ -53,6 +52,26 @@ class BridgeRunEvent:
 
     type: BridgeEventType
     payload: dict[str, object]
+
+
+class ApprovalRequestPayload(BaseModel):
+    """Typed approval request payload embedded in approval bridge events."""
+
+    tool_name: str
+    operation: str
+    cwd: str
+    path: str | None
+    command: str | None
+    skill_name: str | None
+    reason: str | None
+    run_id: str | None
+    agent_name: str | None
+    tool_call_id: str | None
+    metadata: dict[str, object]
+
+    def to_bridge_payload(self) -> dict[str, object]:
+        """Return a JSON-compatible payload for the NDJSON event writer."""
+        return cast(dict[str, object], self.model_dump(mode="json"))
 
 
 def _bridge_events(*event_types: BridgeEventType) -> frozenset[BridgeEventType]:
@@ -464,7 +483,7 @@ class ToolApprovalRunEventHandler(RunEventBridgeHandler):
 
     def _encode_approval_event(self, event: ToolApprovalEvent) -> BridgeRunEvent:
         record = event.record
-        request = _approval_request_payload(record.request)
+        request = _approval_request_payload(record.request).to_bridge_payload()
 
         if event.status == ToolApprovalStatus.PENDING:
             # Pending approvals are the only approval events that require the
@@ -664,52 +683,17 @@ def _preview_text(text: str | None, *, limit: int = 500) -> str | None:
     return text[:limit].rstrip() + f"\n[truncated, +{omitted} more chars]"
 
 
-def _approval_request_payload(request: ToolPermissionRequest) -> dict[str, object]:
-    return {
-        "tool_name": request.tool_name,
-        "operation": request.operation.value,
-        "cwd": str(request.cwd),
-        "path": None if request.path is None else str(request.path),
-        "command": request.command,
-        "skill_name": request.skill_name,
-        "reason": request.reason,
-        "run_id": request.run_id,
-        "agent_name": request.agent_name,
-        "tool_call_id": request.tool_call_id,
-        "metadata": {
-            str(key): _json_safe(item) for key, item in request.metadata.items()
-        },
-    }
-
-
-def _json_safe(value: object) -> object:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-
-    # Pydantic models know how to produce JSON-compatible field values.
-    if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
-
-    # Dataclass metadata can come from app code; recurse through fields so
-    # nested paths, enums, or model objects are normalized consistently.
-    if is_dataclass(value) and not isinstance(value, type):
-        return {str(key): _json_safe(item) for key, item in asdict(value).items()}
-
-    if isinstance(value, dict):
-        return {
-            str(key): _json_safe(item)
-            for key, item in cast(dict[object, object], value).items()
-        }
-
-    if isinstance(value, list):
-        return [_json_safe(item) for item in cast(list[object], value)]
-
-    if isinstance(value, tuple):
-        return [_json_safe(item) for item in cast(tuple[object, ...], value)]
-
-    # String-valued enums are already part of the protocol vocabulary; other
-    # custom values fall back to their readable representation below.
-    if isinstance(value, Enum) and isinstance(value.value, str):
-        return value.value
-
-    return str(value)
+def _approval_request_payload(request: ToolPermissionRequest) -> ApprovalRequestPayload:
+    return ApprovalRequestPayload(
+        tool_name=request.tool_name,
+        operation=request.operation.value,
+        cwd=str(request.cwd),
+        path=None if request.path is None else str(request.path),
+        command=request.command,
+        skill_name=request.skill_name,
+        reason=request.reason,
+        run_id=request.run_id,
+        agent_name=request.agent_name,
+        tool_call_id=request.tool_call_id,
+        metadata={str(key): item for key, item in request.metadata.items()},
+    )
