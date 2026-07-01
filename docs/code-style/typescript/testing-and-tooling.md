@@ -14,6 +14,15 @@ that gate a change.
 - Avoid mocks as much as possible.
 - Test the actual implementation. Do not duplicate the logic under test into the
   test.
+- For protocol and bridge packages, add parity tests that compare the canonical
+  command/event registry with fixtures, decoder schemas, process wiring, and
+  any Python-side vocabulary exported for downstream packages.
+- Add representative fixtures for every supported protocol event. Decode them
+  strictly in tests so drift in required fields fails before an app consumes the
+  package.
+- Test malformed payloads as hard failures, including unknown event names,
+  missing required fields, nested payload drift, and unsupported protocol major
+  versions.
 
 ## Type Checking
 
@@ -55,7 +64,10 @@ trees they own.
 
 - Run `make check-ts` for TypeScript-only changes; it runs lint, type check, and
   tests together.
-- Run the full repository verification script before marking runtime changes
-  done.
+- Run the full repository verification script before marking runtime, protocol,
+  or package-tooling changes done.
+- If a TypeScript package adds a dependency, update its package manifest and
+  lockfile in the same change and keep the dependency justified by a real
+  simplification, validation, or runtime need.
 - Keep commit messages concise and in the imperative mood.
 - Do not mention "Co-Authored" or "Authored By" in commit or PR text.

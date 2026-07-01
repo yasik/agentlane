@@ -10,6 +10,10 @@ These rules apply to Python code across the repository.
   functions, classes, and methods.
 - Prefer explicit, readable code over overly clever or implicit code.
 - Keep implementations simple and Pythonic.
+- Do not reduce line count at the expense of readability, type enforcement, or
+  extension clarity. A simplification should remove real duplication or make an
+  invariant more explicit; it should not flatten a useful abstraction into a
+  looser one.
 - Separate logical control-flow blocks with blank lines when an early return,
   guard branch, or state transition finishes one idea and the next branch starts
   another. Do not pack adjacent `if`/`return` blocks together when spacing would
@@ -34,6 +38,14 @@ These rules apply to Python code across the repository.
   registries over long `isinstance` ladders. Each handler should declare the
   command or event type it handles, own that type's processing, and make its
   downstream side effects visible in the handler contract.
+- Keep class-based extension seams when they encode real obligations such as
+  accepted input type, side-effect ownership, emitted event types, lifecycle
+  state, or override points. Do not replace those classes with loose functions
+  merely to reduce boilerplate.
+- Keep representative fixtures and parity tests close to small hand-authored
+  protocols. Do not introduce generated manifests or runtime discovery files
+  unless the repository genuinely generates or discovers protocol definitions
+  from them.
 
 ## Naming and structure
 
@@ -65,6 +77,9 @@ field: FieldType
 - Put validation and error handling near the start of the function.
 - Use specific exception types and informative messages.
 - Avoid bare `except`.
+- Avoid catching broad exceptions deep in helpers. Low-level code should raise
+  typed, actionable errors and let the request, run, command-loop, worker, or
+  I/O boundary translate those errors into user-visible diagnostics.
 - Return `None` or an empty collection for "not found" cases instead of raising.
 - Define error codes as enums when structured responses need them.
 

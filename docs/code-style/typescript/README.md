@@ -11,7 +11,8 @@ Read the page that matches the work you are doing instead of treating
 ## Pages
 
 1. [Conventions](./conventions.md): general style, destructuring, imports and
-   exports, variables, control flow, and helper placement.
+   exports, variables, control flow, helper placement, comments, and protocol
+   code.
 2. [Testing and tooling](./testing-and-tooling.md): test approach, type
    checking, formatting, the Biome-enforced rules, and the commands that gate a
    change.
