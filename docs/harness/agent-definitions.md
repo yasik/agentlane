@@ -59,8 +59,7 @@ Everything after the closing `---` is the Markdown body and becomes the agent's
 
 Tool names are AgentLane's native lowercase names (`read`, `find`, `grep`,
 `patch`, `write`, `write_plan`, `bash`, `agent`); custom/MCP tool names the
-parent exposes also work. There is no Claude-style PascalCase alias layer. Both
-`tools` and `disallowedTools` accept a comma-separated string or a YAML list.
+parent exposes also work. Both `tools` and `disallowedTools` accept a comma-separated string or a YAML list.
 Unknown frontmatter keys are ignored.
 
 ### Example `AGENT.md`
