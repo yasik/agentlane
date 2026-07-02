@@ -78,3 +78,7 @@ class PreparedTurn:
         """Append multiple items to persisted conversation history."""
         for item in items:
             self.append_history_item(item)
+
+    def replace_history(self, items: list[RunHistoryItem]) -> None:
+        """Replace persisted conversation history with copied items."""
+        self.run_state.history = [copy_history_item(item) for item in items]

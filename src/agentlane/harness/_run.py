@@ -83,11 +83,14 @@ class RunState:
     """Single persisted system instruction for this run."""
 
     history: list[RunHistoryItem]
-    """Append-only persisted conversation history for this run.
+    """Persisted conversation history for this run.
 
     Items may be prior ``ModelResponse`` assistant turns, canonical message
     dicts, prompt specs, or user-side content values. The runner resolves each
-    item into canonical ``MessageDict`` at request time.
+    item into canonical ``MessageDict`` at request time. Normal operation
+    appends to this list; whole-list replacement through
+    ``PreparedTurn.replace_history(...)`` is the sanctioned rewrite point for
+    compaction and other history-rewrite shims.
     """
 
     responses: list[ModelResponse]

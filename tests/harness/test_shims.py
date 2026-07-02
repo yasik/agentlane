@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agentlane.harness import Agent, AgentDescriptor, Runner, ShimState
+from agentlane.harness import Agent, AgentDescriptor, Runner, RunState, ShimState
 from agentlane.harness._tooling import merge_tools
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.shims import (
@@ -290,6 +290,26 @@ def test_default_agent_shim_can_transform_messages() -> None:
         ]
 
     asyncio.run(scenario())
+
+
+def test_prepared_turn_replace_history_copies_items() -> None:
+    replacement = {"role": "assistant", "content": "kept"}
+    state = RunState(
+        instructions=None,
+        history=[{"role": "user", "content": "old"}],
+        responses=[],
+    )
+    turn = PreparedTurn(
+        run_state=state,
+        tools=None,
+        model_args=None,
+    )
+
+    turn.replace_history([replacement])
+
+    replacement["content"] = "mutated after replacement"
+    assert state.history == [{"role": "assistant", "content": "kept"}]
+    assert state.history[0] is not replacement
 
 
 def test_default_agent_shim_can_add_tools() -> None:
