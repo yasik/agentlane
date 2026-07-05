@@ -30,7 +30,7 @@ cancel, reset, shutdown, and EOF teardown.
 App-facing TypeScript consumers should usually launch the backend through:
 
 ```bash
-python -m agentlane_process_bridge --app my_app.backend:create_backend
+uv run python -m agentlane_process_bridge --app my_app.backend:create_backend
 ```
 
 The referenced factory may return an `AgentBackend`, an awaitable

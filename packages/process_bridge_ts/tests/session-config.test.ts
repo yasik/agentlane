@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type AgentSession,
   ConfigureError,
   type SessionClose,
   SessionClosedError,
@@ -7,15 +8,31 @@ import {
 import { FakeChild } from "./session-test-helpers.ts";
 import { attachAgentSession } from "./session-test-support.ts";
 
-type ModelConfig = Record<string, unknown> & {
+type ModelConfig = {
   model: string;
+  attributes?: Record<string, unknown>;
 };
+
+type ModelPatch = {
+  model?: string | null;
+};
+
+function assertConfigPatchTypes(
+  session: AgentSession<ModelConfig, ModelPatch>,
+): void {
+  void session.configure({ model: "openai/gpt-5.5" });
+  void session.configure({ model: null });
+  // @ts-expect-error Unknown config patch keys must fail on closed app shapes.
+  void session.configure({ typo: "openai/gpt-5.5" });
+}
+
+void assertConfigPatchTypes;
 
 describe("agent session config", () => {
   test("captures ready config without firing the change callback", async () => {
     const child = new FakeChild();
     const changes: ModelConfig[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onConfigChanged: (config: Readonly<ModelConfig>): void => {
@@ -33,7 +50,7 @@ describe("agent session config", () => {
   test("configure resolves with the applied document and updates the cache", async () => {
     const child = new FakeChild();
     const changes: ModelConfig[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onConfigChanged: (config: Readonly<ModelConfig>): void => {
@@ -72,10 +89,13 @@ describe("agent session config", () => {
       "internal",
     ] as const) {
       const child = new FakeChild();
-      const sessionPromise = attachAgentSession<ModelConfig>(child, {
-        backend: { command: "fake" },
-        decodeConfig: decodeModelConfig,
-      });
+      const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(
+        child,
+        {
+          backend: { command: "fake" },
+          decodeConfig: decodeModelConfig,
+        },
+      );
       emitReady(child, { model: "openai/gpt-5.5" });
       const session = await sessionPromise;
 
@@ -99,7 +119,7 @@ describe("agent session config", () => {
   test("failed configure re-syncs the cache before rejecting", async () => {
     const child = new FakeChild();
     const changes: ModelConfig[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onConfigChanged: (config: Readonly<ModelConfig>): void => {
@@ -131,7 +151,7 @@ describe("agent session config", () => {
   test("failed configure without a snapshot keeps the last known config", async () => {
     const child = new FakeChild();
     const changes: ModelConfig[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onConfigChanged: (config: Readonly<ModelConfig>): void => {
@@ -157,7 +177,7 @@ describe("agent session config", () => {
 
   test("command-scoped errors reject pending configure", async () => {
     const child = new FakeChild();
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
     });
@@ -180,7 +200,7 @@ describe("agent session config", () => {
 
   test("undefined patch values reject before sending a command", async () => {
     const child = new FakeChild();
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
     });
@@ -188,7 +208,7 @@ describe("agent session config", () => {
     const session = await sessionPromise;
 
     await expect(
-      session.configure({ model: undefined } as Partial<ModelConfig>),
+      session.configure({ model: undefined } as unknown as ModelPatch),
     ).rejects.toMatchObject({ code: "invalid" });
     expect(child.commands()).toEqual([]);
   });
@@ -196,7 +216,7 @@ describe("agent session config", () => {
   test("reset re-announces config before resolving reset", async () => {
     const child = new FakeChild();
     const changes: ModelConfig[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onConfigChanged: (config: Readonly<ModelConfig>): void => {
@@ -220,7 +240,7 @@ describe("agent session config", () => {
 
   test("rapid configure calls settle in FIFO order", async () => {
     const child = new FakeChild();
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
     });
@@ -259,7 +279,7 @@ describe("agent session config", () => {
   test("decodeConfig failures close the session and reject configure", async () => {
     const child = new FakeChild();
     const closes: SessionClose[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onDiagnostic: (): void => undefined,
@@ -287,7 +307,7 @@ describe("agent session config", () => {
   test("ready config decode failures reject startup without onClose", async () => {
     const child = new FakeChild();
     const closes: SessionClose[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onDiagnostic: (): void => undefined,
@@ -306,7 +326,7 @@ describe("agent session config", () => {
   test("unexpected config events close the session", async () => {
     const child = new FakeChild();
     const closes: SessionClose[] = [];
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
       onDiagnostic: (): void => undefined,
@@ -331,7 +351,7 @@ describe("agent session config", () => {
 
   test("in-flight configure rejects when the session closes", async () => {
     const child = new FakeChild();
-    const sessionPromise = attachAgentSession<ModelConfig>(child, {
+    const sessionPromise = attachAgentSession<ModelConfig, ModelPatch>(child, {
       backend: { command: "fake" },
       decodeConfig: decodeModelConfig,
     });

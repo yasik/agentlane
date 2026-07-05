@@ -320,13 +320,14 @@ export class SessionReducer {
 
     // Approval policy code is app-owned and may be async. Keep it outside the
     // event dispatch stack so a slow modal cannot block protocol processing.
-    Promise.resolve(
-      policy({
-        request: event.request,
-        reason: event.reason,
-        signal: controller.signal,
-      }),
-    )
+    Promise.resolve()
+      .then((): ApprovalDecision | Promise<ApprovalDecision> =>
+        policy({
+          request: event.request,
+          reason: event.reason,
+          signal: controller.signal,
+        }),
+      )
       .then((decision: ApprovalDecision): void => {
         this.sendApprovalDecision(event.id, decision);
       })

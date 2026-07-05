@@ -1,11 +1,7 @@
-// biome-ignore-all lint/nursery/noExcessiveLinesPerFile: The session controller keeps process lifecycle, command FIFO, and promise settlement together; smaller helpers own config, command-error, and reducer adapter logic.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { resolveBackendSpec } from "./backend-spec.ts";
 import type { BridgeChildLike } from "./channel.ts";
 import { createBridgeChannel } from "./channel.ts";
 import { BridgeDecodeError } from "./decoders.ts";
-import type { BridgeProcessOptions } from "./process.ts";
-import { spawnBridgeProcess } from "./process.ts";
 import type { BridgeCommand, BridgeEvent } from "./protocol.ts";
 import { handlePendingCommandError } from "./session-command-errors.ts";
 import { SessionConfigState } from "./session-config.ts";
@@ -14,6 +10,7 @@ import {
   createSessionReducerCallbacks,
 } from "./session-controller-callbacks.ts";
 import { type Deferred, deferred } from "./session-deferred.ts";
+import { SessionExitHook } from "./session-exit-hook.ts";
 import { createSessionHandle } from "./session-handle.ts";
 import {
   type PendingCommand,
@@ -34,36 +31,6 @@ import {
   SessionStartError,
   SessionStateError,
 } from "./session-types.ts";
-
-/**
- * Spawn the backend, wire stdio, and resolve once `ready` arrives.
- *
- * Startup failures reject with `SessionStartError` before a live session is
- * exposed. After startup, all operation promises settle through the session
- * lifecycle; app code never needs to observe the raw child process.
- */
-export function createAgentSession<
-  TConfig extends Record<string, unknown> = Record<string, unknown>,
->(options: AgentSessionOptions<TConfig>): Promise<AgentSession<TConfig>> {
-  let processOptions: BridgeProcessOptions;
-  try {
-    processOptions = resolveBackendSpec(options.backend);
-  } catch (error) {
-    return Promise.reject(
-      new SessionStartError(
-        error instanceof Error ? error.message : String(error),
-      ),
-    );
-  }
-
-  const controller = new AgentSessionController<TConfig>(options);
-  const child = spawnBridgeProcess(
-    processOptions,
-    controller.processCallbacks(),
-  );
-  return controller.start(child);
-}
-
 /**
  * @internal
  *
@@ -75,21 +42,23 @@ export function createAgentSession<
  * from child-process bookkeeping.
  */
 export class AgentSessionController<
-  TConfig extends Record<string, unknown> = Record<string, unknown>,
+  TConfig extends object = Record<string, unknown>,
+  TConfigPatch extends object = Partial<TConfig>,
 > {
   private readonly options: AgentSessionOptions<TConfig>;
-  private readonly readyDeferred = deferred<AgentSession<TConfig>>();
+  private readonly readyDeferred =
+    deferred<AgentSession<TConfig, TConfigPatch>>();
   private readonly pendingCommands = new PendingCommandQueue();
   private readonly cancelWaiters: Array<Deferred<void>> = [];
   private readonly resetWaiters: Array<Deferred<void>> = [];
   private readonly configState: SessionConfigState<TConfig>;
   private reducer: SessionReducer;
   private channel: ReturnType<typeof createBridgeChannel> | null = null;
+  private readonly exitHook = new SessionExitHook();
   private child:
     | (BridgeChildLike & { kill: (signal?: NodeJS.Signals) => boolean })
     | null = null;
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
-  private exitHook: (() => void) | null = null;
   private activeRun: Deferred<RunResult> | null = null;
   private closeDeferred: Deferred<void> | null = null;
   private readyInfo: ReadyInfo | null = null;
@@ -144,7 +113,7 @@ export class AgentSessionController<
 
   start(
     child: ChildProcessWithoutNullStreams | BridgeChildLike,
-  ): Promise<AgentSession<TConfig>> {
+  ): Promise<AgentSession<TConfig, TConfigPatch>> {
     this.child = child;
     this.channel = createBridgeChannel(child, {
       graceMs: this.options.shutdownGraceMs,
@@ -156,7 +125,7 @@ export class AgentSessionController<
         child.kill("SIGKILL");
       },
     });
-    this.installExitHook(child);
+    this.exitHook.install(child);
 
     // A cold `uv run` may take time, but once this timer fires there is no
     // usable session handle. Startup rejection is distinct from `onClose`.
@@ -190,7 +159,7 @@ export class AgentSessionController<
     this.finishClose({ reason, code, signal });
   }
 
-  private session(): AgentSession<TConfig> {
+  private session(): AgentSession<TConfig, TConfigPatch> {
     const ready = this.readyInfo;
     if (ready === null) throw new SessionStartError("Session is not ready.");
 
@@ -199,7 +168,7 @@ export class AgentSessionController<
       run: (text: string): Promise<RunResult> => this.run(text),
       cancel: (): Promise<void> => this.cancel(),
       reset: (): Promise<void> => this.reset(),
-      configure: (patch: Partial<TConfig>): Promise<Readonly<TConfig>> => {
+      configure: (patch: TConfigPatch): Promise<Readonly<TConfig>> => {
         return this.configure(patch);
       },
       close: (): Promise<void> => this.close(),
@@ -207,6 +176,8 @@ export class AgentSessionController<
   }
 
   private handleEvent(event: BridgeEvent): void {
+    if (this.closed !== null || this.startupFailed) return;
+
     if (event.type === "ready" && this.readyInfo === null) {
       this.resolveReady(event);
       if (this.startupFailed) return;
@@ -289,12 +260,12 @@ export class AgentSessionController<
     return waiter.promise;
   }
 
-  private configure(patch: Partial<TConfig>): Promise<Readonly<TConfig>> {
+  private configure(patch: TConfigPatch): Promise<Readonly<TConfig>> {
     if (this.closed !== null) {
       return Promise.reject(new SessionClosedError(this.closed));
     }
 
-    const patchDocument: Record<string, unknown> = { ...patch };
+    const patchDocument = { ...patch } as Record<string, unknown>;
     const patchError = this.configState.validatePatch(patchDocument);
     if (patchError !== null) return Promise.reject(patchError);
 
@@ -342,7 +313,7 @@ export class AgentSessionController<
     if (!sent && pending !== undefined) {
       // `onSendError` closes the session. Remove the optimistic pending entry so
       // command-error handling cannot later attribute an unrelated event to it.
-      this.removePending(pending);
+      this.pendingCommands.remove(pending);
     }
     return sent;
   }
@@ -451,12 +422,10 @@ export class AgentSessionController<
   private failProtocol(message: string, fields: readonly string[]): void {
     const error = new BridgeDecodeError(message, fields);
     this.diagnostic({ kind: "protocol", error, line: "" });
-
     if (this.readyInfo === null) {
       this.failStartup(message);
       return;
     }
-
     this.finishClose({
       reason: "protocol-error",
       error,
@@ -468,10 +437,9 @@ export class AgentSessionController<
 
   private failStartup(message: string, kill: boolean = true): void {
     if (this.readyInfo !== null || this.startupFailed) return;
-
     this.startupFailed = true;
     if (this.readyTimer !== null) clearTimeout(this.readyTimer);
-    this.removeExitHook();
+    this.exitHook.remove();
     if (kill) this.child?.kill("SIGKILL");
     this.readyDeferred.reject(new SessionStartError(message));
   }
@@ -481,8 +449,7 @@ export class AgentSessionController<
 
     this.closed = close;
     if (this.readyTimer !== null) clearTimeout(this.readyTimer);
-    this.removeExitHook();
-
+    this.exitHook.remove();
     // One terminal sweep owns the balance invariant: open text segments close,
     // open tools/agents become cancelled, and pending approval policies abort.
     this.reducer.sweepTerminal();
@@ -502,26 +469,6 @@ export class AgentSessionController<
         this.options.onClose?.(close);
       });
     }
-  }
-
-  private installExitHook(child: BridgeChildLike): void {
-    this.exitHook = (): void => {
-      child.kill("SIGKILL");
-    };
-    // Node's process exit event is the last chance to avoid orphaning the local
-    // Python backend when the app terminates without calling close().
-    process.on("exit", this.exitHook);
-  }
-
-  private removeExitHook(): void {
-    if (this.exitHook === null) return;
-
-    process.removeListener("exit", this.exitHook);
-    this.exitHook = null;
-  }
-
-  private removePending(pending: PendingCommand): void {
-    this.pendingCommands.remove(pending);
   }
 
   private diagnostic(diagnostic: SessionDiagnostic): void {

@@ -1,8 +1,5 @@
 import { resolve } from "node:path";
-import {
-  createAgentSession,
-  RunError,
-} from "../../../packages/process_bridge_ts/src/index.ts";
+import { createAgentSession, RunError } from "@agentlane/process-bridge";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 

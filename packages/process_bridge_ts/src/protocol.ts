@@ -111,44 +111,60 @@ const recordSchema: z.ZodRecord<z.ZodString, z.ZodUnknown> = z.record(
 const nullableStringSchema: z.ZodNullable<z.ZodString> = z.string().nullable();
 
 /** Common schema for the event envelope each backend line must include. */
-const bridgeEnvelopeSchema: z.ZodObject<BridgeEnvelopeShape> = z.object({
-  protocol_version: z.string(),
-  ts: z.number(),
-});
+const bridgeEnvelopeSchema: z.ZodObject<BridgeEnvelopeShape> = z
+  .object({
+    protocol_version: z.string(),
+    ts: z.number(),
+  })
+  .strict();
+
+/** Build one strict event schema while preserving open app-owned record fields. */
+const bridgeEventSchema = <TShape extends z.ZodRawShape>(
+  shape: TShape,
+): z.ZodObject<BridgeEnvelopeShape & TShape> =>
+  bridgeEnvelopeSchema.extend(shape).strict();
 
 /** Schema for the closed set of error scopes emitted by Python. */
 const errorScopeSchema: z.ZodType<ErrorScope> = z.enum(["command", "run"]);
 
 /** Shared schema for task lineage fields on task-scoped events. */
-const lineageFieldsSchema: z.ZodObject<LineageFieldsShape> = z.object({
-  task_id: z.string(),
-  parent_task_id: nullableStringSchema,
-  is_root: z.boolean(),
-  is_subagent: z.boolean(),
-});
+const lineageFieldsSchema: z.ZodObject<LineageFieldsShape> = z
+  .object({
+    task_id: z.string(),
+    parent_task_id: nullableStringSchema,
+    is_root: z.boolean(),
+    is_subagent: z.boolean(),
+  })
+  .strict();
 
 /** Schema for provider token usage when usage data is available. */
-const tokenUsageSchema: z.ZodType<TokenUsage> = z.object({
-  prompt_tokens: z.number(),
-  completion_tokens: z.number(),
-  total_tokens: z.number(),
-});
+const tokenUsageSchema: z.ZodType<TokenUsage> = z
+  .object({
+    prompt_tokens: z.number(),
+    completion_tokens: z.number(),
+    total_tokens: z.number(),
+  })
+  .strict();
 
 /** Schema for tool failure details nested under `tool_end.error`. */
-const toolErrorPayloadSchema: z.ZodType<ToolErrorPayload> = z.object({
-  message: z.string(),
-  kind: nullableStringSchema,
-});
+const toolErrorPayloadSchema: z.ZodType<ToolErrorPayload> = z
+  .object({
+    message: z.string(),
+    kind: nullableStringSchema,
+  })
+  .strict();
 
 /** Schema for a single planning step emitted by the plan tool. */
-const planStepSchema: z.ZodType<PlanStep> = z.object({
-  status: z.string(),
-  step: z.string(),
-});
+const planStepSchema: z.ZodType<PlanStep> = z
+  .object({
+    status: z.string(),
+    step: z.string(),
+  })
+  .strict();
 
 /** Schema for approval request details nested under approval events. */
-const approvalRequestPayloadSchema: z.ZodType<ApprovalRequestPayload> =
-  z.object({
+const approvalRequestPayloadSchema: z.ZodType<ApprovalRequestPayload> = z
+  .object({
     tool_name: z.string(),
     operation: z.string(),
     cwd: z.string(),
@@ -160,7 +176,8 @@ const approvalRequestPayloadSchema: z.ZodType<ApprovalRequestPayload> =
     agent_name: nullableStringSchema,
     tool_call_id: nullableStringSchema,
     metadata: recordSchema,
-  });
+  })
+  .strict();
 
 /**
  * Strict backend-to-app event schema registry.
@@ -170,7 +187,7 @@ const approvalRequestPayloadSchema: z.ZodType<ApprovalRequestPayload> =
  * parity tests can catch missing or stale protocol updates.
  */
 export const BRIDGE_EVENT_SCHEMAS = {
-  ready: bridgeEnvelopeSchema.extend({
+  ready: bridgeEventSchema({
     type: z.literal("ready"),
     version: z.string(),
     package: z.string(),
@@ -178,67 +195,67 @@ export const BRIDGE_EVENT_SCHEMAS = {
     config: recordSchema.optional(),
   }),
   config: configEventSchema,
-  run_start: bridgeEnvelopeSchema.extend({
+  run_start: bridgeEventSchema({
     type: z.literal("run_start"),
     prompt: z.string(),
   }),
-  run_complete: bridgeEnvelopeSchema.extend({
+  run_complete: bridgeEventSchema({
     type: z.literal("run_complete"),
     final_output: z.string(),
     turn_count: z.number(),
     response_count: z.number(),
     shim_state: recordSchema,
   }),
-  run_cancelled: bridgeEnvelopeSchema.extend({
+  run_cancelled: bridgeEventSchema({
     type: z.literal("run_cancelled"),
   }),
-  error: bridgeEnvelopeSchema.extend({
+  error: bridgeEventSchema({
     type: z.literal("error"),
     message: z.string(),
     scope: errorScopeSchema,
   }),
-  assistant_delta: bridgeEnvelopeSchema.extend({
+  assistant_delta: bridgeEventSchema({
     type: z.literal("assistant_delta"),
     text: z.string(),
   }),
-  reasoning_delta: bridgeEnvelopeSchema.extend({
+  reasoning_delta: bridgeEventSchema({
     type: z.literal("reasoning_delta"),
     text: z.string(),
     provider_event_type: nullableStringSchema,
     reasoning_signature: nullableStringSchema,
   }),
-  tool_arguments_delta: bridgeEnvelopeSchema.extend({
+  tool_arguments_delta: bridgeEventSchema({
     type: z.literal("tool_arguments_delta"),
     tool_call_id: z.string(),
     tool_call_index: z.number().nullable(),
     delta: z.string(),
   }),
-  provider_event: bridgeEnvelopeSchema.extend({
+  provider_event: bridgeEventSchema({
     type: z.literal("provider_event"),
     provider_event_type: nullableStringSchema,
     item_index: z.number().nullable(),
     item_type: nullableStringSchema,
     phase: nullableStringSchema,
   }),
-  agent_start: bridgeEnvelopeSchema.extend({
+  agent_start: bridgeEventSchema({
     type: z.literal("agent_start"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
     next_turn: z.number().nullable(),
   }),
-  agent_end: bridgeEnvelopeSchema.extend({
+  agent_end: bridgeEventSchema({
     type: z.literal("agent_end"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
     final_preview: nullableStringSchema,
   }),
-  llm_start: bridgeEnvelopeSchema.extend({
+  llm_start: bridgeEventSchema({
     type: z.literal("llm_start"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
     message_count: z.number(),
   }),
-  llm_end: bridgeEnvelopeSchema.extend({
+  llm_end: bridgeEventSchema({
     type: z.literal("llm_end"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
@@ -247,7 +264,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     // data rather than zero.
     usage: tokenUsageSchema.nullable(),
   }),
-  tool_start: bridgeEnvelopeSchema.extend({
+  tool_start: bridgeEventSchema({
     type: z.literal("tool_start"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
@@ -257,7 +274,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     is_plan: z.boolean(),
     is_delegation: z.boolean(),
   }),
-  tool_end: bridgeEnvelopeSchema.extend({
+  tool_end: bridgeEventSchema({
     type: z.literal("tool_end"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
@@ -269,7 +286,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     is_plan: z.boolean(),
     is_delegation: z.boolean(),
   }),
-  plan_updated: bridgeEnvelopeSchema.extend({
+  plan_updated: bridgeEventSchema({
     type: z.literal("plan_updated"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
@@ -279,20 +296,20 @@ export const BRIDGE_EVENT_SCHEMAS = {
     steps: z.array(planStepSchema),
     title: nullableStringSchema,
   }),
-  approval_request: bridgeEnvelopeSchema.extend({
+  approval_request: bridgeEventSchema({
     type: z.literal("approval_request"),
     id: z.string(),
     request: approvalRequestPayloadSchema,
     reason: nullableStringSchema,
   }),
-  approval_resolved: bridgeEnvelopeSchema.extend({
+  approval_resolved: bridgeEventSchema({
     type: z.literal("approval_resolved"),
     id: z.string(),
     allowed: z.boolean(),
     request: approvalRequestPayloadSchema,
     reason: nullableStringSchema,
   }),
-  state_snapshot: bridgeEnvelopeSchema.extend({
+  state_snapshot: bridgeEventSchema({
     type: z.literal("state_snapshot"),
     boundary: z.string(),
     turn_count: z.number(),
@@ -300,7 +317,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     response_count: z.number(),
     shim_state: recordSchema,
   }),
-  handoff_start: bridgeEnvelopeSchema.extend({
+  handoff_start: bridgeEventSchema({
     type: z.literal("handoff_start"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
@@ -308,7 +325,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     tool: z.string(),
     tool_call_id: z.string(),
   }),
-  handoff_end: bridgeEnvelopeSchema.extend({
+  handoff_end: bridgeEventSchema({
     type: z.literal("handoff_end"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
@@ -317,21 +334,21 @@ export const BRIDGE_EVENT_SCHEMAS = {
     tool_call_id: z.string(),
     final_preview: nullableStringSchema,
   }),
-  reset: bridgeEnvelopeSchema.extend({
+  reset: bridgeEventSchema({
     type: z.literal("reset"),
     config: recordSchema.optional(),
   }),
-  cancel_requested: bridgeEnvelopeSchema.extend({
+  cancel_requested: bridgeEventSchema({
     type: z.literal("cancel_requested"),
   }),
-  cancel_ignored: bridgeEnvelopeSchema.extend({
+  cancel_ignored: bridgeEventSchema({
     type: z.literal("cancel_ignored"),
     reason: z.string(),
   }),
-  shutdown: bridgeEnvelopeSchema.extend({
+  shutdown: bridgeEventSchema({
     type: z.literal("shutdown"),
   }),
-  run_event: bridgeEnvelopeSchema.extend({
+  run_event: bridgeEventSchema({
     type: z.literal("run_event"),
     run_event_type: z.string(),
   }),

@@ -71,6 +71,43 @@ describe("process wiring", () => {
     expect(events.map((event) => event.type)).toEqual(["run_start"]);
   });
 
+  test("does not report decoded event callback failures as invalid lines", () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const decodeErrors: BridgeDecodeError[] = [];
+    const invalid: string[] = [];
+
+    const wiring = wireBridgeProcess(
+      { stdout, stderr },
+      {
+        onEvent: (): void => {
+          throw new Error("consumer failed");
+        },
+        onDecodeError: (error: BridgeDecodeError): void => {
+          decodeErrors.push(error);
+        },
+        onInvalidLine: (line: string): void => {
+          invalid.push(line);
+        },
+      },
+    );
+
+    expect(() => {
+      stdout.write(
+        `${JSON.stringify({
+          protocol_version: "1.0",
+          type: "run_start",
+          ts: 1,
+          prompt: "go",
+        })}\n`,
+      );
+    }).toThrow("consumer failed");
+    expect(decodeErrors).toEqual([]);
+    expect(invalid).toEqual([]);
+
+    wiring.dispose();
+  });
+
   test("spawnBridgeProcess drains final stdout before exit callback", async () => {
     const events: BridgeEvent[] = [];
 

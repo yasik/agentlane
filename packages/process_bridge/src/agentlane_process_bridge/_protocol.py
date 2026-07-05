@@ -32,6 +32,9 @@ MAX_TOOL_RESULT_PREVIEW_CHARS = 1800
 MAX_CONTRACT_PAYLOAD_BYTES = 32_768
 """Maximum serialized size for one authoritative protocol payload field."""
 
+RESERVED_EVENT_FIELDS = frozenset({"protocol_version", "type", "ts"})
+"""Event envelope keys payloads must not overwrite."""
+
 type CommandType = Literal[
     "approve",
     "cancel",
@@ -538,6 +541,13 @@ def build_event(
     """Build one flat versioned event object."""
     ts = time.time() if timestamp is None else timestamp
     verbatim_fields = _validated_verbatim_payload(verbatim_payload)
+    reserved_fields = (set(payload) | set(verbatim_fields)) & RESERVED_EVENT_FIELDS
+    if reserved_fields:
+        field_names = ", ".join(sorted(reserved_fields))
+        raise ContractPayloadError(
+            f"Contract payload fields overlap event envelope fields: {field_names}.",
+        )
+
     overlapping_fields = set(payload) & set(verbatim_fields)
     if overlapping_fields:
         field_names = ", ".join(sorted(overlapping_fields))

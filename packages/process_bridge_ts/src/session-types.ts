@@ -287,7 +287,7 @@ export type RawEventHandler = (event: BridgeEvent) => void;
  * strand a pending operation promise.
  */
 export type AgentSessionOptions<
-  TConfig extends Record<string, unknown> = Record<string, unknown>,
+  TConfig extends object = Record<string, unknown>,
 > = {
   /** Backend process to spawn. The only required field. */
   backend: BackendSpec;
@@ -366,7 +366,8 @@ export type AgentSessionOptions<
  * for a fresh backend.
  */
 export type AgentSession<
-  TConfig extends Record<string, unknown> = Record<string, unknown>,
+  TConfig extends object = Record<string, unknown>,
+  TConfigPatch extends object = Partial<TConfig>,
 > = {
   /** Backend identity captured from `ready`. */
   ready: ReadyInfo;
@@ -406,12 +407,15 @@ export type AgentSession<
   /**
    * Apply a desired-state patch to the Python runtime config store.
    *
+   * `TConfigPatch` is intentionally separate from `TConfig`: apps may expose a
+   * narrow write shape while the backend announces a richer truth document.
+   *
    * The backend owns validation and normalization, then settles with the full
    * applied document. Resolves with that document on success. Rejects with
    * `ConfigureError` on backend-reported failure after any included truth
    * snapshot has already refreshed `session.config`.
    */
-  configure: (patch: Partial<TConfig>) => Promise<Readonly<TConfig>>;
+  configure: (patch: TConfigPatch) => Promise<Readonly<TConfig>>;
 
   /**
    * Graceful shutdown.

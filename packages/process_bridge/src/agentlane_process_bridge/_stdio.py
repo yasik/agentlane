@@ -157,12 +157,13 @@ async def run_stdio(
         approvals=approvals,
         config=config,
     )
-    await backend.start()
 
     if stdout is None:
         with redirect_stdout(sys.stderr):
+            await backend.start()
             await serve_stdio(backend, readline=input_stream.readline)
     else:
+        await backend.start()
         await serve_stdio(backend, readline=input_stream.readline)
 
 

@@ -167,6 +167,44 @@ def test_configure_reports_unsupported_without_store() -> None:
     asyncio.run(scenario())
 
 
+def test_prompt_immediate_cancel_still_emits_terminal_event() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        backend = BridgeBackend(agent=agent, events=EventWriter(output))
+
+        await backend.handle_command(PromptCommand(text="go"))
+        await backend.handle_command(CancelCommand())
+        await backend.cancel_active_run(emit_terminal=True)
+
+        event_types = [event["type"] for event in emitted_events(output)]
+        assert "run_start" in event_types
+        assert "cancel_requested" in event_types
+        assert "run_cancelled" in event_types
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_prompt_immediate_reset_still_emits_terminal_event() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        backend = BridgeBackend(agent=agent, events=EventWriter(output))
+
+        await backend.handle_command(PromptCommand(text="go"))
+        await backend.handle_command(ResetCommand())
+
+        event_types = [event["type"] for event in emitted_events(output)]
+        assert "run_start" in event_types
+        assert "run_cancelled" in event_types
+        assert event_types[-1] == "reset"
+        assert agent.reset_calls == 1
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
 def test_configure_reports_invalid_patch_shape_with_snapshot() -> None:
     async def scenario() -> None:
         output = StringIO()
@@ -611,12 +649,11 @@ def test_backend_cancel_reports_stream_cleanup_error() -> None:
         agent = FakeAgent()
         backend = BridgeBackend(agent=agent, events=EventWriter(output))
 
-        task = asyncio.create_task(backend.run_prompt("go"))
+        await backend.handle_command(PromptCommand(text="go"))
         stream = await wait_for_stream(agent)
         stream.close_error = RuntimeError("close failed")
 
-        task.cancel()
-        await task
+        await backend.cancel_active_run(emit_terminal=True)
 
         events = emitted_events(output)
         assert [event["type"] for event in events] == ["run_start", "error"]

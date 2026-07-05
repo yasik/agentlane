@@ -108,8 +108,9 @@ export function wireBridgeProcess(
   const stdout = createInterface({ input: child.stdout });
 
   stdout.on("line", (line: string): void => {
+    let event: BridgeEvent;
     try {
-      callbacks.onEvent(decodeBridgeEventLine(line));
+      event = decodeBridgeEventLine(line);
     } catch (error) {
       const decodeError =
         error instanceof BridgeDecodeError
@@ -121,6 +122,8 @@ export function wireBridgeProcess(
       callbacks.onInvalidLine?.(line);
       return;
     }
+
+    callbacks.onEvent(event);
   });
 
   const stderr = createInterface({ input: child.stderr });

@@ -74,9 +74,10 @@ const configSchema = z.object({
   attributes: z.record(z.string(), z.string()).default({}),
 });
 
-type ModelConfig = z.infer<typeof configSchema> & Record<string, unknown>;
+type ModelConfig = z.infer<typeof configSchema>;
+type ModelConfigPatch = { model?: string };
 
-const session = await createAgentSession<ModelConfig>({
+const session = await createAgentSession<ModelConfig, ModelConfigPatch>({
   backend: { app: "my_app.backend:create_backend", projectDir: "." },
   decodeConfig: (raw) => configSchema.parse(raw),
   onConfigChanged: (config) => {

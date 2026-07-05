@@ -47,5 +47,5 @@ uv run python examples/harness/default_agent_tool_note_writer/main.py
 uv run python examples/harness/handoff_to_clinical_escalation/main.py
 uv run python examples/harness/default_handoff_takeover/main.py
 uv run python examples/harness/base_tools_plan_quickstart/main.py
-bun run examples/harness/process_bridge_stdio/client.ts
+(cd examples/harness/process_bridge_stdio && bun install && bun run client.ts)
 ```

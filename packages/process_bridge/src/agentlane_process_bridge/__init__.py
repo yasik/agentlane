@@ -74,4 +74,3 @@ __all__ = [
     "run_stdio",
     "serve_stdio",
 ]
-"""Public API exported by the process bridge package."""

@@ -52,10 +52,12 @@ const configErrorCodeSchema: z.ZodType<ConfigErrorCode> = z.enum([
 ]);
 
 /** Schema for backend-reported configure failure details. */
-const configErrorPayloadSchema: z.ZodType<ConfigErrorPayload> = z.object({
-  code: configErrorCodeSchema,
-  message: z.string(),
-});
+const configErrorPayloadSchema: z.ZodType<ConfigErrorPayload> = z
+  .object({
+    code: configErrorCodeSchema,
+    message: z.string(),
+  })
+  .strict();
 
 /**
  * Config settlement schema.
@@ -74,6 +76,7 @@ export const configEventSchema: z.ZodType<ConfigEventPayload> = z
     config: configDocumentSchema.nullable(),
     error: configErrorPayloadSchema.nullable(),
   })
+  .strict()
   .superRefine((event, context) => {
     // A successful configure without a document would resolve the promise with
     // no backend truth. Treat that as protocol drift, not an empty config.

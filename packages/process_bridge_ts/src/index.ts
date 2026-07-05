@@ -14,6 +14,7 @@ export type {
   ChannelScheduler,
 } from "./channel.ts";
 export { createBridgeChannel } from "./channel.ts";
+export { createAgentSession } from "./create-agent-session.ts";
 export {
   BridgeDecodeError,
   decodeBridgeEventLine,
@@ -79,7 +80,6 @@ export {
   PROTOCOL_MAJOR,
   PROTOCOL_VERSION,
 } from "./protocol.ts";
-export { createAgentSession } from "./session.ts";
 export type {
   AgentActivity,
   AgentInfo,

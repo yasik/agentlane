@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type {
   ApprovalRequest,
   ApprovalResolution,
+  SessionDiagnostic,
 } from "../src/session-types.ts";
 import { FakeChild } from "./session-test-helpers.ts";
 import { attachAgentSession } from "./session-test-support.ts";
@@ -54,6 +55,38 @@ describe("agent session approvals", () => {
       allowed: false,
       reason: "No approval policy configured.",
     });
+  });
+
+  test("denies and reports diagnostics when approval policy throws", async () => {
+    const child = new FakeChild();
+    const diagnostics: SessionDiagnostic[] = [];
+    const sessionPromise = attachAgentSession(child, {
+      backend: { command: "fake" },
+      approvals: (): boolean => {
+        throw new Error("modal failed");
+      },
+      onDiagnostic: (diagnostic: SessionDiagnostic): void => {
+        diagnostics.push(diagnostic);
+      },
+    });
+    child.emitReady();
+    await sessionPromise;
+
+    child.emitApprovalRequest("approval-1");
+    await tick();
+
+    expect(child.commands().at(-1)).toMatchObject({
+      type: "approve",
+      id: "approval-1",
+      allowed: false,
+      reason: "Approval policy failed.",
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        kind: "handler-error",
+        handler: "approvals",
+      }),
+    );
   });
 
   test("aborts pending approval policies when backend resolves first", async () => {

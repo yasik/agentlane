@@ -6,7 +6,10 @@ import type { AgentSession, ReadyInfo, RunResult } from "./session-types.ts";
  * The handle is intentionally a facade: it has stable methods for app code, but
  * all mutable lifecycle state remains owned by `AgentSessionController`.
  */
-type SessionHandleOperations<TConfig extends Record<string, unknown>> = {
+type SessionHandleOperations<
+  TConfig extends object,
+  TConfigPatch extends object,
+> = {
   /** Read the latest backend-announced config document. */
   getConfig: () => Readonly<TConfig> | undefined;
 
@@ -20,7 +23,7 @@ type SessionHandleOperations<TConfig extends Record<string, unknown>> = {
   reset: () => Promise<void>;
 
   /** Send a runtime config patch and await the authoritative applied document. */
-  configure: (patch: Partial<TConfig>) => Promise<Readonly<TConfig>>;
+  configure: (patch: TConfigPatch) => Promise<Readonly<TConfig>>;
 
   /** Gracefully close the local backend process. */
   close: () => Promise<void>;
@@ -28,11 +31,12 @@ type SessionHandleOperations<TConfig extends Record<string, unknown>> = {
 
 /** Build the public handle while keeping mutable session state in the controller. */
 export function createSessionHandle<
-  TConfig extends Record<string, unknown> = Record<string, unknown>,
+  TConfig extends object = Record<string, unknown>,
+  TConfigPatch extends object = Partial<TConfig>,
 >(
   ready: ReadyInfo,
-  operations: SessionHandleOperations<TConfig>,
-): AgentSession<TConfig> {
+  operations: SessionHandleOperations<TConfig, TConfigPatch>,
+): AgentSession<TConfig, TConfigPatch> {
   return {
     ready,
     // This getter is load-bearing: a plain value would freeze the startup

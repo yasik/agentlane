@@ -111,6 +111,30 @@ def test_event_writer_rejects_verbatim_payload_key_collisions() -> None:
     asyncio.run(scenario())
 
 
+def test_event_writer_rejects_reserved_envelope_payload_fields() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        writer = EventWriter(output)
+
+        for field in ("protocol_version", "type", "ts"):
+            with pytest.raises(ContractPayloadError):
+                await writer.emit_payload(
+                    BridgeEventType.READY,
+                    {field: "collision"},
+                )
+
+            with pytest.raises(ContractPayloadError):
+                await writer.emit(
+                    BridgeEventType.READY,
+                    verbatim_payload={field: "collision"},
+                )
+
+        assert output.getvalue() == ""
+        await writer.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_event_writer_rejects_oversize_contract_payload() -> None:
     async def scenario() -> None:
         output = StringIO()

@@ -26,12 +26,13 @@ type SessionChild = BridgeChildLike &
  * sequences without weakening the production process abstraction.
  */
 export function attachAgentSession<
-  TConfig extends Record<string, unknown> = Record<string, unknown>,
+  TConfig extends object = Record<string, unknown>,
+  TConfigPatch extends object = Partial<TConfig>,
 >(
   child: SessionChild,
   options: AgentSessionOptions<TConfig>,
-): Promise<AgentSession<TConfig>> {
-  const controller = new AgentSessionController<TConfig>(options);
+): Promise<AgentSession<TConfig, TConfigPatch>> {
+  const controller = new AgentSessionController<TConfig, TConfigPatch>(options);
   const wiring = wireBridgeProcess(child, controller.processCallbacks());
   child.on("error", (error: Error): void => {
     controller.handleSpawnError(error);

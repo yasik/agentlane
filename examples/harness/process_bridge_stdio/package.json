@@ -1,0 +1,8 @@
+{
+  "name": "@agentlane/process-bridge-stdio-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@agentlane/process-bridge": "file:../../../packages/process_bridge_ts"
+  }
+}

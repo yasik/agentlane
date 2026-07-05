@@ -325,9 +325,13 @@ describe("agent session", () => {
   test("fatal protocol errors close the session and reject active runs", async () => {
     const child = new FakeChild();
     const closes: SessionClose[] = [];
+    const text: TextChunk[] = [];
     const sessionPromise = attachAgentSession(child, {
       backend: { command: "fake" },
       onDiagnostic: (_diagnostic: SessionDiagnostic): void => undefined,
+      onAssistantText: (chunk: TextChunk): void => {
+        text.push(chunk);
+      },
       onClose: (close: SessionClose): void => {
         closes.push(close);
       },
@@ -342,10 +346,12 @@ describe("agent session", () => {
     const run = session.run("hello");
 
     child.emitLine("not-json");
+    child.emitEvent({ type: "assistant_delta", ts: 3, text: "stale" });
 
     await expect(run).rejects.toBeInstanceOf(SessionClosedError);
     expect(closes[0]?.reason).toBe("protocol-error");
     expect(child.killed).toContain("SIGKILL");
+    expect(text).toEqual([]);
   });
 
   test("close sends shutdown and resolves after process close", async () => {

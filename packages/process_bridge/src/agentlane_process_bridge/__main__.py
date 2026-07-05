@@ -6,6 +6,7 @@ import importlib
 import inspect
 import sys
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import redirect_stdout
 from typing import cast
 
 from ._backend import AgentRuntime
@@ -52,14 +53,21 @@ async def resolve_agent_backend(
 
 async def run_app_reference(reference: str) -> None:
     """Load an app factory and serve it over stdio."""
-    factory = load_backend_factory(reference)
-    backend = await resolve_agent_backend(factory())
-    await run_stdio(
-        agent=backend.agent,
-        approvals=backend.approvals,
-        ready_metadata=backend.ready_metadata,
-        config=backend.config,
-    )
+    protocol_stdout = sys.stdout
+
+    # App imports, factories, ready metadata, and config stores are app-owned
+    # code. Keep accidental `print()` output off the NDJSON stdout channel before
+    # the first ready frame is emitted.
+    with redirect_stdout(sys.stderr):
+        factory = load_backend_factory(reference)
+        backend = await resolve_agent_backend(factory())
+        await run_stdio(
+            agent=backend.agent,
+            stdout=protocol_stdout,
+            approvals=backend.approvals,
+            ready_metadata=backend.ready_metadata,
+            config=backend.config,
+        )
 
 
 async def amain(argv: Sequence[str] | None = None) -> int:

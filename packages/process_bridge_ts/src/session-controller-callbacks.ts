@@ -101,9 +101,7 @@ type ReducerHandlers = {
  * reducer terminal callbacks into operation outcomes without letting reducer
  * code see child-process or command-queue state.
  */
-export function createSessionReducerCallbacks<
-  TConfig extends Record<string, unknown>,
->(
+export function createSessionReducerCallbacks<TConfig extends object>(
   options: AgentSessionOptions<TConfig>,
   handlers: ReducerHandlers,
 ): SessionReducerCallbacks {

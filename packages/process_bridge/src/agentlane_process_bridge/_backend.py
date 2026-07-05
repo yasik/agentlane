@@ -179,11 +179,14 @@ class BridgeCommandBackend(Protocol):
         """Return whether the active run has already been asked to cancel."""
         ...
 
-    def start_prompt_run(self, prompt: str) -> None:
+    async def start_prompt_run(self, prompt: str) -> None:
         """Start ``prompt`` asynchronously and mark it as the active run.
 
         Callers are responsible for checking ``has_active_run()`` first; this
-        method assumes the prompt command has already been validated.
+        method assumes the prompt command has already been validated. It returns
+        only after the run has emitted its acknowledgement and entered the
+        cancellation guard, so a following cancel/reset command cannot strand
+        the client without a terminal event.
         """
         ...
 
@@ -305,7 +308,12 @@ class BridgeBackend:
             scope=ERROR_SCOPE_COMMAND,
         )
 
-    async def run_prompt(self, prompt: str) -> None:
+    async def run_prompt(
+        self,
+        prompt: str,
+        *,
+        started: asyncio.Future[None],
+    ) -> None:
         """Run one prompt and stream AgentLane run events to the client.
 
         This task owns the run cancellation token. It emits exactly one terminal
@@ -316,7 +324,7 @@ class BridgeBackend:
         token = CancellationToken()
 
         try:
-            await self.events.emit(BridgeEventType.RUN_START, prompt=prompt)
+            started.set_result(None)
 
             stream = await self.agent.run_events(
                 prompt,
@@ -370,11 +378,18 @@ class BridgeBackend:
         self.clear_completed_run()
         return self._active_run is not None and self._active_run.cancelling() > 0
 
-    def start_prompt_run(self, prompt: str) -> None:
+    async def start_prompt_run(self, prompt: str) -> None:
         """Start one prompt run in the background."""
-        # Running prompts in a task keeps the command loop responsive to
-        # approvals and cancellation while the agent is working.
-        self._active_run = asyncio.create_task(self.run_prompt(prompt))
+        await self.events.emit(BridgeEventType.RUN_START, prompt=prompt)
+
+        # The started future is set as the first statement in `run_prompt`, inside
+        # its cancellation guard. Waiting for it avoids the race where a following
+        # cancel/reset command cancels the task before it can emit run_cancelled.
+        started = asyncio.get_running_loop().create_future()
+        self._active_run = asyncio.create_task(
+            self.run_prompt(prompt, started=started),
+        )
+        await started
 
     def request_active_run_cancel(self, *, emit_terminal: bool) -> None:
         """Request cancellation without waiting for run teardown.
@@ -526,7 +541,7 @@ class PromptCommandHandler(BridgeCommandHandler):
             )
             return
 
-        backend.start_prompt_run(prompt)
+        await backend.start_prompt_run(prompt)
 
 
 class ApprovalCommandHandler(BridgeCommandHandler):

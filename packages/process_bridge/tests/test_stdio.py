@@ -1,6 +1,8 @@
 import asyncio
+import sys
 import time
 from collections.abc import AsyncIterator, Callable
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from typing import TextIO, cast
@@ -82,6 +84,84 @@ def test_serve_stdio_reports_bad_command_and_survives() -> None:
         events = emitted_events(output)
         assert [event["type"] for event in events] == ["error", "shutdown"]
         assert events[0]["scope"] == "command"
+
+    asyncio.run(scenario())
+
+
+def test_cli_factory_stdout_is_not_protocol_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module_path = tmp_path / "printing_bridge_app.py"
+    module_path.write_text(
+        """
+from agentlane_process_bridge import AgentBackend
+
+
+class Agent:
+    @property
+    def run_state(self):
+        return None
+
+    def reset(self):
+        return None
+
+    async def run_events(self, input, /, *, approval_events, cancellation_token=None):
+        raise AssertionError("run_events should not be called")
+
+
+def create_backend():
+    print("factory stdout noise")
+    return AgentBackend(agent=Agent(), ready_metadata=lambda: {"app": "printing"})
+""",
+    )
+
+    async def scenario() -> None:
+        from agentlane_process_bridge.__main__ import run_app_reference
+
+        protocol_output = StringIO()
+        stderr = StringIO()
+        sys.path.insert(0, str(tmp_path))
+        monkeypatch.setattr(
+            sys,
+            "stdin",
+            StringIO('{"protocol_version":"1.0","type":"shutdown"}\n'),
+        )
+
+        try:
+            with redirect_stdout(protocol_output), redirect_stderr(stderr):
+                await run_app_reference("printing_bridge_app:create_backend")
+        finally:
+            sys.path.remove(str(tmp_path))
+
+        events = emitted_events(protocol_output)
+        assert [event["type"] for event in events] == ["ready", "shutdown"]
+        assert events[0]["metadata"] == {"app": "printing"}
+        assert "factory stdout noise" in stderr.getvalue()
+
+    asyncio.run(scenario())
+
+
+def test_run_stdio_ready_metadata_stdout_is_not_protocol_output() -> None:
+    def ready_metadata() -> dict[str, object]:
+        print("ready metadata stdout noise")
+        return {"app": "printing"}
+
+    async def scenario() -> None:
+        protocol_output = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(protocol_output), redirect_stderr(stderr):
+            await run_stdio(
+                agent=FakeAgent(),
+                stdin=StringIO('{"protocol_version":"1.0","type":"shutdown"}\n'),
+                ready_metadata=ready_metadata,
+            )
+
+        events = emitted_events(protocol_output)
+        assert [event["type"] for event in events] == ["ready", "shutdown"]
+        assert events[0]["metadata"] == {"app": "printing"}
+        assert "ready metadata stdout noise" in stderr.getvalue()
 
     asyncio.run(scenario())
 

@@ -153,6 +153,44 @@ describe("event decoding", () => {
     expect(error.fields).toContain("request.metadata");
   });
 
+  test("rejects extra fields on known event payloads", () => {
+    const error = decodeErrorFor(
+      JSON.stringify({
+        protocol_version: "1.0",
+        type: "run_start",
+        ts: 1,
+        prompt: "go",
+        unexpected: true,
+      }),
+    );
+
+    expect(error.fields).toEqual(["event"]);
+  });
+
+  test("rejects extra fields on nested protocol payloads", () => {
+    const error = decodeErrorFor(
+      JSON.stringify({
+        protocol_version: "1.0",
+        type: "llm_end",
+        ts: 1,
+        task_id: "task",
+        parent_task_id: null,
+        is_root: true,
+        is_subagent: false,
+        agent: "Root",
+        output_preview: "done",
+        usage: {
+          prompt_tokens: 1200,
+          completion_tokens: 340,
+          total_tokens: 1540,
+          cached_tokens: 100,
+        },
+      }),
+    );
+
+    expect(error.fields).toEqual(["usage"]);
+  });
+
   test("decodes ready, reset, and config documents", () => {
     const ready = decodeBridgeEventLine(
       JSON.stringify({

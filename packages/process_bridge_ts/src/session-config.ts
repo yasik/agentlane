@@ -9,7 +9,7 @@ import { ConfigureError } from "./session-types.ts";
  * call app code. Keeping those effects injected makes this class about config
  * state and settlement only, not process lifecycle.
  */
-type ConfigCallbacks<TConfig extends Record<string, unknown>> = {
+type ConfigCallbacks<TConfig extends object> = {
   /**
    * Optional app decoder for the opaque backend document.
    *
@@ -36,7 +36,7 @@ type ConfigCallbacks<TConfig extends Record<string, unknown>> = {
  * notifies post-startup subscribers.
  */
 export class SessionConfigState<
-  TConfig extends Record<string, unknown> = Record<string, unknown>,
+  TConfig extends object = Record<string, unknown>,
 > {
   private readonly callbacks: ConfigCallbacks<TConfig>;
   private currentConfig: Readonly<TConfig> | undefined;

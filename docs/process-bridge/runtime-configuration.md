@@ -102,9 +102,10 @@ def create_backend() -> AgentBackend:
 TypeScript app:
 
 ```ts
-type ModelConfig = Record<string, unknown> & { model: string };
+type ModelConfig = { model: string };
+type ModelConfigPatch = { model?: string };
 
-const session = await createAgentSession<ModelConfig>({
+const session = await createAgentSession<ModelConfig, ModelConfigPatch>({
   backend: { app: "my_app.backend:create_backend", projectDir: "." },
   decodeConfig: (raw) => {
     if (typeof raw.model !== "string") throw new Error("model must be string");

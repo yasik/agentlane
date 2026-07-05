@@ -59,7 +59,8 @@ the emitted `BridgeEventType` values, and its encoder implementation.
    ids, attributes, or options. Let unexpected exceptions raise normally; the
    bridge reports them as internal failures with a fresh snapshot.
 6. Pass the store as `AgentBackend(config=store)` or `run_stdio(config=store)`.
-7. In TypeScript, call `createAgentSession<TConfig>({ decodeConfig, ... })` and
+7. In TypeScript, call `createAgentSession<TConfig, TConfigPatch>({
+   decodeConfig, ... })` when the patch shape differs from backend truth, and
    render from `session.config` plus `onConfigChanged`.
 8. Apply changes through `await session.configure(patch)`. Do not predict local
    state; the resolved document and callback are backend truth.

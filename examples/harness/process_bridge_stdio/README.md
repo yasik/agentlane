@@ -26,10 +26,9 @@ const session = await createAgentSession({
 Run the client from the repository root:
 
 ```bash
-cd packages/process_bridge_ts
+cd examples/harness/process_bridge_stdio
 bun install
-cd ../..
-bun run examples/harness/process_bridge_stdio/client.ts
+bun run client.ts
 ```
 
 Expected output includes lifecycle events such as `ready`, `run_start`,
