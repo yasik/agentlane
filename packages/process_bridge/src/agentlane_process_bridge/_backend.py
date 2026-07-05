@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Protocol, cast, runtime_checkable
+from typing import Literal, Protocol, cast, runtime_checkable
 
 import structlog
 
@@ -32,6 +32,8 @@ from ._protocol import (
     BridgeCommand,
     BridgeEventType,
     CancelCommand,
+    ConfigureCommand,
+    ContractPayloadError,
     EventWriter,
     PromptCommand,
     ResetCommand,
@@ -39,6 +41,39 @@ from ._protocol import (
 )
 
 _logger = structlog.get_logger(__name__)
+
+type ConfigErrorCode = Literal["invalid", "unsupported", "rejected", "internal"]
+
+_CONFIG_INTERNAL_ERROR_MESSAGE = "Runtime configuration failed inside the backend."
+"""Non-leaking client message used when app-owned config code raises unexpectedly."""
+
+
+class ConfigRejectedError(Exception):
+    """Runtime config patch was rejected with a user-presentable message."""
+
+
+class RuntimeConfigStore(Protocol):
+    """App-owned runtime configuration document synchronized with the client.
+
+    The bridge transports desired-state patches in and authoritative full
+    documents out. It never interprets config keys or values.
+    """
+
+    def snapshot(self) -> dict[str, object]:
+        """Return the complete current JSON-serializable config document."""
+        ...
+
+    def apply(self, patch: dict[str, object]) -> dict[str, object]:
+        """Validate and apply a patch, then return the full applied document.
+
+        Implementations should validate the whole patch before mutating state.
+        Reject unknown keys and invalid values at the app boundary; config
+        values should come from a closed vocabulary such as a model catalog, not
+        arbitrary user strings. Raise ``ConfigRejectedError`` for user-fixable
+        rejections; any other exception is treated as an app bug and surfaced as
+        an internal failure.
+        """
+        ...
 
 
 class RunEventStreamLike(Protocol):
@@ -122,6 +157,7 @@ class BridgeCommandBackend(Protocol):
     agent: AgentRuntime
     events: EventWriter
     approvals: ToolApprovalBroker
+    config: RuntimeConfigStore | None
 
     def clear_completed_run(self) -> None:
         """Release a finished active-run task before command validation.
@@ -176,6 +212,10 @@ class BridgeCommandBackend(Protocol):
         """Resolve every currently pending approval request as denied."""
         ...
 
+    def config_snapshot_payload(self) -> dict[str, object]:
+        """Return ``{"config": snapshot}`` when a store is registered."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class BridgeCommandHandler(ABC):
@@ -205,10 +245,12 @@ class BridgeBackend:
         ready_metadata: ReadyMetadataProvider | None = None,
         command_handlers: tuple[BridgeCommandHandler, ...] | None = None,
         approvals: ToolApprovalBroker | None = None,
+        config: RuntimeConfigStore | None = None,
     ) -> None:
         self.agent = agent
         self.events = events
         self.ready_metadata = ready_metadata
+        self.config = config
         # Approval callbacks and bridge commands must share the same broker
         # instance. Otherwise tool calls wait on one broker while client
         # decisions resolve against another one.
@@ -226,11 +268,15 @@ class BridgeBackend:
     async def start(self) -> None:
         """Emit the initial ready event."""
         metadata = await self._resolve_ready_metadata()
+        verbatim_payload = {
+            "metadata": metadata,
+            **self.config_snapshot_payload(),
+        }
         await self.events.emit(
             BridgeEventType.READY,
             version=_package_version(),
             package="agentlane-process-bridge",
-            metadata=metadata,
+            verbatim_payload=verbatim_payload,
         )
 
     async def close(self, *, emit_terminal: bool = False) -> None:
@@ -425,12 +471,19 @@ class BridgeBackend:
                 ToolPermissionDecision.deny(reason),
             )
 
+    def config_snapshot_payload(self) -> dict[str, object]:
+        """Return a ready/reset payload fragment containing current config."""
+        if self.config is None:
+            return {}
+
+        return {"config": _snapshot_config(self.config)}
+
     async def _emit_run_event(self, event: RunEvent) -> None:
         encoded = self._encoder.encode(event)
         if encoded is None:
             return
 
-        await self.events.emit(encoded.type, **encoded.payload)
+        await self.events.emit_payload(encoded.type, encoded.payload)
 
     async def _resolve_ready_metadata(self) -> dict[str, object]:
         if self.ready_metadata is None:
@@ -503,6 +556,67 @@ class ApprovalCommandHandler(BridgeCommandHandler):
             )
 
 
+class ConfigureCommandHandler(BridgeCommandHandler):
+    """Handle runtime configuration patches through the app-owned store."""
+
+    def __init__(self) -> None:
+        super().__init__(ConfigureCommand)
+
+    async def handle(self, backend: BridgeCommandBackend, command: object) -> None:
+        configure_command = cast(ConfigureCommand, command)
+        store = backend.config
+
+        if store is None:
+            await _emit_config_result(
+                backend,
+                ok=False,
+                config=None,
+                code="unsupported",
+                message="Runtime configuration is not supported by this backend.",
+            )
+            return
+
+        if configure_command.patch is None:
+            await _emit_config_result(
+                backend,
+                ok=False,
+                config=_snapshot_config(store),
+                code="invalid",
+                message="Configure command patch must be a JSON object.",
+            )
+            return
+
+        try:
+            config = store.apply(configure_command.patch)
+        except ConfigRejectedError as exc:
+            await _emit_config_result(
+                backend,
+                ok=False,
+                config=_snapshot_config(store),
+                code="rejected",
+                message=str(exc) or "Runtime configuration was rejected.",
+            )
+            return
+        except Exception:
+            _logger.exception("bridge_config_apply_failed")
+            await _emit_config_result(
+                backend,
+                ok=False,
+                config=_snapshot_config(store),
+                code="internal",
+                message=_CONFIG_INTERNAL_ERROR_MESSAGE,
+            )
+            return
+
+        await _emit_config_result(
+            backend,
+            ok=True,
+            config=config,
+            code=None,
+            message=None,
+        )
+
+
 class CancelCommandHandler(BridgeCommandHandler):
     """Handle cooperative cancellation for the active run."""
 
@@ -549,7 +663,10 @@ class ResetCommandHandler(BridgeCommandHandler):
         await backend.deny_pending_approvals("Run reset.")
         backend.agent.reset()
         backend.reset_encoder_turns()
-        await backend.events.emit(BridgeEventType.RESET)
+        await backend.events.emit(
+            BridgeEventType.RESET,
+            verbatim_payload=backend.config_snapshot_payload(),
+        )
 
 
 class ShutdownCommandHandler(BridgeCommandHandler):
@@ -585,6 +702,7 @@ class ShutdownCommandHandler(BridgeCommandHandler):
 BRIDGE_COMMAND_HANDLERS: tuple[BridgeCommandHandler, ...] = (
     PromptCommandHandler(),
     ApprovalCommandHandler(),
+    ConfigureCommandHandler(),
     CancelCommandHandler(),
     ResetCommandHandler(),
     ShutdownCommandHandler(),
@@ -628,6 +746,36 @@ def _run_shim_state(state: RunState | None) -> dict[str, object]:
         return {}
 
     return dict(state.shim_state)
+
+
+def _snapshot_config(store: RuntimeConfigStore) -> dict[str, object]:
+    try:
+        return store.snapshot()
+    except Exception as exc:
+        raise ContractPayloadError("Runtime config snapshot failed.") from exc
+
+
+async def _emit_config_result(
+    backend: BridgeCommandBackend,
+    *,
+    ok: bool,
+    config: dict[str, object] | None,
+    code: ConfigErrorCode | None,
+    message: str | None,
+) -> None:
+    """Emit the sole settlement event for one configure command."""
+    error: dict[str, object] | None
+    if code is None:
+        error = None
+    else:
+        error = {"code": code, "message": message or ""}
+
+    await backend.events.emit(
+        BridgeEventType.CONFIG,
+        ok=ok,
+        error=error,
+        verbatim_payload={"config": config},
+    )
 
 
 def _package_version() -> str:

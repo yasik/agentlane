@@ -8,6 +8,7 @@ from agentlane_process_bridge.__main__ import (
     load_backend_factory,
     parse_app_reference,
     resolve_agent_backend,
+    run_app_reference,
 )
 
 from .helpers import FakeAgent
@@ -55,3 +56,37 @@ def test_resolve_agent_backend_awaits_factory_result() -> None:
         assert isinstance(backend.agent, FakeAgent)
 
     asyncio.run(scenario())
+
+
+def test_run_app_reference_forwards_backend_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConfigStore:
+        def snapshot(self) -> dict[str, object]:
+            return {"model": "openai/gpt-5.5"}
+
+        def apply(self, patch: dict[str, object]) -> dict[str, object]:
+            del patch
+
+            return self.snapshot()
+
+    module = ModuleType("test_process_bridge_config_app")
+    config = ConfigStore()
+    module.__dict__["create_backend"] = lambda: AgentBackend(
+        agent=FakeAgent(),
+        config=config,
+    )
+    sys.modules[module.__name__] = module
+    captured: dict[str, object] = {}
+
+    async def fake_run_stdio(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("agentlane_process_bridge.__main__.run_stdio", fake_run_stdio)
+
+    try:
+        asyncio.run(run_app_reference(f"{module.__name__}:create_backend"))
+    finally:
+        sys.modules.pop(module.__name__, None)
+
+    assert captured["config"] is config

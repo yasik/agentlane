@@ -2,6 +2,7 @@ import asyncio
 from io import StringIO
 from pathlib import Path
 
+import pytest
 from agentlane_process_bridge import (
     BRIDGE_COMMAND_HANDLERS,
     ApproveCommand,
@@ -10,6 +11,9 @@ from agentlane_process_bridge import (
     BridgeCommandHandler,
     BridgeEventType,
     CancelCommand,
+    ConfigRejectedError,
+    ConfigureCommand,
+    ContractPayloadError,
     EventWriter,
     PromptCommand,
     ResetCommand,
@@ -28,12 +32,37 @@ from agentlane.harness.tools import (
 from .helpers import FakeAgent, emitted_events, wait_for_event_count, wait_for_stream
 
 
+class _ConfigStore:
+    def __init__(self, document: dict[str, object] | None = None) -> None:
+        self.document = document or {"model": "openai/gpt-5.5"}
+        self.apply_calls: list[dict[str, object]] = []
+        self.reject_message: str | None = None
+        self.internal_document: dict[str, object] | None = None
+
+    def snapshot(self) -> dict[str, object]:
+        return dict(self.document)
+
+    def apply(self, patch: dict[str, object]) -> dict[str, object]:
+        self.apply_calls.append(patch)
+
+        if self.reject_message is not None:
+            raise ConfigRejectedError(self.reject_message)
+
+        if self.internal_document is not None:
+            self.document = dict(self.internal_document)
+            raise RuntimeError("store bug")
+
+        self.document = {**self.document, **patch}
+        return self.snapshot()
+
+
 def test_default_command_registry_covers_known_commands() -> None:
     command_types = [handler.command_type for handler in BRIDGE_COMMAND_HANDLERS]
 
     assert command_types == [
         PromptCommand,
         ApproveCommand,
+        ConfigureCommand,
         CancelCommand,
         ResetCommand,
         ShutdownCommand,
@@ -95,6 +124,196 @@ def test_backend_start_emits_ready_with_metadata() -> None:
         assert event["protocol_version"] == "1.0"
         assert event["package"] == "agentlane-process-bridge"
         assert event["metadata"] == {"app": "demo"}
+        assert "config" not in event
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_backend_start_emits_ready_with_config_snapshot() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        store = _ConfigStore({"model": "openai/gpt-5.5"})
+        backend = BridgeBackend(
+            agent=FakeAgent(),
+            events=EventWriter(output),
+            config=store,
+        )
+
+        await backend.start()
+
+        [event] = emitted_events(output)
+        assert event["type"] == "ready"
+        assert event["config"] == {"model": "openai/gpt-5.5"}
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_configure_reports_unsupported_without_store() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(output))
+
+        await backend.handle_command(ConfigureCommand(patch={"model": "x"}))
+
+        [event] = emitted_events(output)
+        assert event["type"] == "config"
+        assert event["ok"] is False
+        assert event["config"] is None
+        assert event["error"]["code"] == "unsupported"
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_configure_reports_invalid_patch_shape_with_snapshot() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        store = _ConfigStore({"model": "openai/gpt-5.5"})
+        backend = BridgeBackend(
+            agent=FakeAgent(),
+            events=EventWriter(output),
+            config=store,
+        )
+
+        await backend.handle_command(ConfigureCommand(patch=None))
+
+        [event] = emitted_events(output)
+        assert event["type"] == "config"
+        assert event["ok"] is False
+        assert event["config"] == {"model": "openai/gpt-5.5"}
+        assert event["error"]["code"] == "invalid"
+        assert store.apply_calls == []
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_configure_reports_store_rejection_with_snapshot() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        store = _ConfigStore({"model": "openai/gpt-5.5"})
+        store.reject_message = "Unknown model: openai/gpt-9"
+        backend = BridgeBackend(
+            agent=FakeAgent(),
+            events=EventWriter(output),
+            config=store,
+        )
+
+        await backend.handle_command(ConfigureCommand(patch={"model": "openai/gpt-9"}))
+
+        [event] = emitted_events(output)
+        assert event["type"] == "config"
+        assert event["ok"] is False
+        assert event["config"] == {"model": "openai/gpt-5.5"}
+        assert event["error"] == {
+            "code": "rejected",
+            "message": "Unknown model: openai/gpt-9",
+        }
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_configure_reports_internal_error_with_truth_snapshot() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        store = _ConfigStore({"model": "openai/gpt-5.5"})
+        store.internal_document = {"model": "anthropic/claude-opus-4-8"}
+        backend = BridgeBackend(
+            agent=FakeAgent(),
+            events=EventWriter(output),
+            config=store,
+        )
+
+        await backend.handle_command(
+            ConfigureCommand(patch={"model": "anthropic/claude-opus-4-8"})
+        )
+
+        [event] = emitted_events(output)
+        assert event["type"] == "config"
+        assert event["ok"] is False
+        assert event["config"] == {"model": "anthropic/claude-opus-4-8"}
+        assert event["error"]["code"] == "internal"
+        assert (
+            event["error"]["message"]
+            == "Runtime configuration failed inside the backend."
+        )
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_configure_oversize_document_fails_loudly() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        store = _ConfigStore({"model": "openai/gpt-5.5"})
+        backend = BridgeBackend(
+            agent=FakeAgent(),
+            events=EventWriter(output),
+            config=store,
+        )
+
+        with pytest.raises(ContractPayloadError):
+            await backend.handle_command(
+                ConfigureCommand(patch={"catalog": "x" * 40_000})
+            )
+
+        assert emitted_events(output) == []
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_configure_settles_before_next_prompt_run() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        store = _ConfigStore({"model": "openai/gpt-5.5"})
+        backend = BridgeBackend(
+            agent=agent,
+            events=EventWriter(output),
+            config=store,
+        )
+
+        await backend.handle_command(
+            ConfigureCommand(patch={"model": "anthropic/claude-opus-4-8"})
+        )
+        await backend.handle_command(PromptCommand(text="go"))
+        await wait_for_stream(agent)
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["config", "run_start"]
+        assert events[0]["config"] == {"model": "anthropic/claude-opus-4-8"}
+        assert store.apply_calls == [{"model": "anthropic/claude-opus-4-8"}]
+        assert agent.prompts == ["go"]
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_configure_is_accepted_while_run_is_active() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        store = _ConfigStore({"model": "openai/gpt-5.5"})
+        backend = BridgeBackend(
+            agent=agent,
+            events=EventWriter(output),
+            config=store,
+        )
+
+        await backend.handle_command(PromptCommand(text="go"))
+        await wait_for_stream(agent)
+        await backend.handle_command(
+            ConfigureCommand(patch={"model": "anthropic/claude-opus-4-8"})
+        )
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["run_start", "config"]
+        assert events[1]["ok"] is True
+        assert events[1]["config"] == {"model": "anthropic/claude-opus-4-8"}
         await backend.close()
 
     asyncio.run(scenario())
@@ -176,8 +395,42 @@ def test_backend_reset_cancels_run_then_accepts_new_prompt() -> None:
             "reset",
             "run_start",
         ]
+        assert "config" not in events[2]
         assert agent.reset_calls == 1
         assert agent.prompts == ["first", "second"]
+        await backend.close()
+
+    asyncio.run(scenario())
+
+
+def test_backend_reset_reannounces_config_snapshot() -> None:
+    class ResetAwareConfigStore:
+        def __init__(self, agent: FakeAgent) -> None:
+            self.agent = agent
+
+        def snapshot(self) -> dict[str, object]:
+            return {"reset_calls": self.agent.reset_calls}
+
+        def apply(self, patch: dict[str, object]) -> dict[str, object]:
+            del patch
+
+            return self.snapshot()
+
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        store = ResetAwareConfigStore(agent)
+        backend = BridgeBackend(
+            agent=agent,
+            events=EventWriter(output),
+            config=store,
+        )
+
+        await backend.handle_command(ResetCommand())
+
+        [event] = emitted_events(output)
+        assert event["type"] == "reset"
+        assert event["config"] == {"reset_calls": 1}
         await backend.close()
 
     asyncio.run(scenario())

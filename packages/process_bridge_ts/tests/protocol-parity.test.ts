@@ -10,7 +10,7 @@ const fixtureUrl: URL = new URL(
 describe("protocol fixtures", () => {
   test("command type list covers known command union", () => {
     expectSameSet(
-      ["prompt", "approve", "cancel", "reset", "shutdown"],
+      ["prompt", "approve", "cancel", "configure", "reset", "shutdown"],
       [...KNOWN_COMMAND_TYPES],
       "bridge command union",
       "TypeScript command type list",

@@ -41,6 +41,9 @@ export type {
   BridgeEvent,
   CancelIgnoredEvent,
   CancelRequestedEvent,
+  ConfigErrorCode,
+  ConfigErrorPayload,
+  ConfigEvent,
   DecodedBridgeEvent,
   ErrorEvent,
   ErrorScope,
@@ -86,6 +89,7 @@ export type {
   ApprovalPolicy,
   ApprovalRequest,
   ApprovalResolution,
+  ConfigureErrorCode,
   PlanStepStatus,
   PlanUpdate,
   ReadyInfo,
@@ -97,6 +101,7 @@ export type {
   ToolCallInfo,
 } from "./session-types.ts";
 export {
+  ConfigureError,
   RunError,
   SessionClosedError,
   SessionStartError,

@@ -89,7 +89,7 @@ mental model:
    [Harness Skills](./harness/skills.md) after
    [Harness Shims](./harness/shims.md).
 8. If you are building a TypeScript app around a local Python AgentLane
-   backend, read [Harness Process Bridge](./harness/process-bridge.md).
+   backend, read [Process Bridge](./process-bridge/README.md).
 9. If you want to understand prompt construction or tool exposure, read
    [Models Overview](./models/overview.md) and
    [Models: Prompt Templating](./models/prompt-templating.md).
@@ -131,8 +131,14 @@ mental model:
 6. [Tools](./harness/tools.md)
 7. [Skills](./harness/skills.md)
 8. [Runner](./harness/runner.md)
-9. [Process Bridge](./harness/process-bridge.md)
-10. [Distributed Agents](./harness/distributed-agents.md)
+9. [Distributed Agents](./harness/distributed-agents.md)
+
+### Process Bridge
+
+1. [Overview](./process-bridge/README.md)
+2. [Runtime Configuration](./process-bridge/runtime-configuration.md)
+3. [Protocol and Lifecycle](./process-bridge/protocol.md)
+4. [Development](./process-bridge/development.md)
 
 ### Tracing
 

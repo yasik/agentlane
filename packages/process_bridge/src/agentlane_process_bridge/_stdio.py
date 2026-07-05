@@ -12,10 +12,16 @@ import structlog
 
 from agentlane.harness.tools import ToolApprovalBroker
 
-from ._backend import AgentRuntime, BridgeBackend, ReadyMetadataProvider
+from ._backend import (
+    AgentRuntime,
+    BridgeBackend,
+    ReadyMetadataProvider,
+    RuntimeConfigStore,
+)
 from ._protocol import (
     ERROR_SCOPE_COMMAND,
     BridgeEventType,
+    ContractPayloadError,
     EventWriter,
     ProtocolError,
     ShutdownCommand,
@@ -40,6 +46,7 @@ class AgentBackend:
     agent: AgentRuntime
     approvals: ToolApprovalBroker | None = None
     ready_metadata: ReadyMetadataProvider | None = None
+    config: RuntimeConfigStore | None = None
 
 
 async def serve_stdio(
@@ -100,6 +107,11 @@ async def serve_stdio(
 
             try:
                 await backend.handle_command(command)
+            except ContractPayloadError:
+                # Contract payload failures mean backend state could not be
+                # announced truthfully. Exiting loudly is safer than keeping a
+                # live client with silently divergent config state.
+                raise
             except Exception as exc:
                 # Command handling is the boundary where validation, backend
                 # state, and transport errors become structured client feedback.
@@ -127,6 +139,7 @@ async def run_stdio(
     stdout: TextIO | None = None,
     ready_metadata: ReadyMetadataProvider | None = None,
     approvals: ToolApprovalBroker | None = None,
+    config: RuntimeConfigStore | None = None,
 ) -> None:
     """Run a bridge backend against process stdin/stdout.
 
@@ -142,6 +155,7 @@ async def run_stdio(
         events=EventWriter(output_stream),
         ready_metadata=ready_metadata,
         approvals=approvals,
+        config=config,
     )
     await backend.start()
 
@@ -168,6 +182,8 @@ async def _report_command_error(backend: BridgeBackend, message: str) -> bool:
             message=message,
             scope=ERROR_SCOPE_COMMAND,
         )
+    except ContractPayloadError:
+        raise
     except Exception:
         # If the error itself cannot be written, the client pipe is no longer a
         # reliable recovery channel and the command loop should stop.

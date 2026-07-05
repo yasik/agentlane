@@ -25,11 +25,13 @@ type SessionChild = BridgeChildLike &
  * process, so tests can drive exact stdout, stderr, close, and write-failure
  * sequences without weakening the production process abstraction.
  */
-export function attachAgentSession(
+export function attachAgentSession<
+  TConfig extends Record<string, unknown> = Record<string, unknown>,
+>(
   child: SessionChild,
-  options: AgentSessionOptions,
-): Promise<AgentSession> {
-  const controller = new AgentSessionController(options);
+  options: AgentSessionOptions<TConfig>,
+): Promise<AgentSession<TConfig>> {
+  const controller = new AgentSessionController<TConfig>(options);
   const wiring = wireBridgeProcess(child, controller.processCallbacks());
   child.on("error", (error: Error): void => {
     controller.handleSpawnError(error);

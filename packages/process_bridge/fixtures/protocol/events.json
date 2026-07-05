@@ -7,24 +7,43 @@
     "package": "agentlane-process-bridge",
     "metadata": {
       "app": "demo"
+    },
+    "config": {
+      "model": "openai/gpt-5.5",
+      "attributes": {
+        "effort": "medium"
+      }
     }
   },
   {
     "protocol_version": "1.0",
-    "type": "run_start",
+    "type": "config",
     "ts": 2,
+    "ok": true,
+    "config": {
+      "model": "anthropic/claude-opus-4-8",
+      "attributes": {
+        "thinking": "disabled"
+      }
+    },
+    "error": null
+  },
+  {
+    "protocol_version": "1.0",
+    "type": "run_start",
+    "ts": 3,
     "prompt": "Summarize the chart."
   },
   {
     "protocol_version": "1.0",
     "type": "assistant_delta",
-    "ts": 3,
+    "ts": 4,
     "text": "The chart shows"
   },
   {
     "protocol_version": "1.0",
     "type": "reasoning_delta",
-    "ts": 4,
+    "ts": 5,
     "text": "Need compare trend.",
     "provider_event_type": "response.reasoning.delta",
     "reasoning_signature": null
@@ -32,7 +51,7 @@
   {
     "protocol_version": "1.0",
     "type": "tool_arguments_delta",
-    "ts": 5,
+    "ts": 6,
     "tool_call_id": "call_1",
     "tool_call_index": 0,
     "delta": "{\"path\""
@@ -40,7 +59,7 @@
   {
     "protocol_version": "1.0",
     "type": "provider_event",
-    "ts": 6,
+    "ts": 7,
     "provider_event_type": "response.output_item.added",
     "item_index": 0,
     "item_type": "reasoning",
@@ -49,7 +68,7 @@
   {
     "protocol_version": "1.0",
     "type": "agent_start",
-    "ts": 7,
+    "ts": 8,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -60,7 +79,7 @@
   {
     "protocol_version": "1.0",
     "type": "agent_end",
-    "ts": 8,
+    "ts": 9,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -71,7 +90,7 @@
   {
     "protocol_version": "1.0",
     "type": "llm_start",
-    "ts": 9,
+    "ts": 10,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -82,7 +101,7 @@
   {
     "protocol_version": "1.0",
     "type": "llm_end",
-    "ts": 10,
+    "ts": 11,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -98,7 +117,7 @@
   {
     "protocol_version": "1.0",
     "type": "tool_start",
-    "ts": 11,
+    "ts": 12,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -115,7 +134,7 @@
   {
     "protocol_version": "1.0",
     "type": "tool_end",
-    "ts": 12,
+    "ts": 13,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -135,7 +154,7 @@
   {
     "protocol_version": "1.0",
     "type": "plan_updated",
-    "ts": 13,
+    "ts": 14,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -155,7 +174,7 @@
   {
     "protocol_version": "1.0",
     "type": "approval_request",
-    "ts": 14,
+    "ts": 15,
     "id": "tool-approval-1",
     "request": {
       "tool_name": "write",
@@ -175,7 +194,7 @@
   {
     "protocol_version": "1.0",
     "type": "approval_resolved",
-    "ts": 15,
+    "ts": 16,
     "id": "tool-approval-1",
     "allowed": false,
     "request": {
@@ -196,7 +215,7 @@
   {
     "protocol_version": "1.0",
     "type": "state_snapshot",
-    "ts": 16,
+    "ts": 17,
     "boundary": "turn_prepared",
     "turn_count": 1,
     "history_length": 2,
@@ -210,7 +229,7 @@
   {
     "protocol_version": "1.0",
     "type": "handoff_start",
-    "ts": 17,
+    "ts": 18,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -223,7 +242,7 @@
   {
     "protocol_version": "1.0",
     "type": "handoff_end",
-    "ts": 18,
+    "ts": 19,
     "agent": "Researcher",
     "task_id": "task_root",
     "parent_task_id": null,
@@ -237,7 +256,7 @@
   {
     "protocol_version": "1.0",
     "type": "run_complete",
-    "ts": 19,
+    "ts": 20,
     "final_output": "Done",
     "turn_count": 1,
     "response_count": 1,
@@ -246,40 +265,46 @@
   {
     "protocol_version": "1.0",
     "type": "run_cancelled",
-    "ts": 20
+    "ts": 21
   },
   {
     "protocol_version": "1.0",
     "type": "error",
-    "ts": 21,
+    "ts": 22,
     "message": "A run is already active.",
     "scope": "command"
   },
   {
     "protocol_version": "1.0",
     "type": "reset",
-    "ts": 22
+    "ts": 23,
+    "config": {
+      "model": "anthropic/claude-opus-4-8",
+      "attributes": {
+        "thinking": "disabled"
+      }
+    }
   },
   {
     "protocol_version": "1.0",
     "type": "cancel_requested",
-    "ts": 23
+    "ts": 24
   },
   {
     "protocol_version": "1.0",
     "type": "cancel_ignored",
-    "ts": 24,
+    "ts": 25,
     "reason": "no active run"
   },
   {
     "protocol_version": "1.0",
     "type": "shutdown",
-    "ts": 25
+    "ts": 26
   },
   {
     "protocol_version": "1.0",
     "type": "run_event",
-    "ts": 26,
+    "ts": 27,
     "run_event_type": "FutureRunEvent"
   }
 ]

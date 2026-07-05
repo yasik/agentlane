@@ -3,7 +3,7 @@
 `@agentlane/process-bridge` is the TypeScript companion for local AgentLane
 harness apps. The primary API is `createAgentSession`: it starts a Python
 AgentLane backend, waits for readiness, streams typed session callbacks, and
-settles run, cancel, reset, and close operations.
+settles run, configure, cancel, reset, and close operations.
 
 The package is UI-framework agnostic. Apps own rendering, conversation state,
 audit panels, and domain-specific reducers.
@@ -54,6 +54,54 @@ The Python factory owns agent construction, tools, model settings, sub-agents,
 and approval broker wiring. The TypeScript app sends prompts and control
 commands, then consumes session callbacks and run results.
 
+## Runtime Configuration
+
+Use `session.configure(patch)` for backend runtime settings that belong to the
+agent instance, such as a model selection. The Python backend owns validation
+through `RuntimeConfigStore`; the TypeScript side owns rendering and optional
+runtime decoding through `decodeConfig`.
+
+For the Python store shape, model-settings propagation, and the difference
+between static `ready.metadata` and mutable `session.config`, see
+[Process Bridge: Runtime Configuration](../../docs/process-bridge/runtime-configuration.md).
+
+```ts
+import { createAgentSession } from "@agentlane/process-bridge";
+import { z } from "zod";
+
+const configSchema = z.object({
+  model: z.string(),
+  attributes: z.record(z.string(), z.string()).default({}),
+});
+
+type ModelConfig = z.infer<typeof configSchema> & Record<string, unknown>;
+
+const session = await createAgentSession<ModelConfig>({
+  backend: { app: "my_app.backend:create_backend", projectDir: "." },
+  decodeConfig: (raw) => configSchema.parse(raw),
+  onConfigChanged: (config) => {
+    modelPicker.setSelected(config.model);
+    attributePanel.render(config.attributes);
+  },
+});
+
+if (session.config) {
+  modelPicker.setSelected(session.config.model);
+  attributePanel.render(session.config.attributes);
+}
+
+await session.configure({ model: "anthropic/claude-opus-4-8" });
+```
+
+`configure()` resolves with the full applied document on success. It rejects
+with `ConfigureError` when the backend reports `invalid`, `unsupported`,
+`rejected`, or `internal`; if the failure includes a truth snapshot, the session
+cache is updated before the promise rejects. The initial `ready.config` does
+not fire `onConfigChanged`; read `session.config` after startup so app setup has
+one clear initialization point. Top-level patch values must not be `undefined`;
+use an explicit app-defined value when a setting needs a reset or disabled
+state.
+
 ## Session API
 
 The main public entrypoints are:
@@ -63,13 +111,14 @@ The main public entrypoints are:
 3. `AgentSessionOptions`
 4. `RunResult`
 5. `RunError`
-6. `SessionStartError`
-7. `SessionClosedError`
-8. `SessionStateError`
+6. `ConfigureError`
+7. `SessionStartError`
+8. `SessionClosedError`
+9. `SessionStateError`
 
 `createAgentSession(options)` resolves after the backend emits `ready`. The
-returned session handle supports one active `run()` at a time plus `cancel()`,
-`reset()`, and idempotent `close()`.
+returned session handle supports one active `run()` at a time plus
+`configure()`, `cancel()`, `reset()`, and idempotent `close()`.
 
 Session callbacks provide balanced semantic events:
 
@@ -79,7 +128,9 @@ Session callbacks provide balanced semantic events:
 3. `onAgentActivity` emits balanced root-agent and sub-agent task phases.
 4. `onPlan` emits normalized plan snapshots.
 5. `onApprovalResolved` reports backend-confirmed approval outcomes.
-6. `onEvent` is the raw strict `BridgeEvent` tap for apps that need protocol
+6. `onConfigChanged` reports authoritative runtime config announcements after
+   startup.
+7. `onEvent` is the raw strict `BridgeEvent` tap for apps that need protocol
    details such as LLM spans, handoffs, provider events, or state snapshots.
 
 ## Low-Level Building Blocks

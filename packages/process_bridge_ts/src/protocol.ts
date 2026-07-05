@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { configEventSchema } from "./protocol-config.ts";
+
+export type { ConfigErrorCode, ConfigErrorPayload } from "./protocol-config.ts";
 
 /** Current bridge protocol version emitted on app-to-backend commands. */
 export const PROTOCOL_VERSION = "1.0";
@@ -13,6 +16,7 @@ export const KNOWN_COMMAND_TYPES = [
   "prompt",
   "approve",
   "cancel",
+  "configure",
   "reset",
   "shutdown",
 ] as const;
@@ -25,6 +29,7 @@ export type BridgeCommand =
   | { type: "prompt"; text: string }
   | { type: "approve"; id: string; allowed: boolean; reason?: string }
   | { type: "cancel" }
+  | { type: "configure"; patch: Record<string, unknown> }
   | { type: "reset" }
   | { type: "shutdown" };
 
@@ -170,7 +175,9 @@ export const BRIDGE_EVENT_SCHEMAS = {
     version: z.string(),
     package: z.string(),
     metadata: recordSchema.optional(),
+    config: recordSchema.optional(),
   }),
+  config: configEventSchema,
   run_start: bridgeEnvelopeSchema.extend({
     type: z.literal("run_start"),
     prompt: z.string(),
@@ -312,6 +319,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
   }),
   reset: bridgeEnvelopeSchema.extend({
     type: z.literal("reset"),
+    config: recordSchema.optional(),
   }),
   cancel_requested: bridgeEnvelopeSchema.extend({
     type: z.literal("cancel_requested"),
@@ -345,6 +353,9 @@ type EventOf<T extends BridgeEvent["type"]> = Extract<BridgeEvent, { type: T }>;
 
 /** Backend readiness event, including bridge package metadata. */
 export type ReadyEvent = EventOf<"ready">;
+
+/** Configure settlement event carrying the authoritative config document. */
+export type ConfigEvent = EventOf<"config">;
 
 /** Run accepted event emitted before AgentLane starts processing a prompt. */
 export type RunStartEvent = EventOf<"run_start">;

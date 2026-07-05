@@ -94,6 +94,11 @@ export class SessionReducer {
     switch (event.type) {
       case "ready":
         return;
+      case "config":
+        // Config events are consumed by the controller because they settle
+        // `configure()` promises and update the session cache. They have no
+        // transcript lifecycle effect for the reducer.
+        return;
       case "run_start":
         this.callbacks.onRunStarted();
         return;

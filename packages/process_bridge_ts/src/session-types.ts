@@ -3,9 +3,13 @@ import type { BridgeDecodeError } from "./decoders.ts";
 import type {
   ApprovalRequestPayload,
   BridgeEvent,
+  ConfigErrorCode,
   ToolErrorPayload,
 } from "./protocol.ts";
 import type { TextDelivery } from "./text-stream.ts";
+
+/** App-facing alias for the configure failure code emitted by the bridge. */
+export type ConfigureErrorCode = ConfigErrorCode;
 
 /**
  * One piece of streamed assistant or reasoning text.
@@ -250,6 +254,23 @@ export class SessionStateError extends Error {
 }
 
 /**
+ * Backend-reported runtime configuration failure.
+ *
+ * `rejected` carries the Python store's user-presentable message. `invalid`,
+ * `unsupported`, and `internal` are transport-level failures; `internal` uses a
+ * fixed non-leaking message while Python logs the traceback to stderr.
+ */
+export class ConfigureError extends Error {
+  readonly code: ConfigureErrorCode;
+
+  constructor(code: ConfigureErrorCode, message: string) {
+    super(message);
+    this.name = "ConfigureError";
+    this.code = code;
+  }
+}
+
+/**
  * Raw protocol tap used by session options.
  *
  * This intentionally exposes `BridgeEvent`: once an app subscribes here it has
@@ -265,7 +286,9 @@ export type RawEventHandler = (event: BridgeEvent) => void;
  * diagnostics, and continues. An app bug must not corrupt correlation state or
  * strand a pending operation promise.
  */
-export type AgentSessionOptions = {
+export type AgentSessionOptions<
+  TConfig extends Record<string, unknown> = Record<string, unknown>,
+> = {
   /** Backend process to spawn. The only required field. */
   backend: BackendSpec;
 
@@ -284,8 +307,27 @@ export type AgentSessionOptions = {
   /** Fired exactly once when a started session stops, for any reason. */
   onClose?: (close: SessionClose) => void;
 
+  /**
+   * Runtime decoder for backend-announced config documents.
+   *
+   * This is the app's zod/io-ts seam for its own Python store. Throwing means
+   * lockstep drift between the app frontend and backend, so the session closes
+   * like a protocol error instead of exposing a partially trusted document.
+   * When omitted, config documents are exposed under an unchecked cast.
+   */
+  decodeConfig?: (raw: Record<string, unknown>) => TConfig;
+
   /** Best-effort diagnostics. Default: `console.error` with `[session]`. */
   onDiagnostic?: (diagnostic: SessionDiagnostic) => void;
+
+  /**
+   * Fires after startup whenever the backend re-announces authoritative config.
+   *
+   * The initial document is intentionally not delivered here; read
+   * `session.config` after `createAgentSession` resolves so UI setup can bind
+   * catalog display data and initial selection at one call site.
+   */
+  onConfigChanged?: (config: Readonly<TConfig>) => void;
 
   /**
    * Raw protocol tap: every strictly decoded event, at receipt, in wire order,
@@ -323,9 +365,17 @@ export type AgentSessionOptions = {
  * options object is stateless and may be passed to `createAgentSession` again
  * for a fresh backend.
  */
-export type AgentSession = {
+export type AgentSession<
+  TConfig extends Record<string, unknown> = Record<string, unknown>,
+> = {
   /** Backend identity captured from `ready`. */
   ready: ReadyInfo;
+
+  /**
+   * Latest authoritative runtime config, or `undefined` when the backend has no
+   * config store. This cache updates only from backend announcements.
+   */
+  readonly config: Readonly<TConfig> | undefined;
 
   /**
    * Start a run.
@@ -352,6 +402,16 @@ export type AgentSession = {
    * this resolves on the backend's reset confirmation.
    */
   reset: () => Promise<void>;
+
+  /**
+   * Apply a desired-state patch to the Python runtime config store.
+   *
+   * The backend owns validation and normalization, then settles with the full
+   * applied document. Resolves with that document on success. Rejects with
+   * `ConfigureError` on backend-reported failure after any included truth
+   * snapshot has already refreshed `session.config`.
+   */
+  configure: (patch: Partial<TConfig>) => Promise<Readonly<TConfig>>;
 
   /**
    * Graceful shutdown.

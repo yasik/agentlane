@@ -58,6 +58,7 @@ async def run_app_reference(reference: str) -> None:
         agent=backend.agent,
         approvals=backend.approvals,
         ready_metadata=backend.ready_metadata,
+        config=backend.config,
     )
 
 

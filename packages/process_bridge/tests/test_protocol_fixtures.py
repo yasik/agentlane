@@ -107,6 +107,11 @@ def _command_fixture(command_type: str) -> str:
             )
         case "cancel" | "reset" | "shutdown":
             return f'{{"protocol_version":"1.0","type":"{command_type}"}}\n'
+        case "configure":
+            return (
+                '{"protocol_version":"1.0","type":"configure",'
+                '"patch":{"model":"openai/gpt-5.5"}}\n'
+            )
         case "prompt":
             return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
         case _:

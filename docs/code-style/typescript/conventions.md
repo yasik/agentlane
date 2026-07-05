@@ -65,6 +65,10 @@ Use these rules for TypeScript across repository packages.
 
 - Keep helpers close to the code they support, below the main export when that
   improves readability.
+- When extracting helper modules from a complex controller or protocol
+  implementation, move the explanatory contract with the code. The new file
+  should document what state it owns, what state it intentionally does not own,
+  and which lifecycle, settlement, or teardown invariants callers rely on.
 
 ## Comments and JSDoc
 
@@ -72,6 +76,14 @@ Use these rules for TypeScript across repository packages.
   is part of a package API or protocol surface.
 - Public callback types should document when each callback fires, whether raw
   or validated data is passed, and whether the callback is best-effort.
+- Internal callback, handler, queue, and adapter types also need JSDoc when
+  they define a module boundary. Document each field whose meaning is not
+  obvious from its type: who calls it, what state it settles, and whether it can
+  close the session, reject a promise, or call app code.
+- Public methods on exported classes and important methods on internal
+  controller classes should document lifecycle semantics, especially when the
+  method accepts backend truth, settles a pending operation, or intentionally
+  avoids a local prediction.
 - Operation-critical internal constants should have a short comment explaining
   the invariant or lifecycle timing they encode.
 - Inline comments should explain protocol boundaries, trust boundaries,
@@ -80,6 +92,13 @@ Use these rules for TypeScript across repository packages.
 - Use comments to describe why strict behavior exists. Do not use comments to
   justify implicit data architecture; replace implicit records with named types
   instead.
+- Preserve high-quality plan comments during implementation. When a plan
+  includes comments that explain ordering, failure, or app-facing contracts,
+  treat those comments as part of the implementation and carry them into the
+  corresponding code path.
+- Avoid orphan helper files that read like fragments. A new TypeScript module
+  should make its responsibility clear from the first exported type/class and
+  the callback contracts it accepts.
 
 Good comments:
 
@@ -95,6 +114,40 @@ export class BridgeDecodeError extends Error {
 // stdout is the protocol channel. Backend diagnostics must use stderr so
 // malformed logs never masquerade as bridge events.
 const stdout = createInterface({ input: child.stdout });
+```
+
+```ts
+/**
+ * Authoritative runtime config cache for one session.
+ *
+ * The bridge never predicts config locally. This helper only accepts backend
+ * announcements, applies the app decoder, updates the cache, and optionally
+ * notifies post-startup subscribers.
+ */
+export class SessionConfigState<TConfig extends Record<string, unknown>> {
+  /**
+   * Settle one backend `config` event against the oldest pending configure.
+   *
+   * Ready/reset config announcements never arrive here; only the `config` event
+   * that settles a `configure()` command does. A free-floating `config` event is
+   * therefore protocol drift and must close the session loudly.
+   */
+  settleEvent(event: ConfigEvent, pendingCommands: PendingCommandQueue): void {
+    // Failed settlements may still carry a truth snapshot. Apply it before
+    // rejecting the promise so the app can immediately re-render backend truth
+    // in the catch path.
+  }
+}
+```
+
+```ts
+type ReducerHandlers = {
+  /** Resolve every cancel() waiter once the run has reached terminal state. */
+  settleCancelWaiters: () => void;
+
+  /** Route a backend command error through command FIFO ownership rules. */
+  handleCommandError: (message: string) => void;
+};
 ```
 
 Avoid comments like:

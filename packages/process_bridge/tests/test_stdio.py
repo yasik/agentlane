@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import TextIO, cast
 
 import pytest
-from agentlane_process_bridge import BridgeBackend, EventWriter, run_stdio, serve_stdio
+from agentlane_process_bridge import (
+    BridgeBackend,
+    ContractPayloadError,
+    EventWriter,
+    run_stdio,
+    serve_stdio,
+)
 
 from agentlane.harness.tools import (
     ToolApprovalEvent,
@@ -34,6 +40,26 @@ class _PrintingAgent(FakeAgent):
             approval_events=approval_events,
             cancellation_token=cancellation_token,
         )
+
+
+class _HugeConfigStore:
+    def snapshot(self) -> dict[str, object]:
+        return {"model": "openai/gpt-5.5"}
+
+    def apply(self, patch: dict[str, object]) -> dict[str, object]:
+        del patch
+
+        return {"catalog": "x" * 40_000}
+
+
+class _FailingSnapshotStore:
+    def snapshot(self) -> dict[str, object]:
+        raise RuntimeError("snapshot failed")
+
+    def apply(self, patch: dict[str, object]) -> dict[str, object]:
+        del patch
+
+        return {}
 
 
 def _read_lines(lines: list[str]) -> Callable[[int], str]:
@@ -154,6 +180,50 @@ def test_serve_stdio_reports_unknown_command_and_survives() -> None:
         assert [event["type"] for event in events] == ["error", "shutdown"]
         assert events[0]["scope"] == "command"
         assert events[0]["message"] == "Unknown command: future_command"
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_reraises_contract_payload_errors() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(
+            agent=FakeAgent(),
+            events=EventWriter(output),
+            config=_HugeConfigStore(),
+        )
+
+        with pytest.raises(ContractPayloadError):
+            await serve_stdio(
+                backend,
+                readline=_read_lines(
+                    ['{"protocol_version":"1.0","type":"configure","patch":{}}\n']
+                ),
+            )
+
+        assert emitted_events(output) == []
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_reraises_config_snapshot_errors_after_reset() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        backend = BridgeBackend(
+            agent=agent,
+            events=EventWriter(output),
+            config=_FailingSnapshotStore(),
+        )
+
+        with pytest.raises(ContractPayloadError):
+            await serve_stdio(
+                backend,
+                readline=_read_lines(['{"protocol_version":"1.0","type":"reset"}\n']),
+            )
+
+        assert agent.reset_calls == 1
+        assert emitted_events(output) == []
 
     asyncio.run(scenario())
 

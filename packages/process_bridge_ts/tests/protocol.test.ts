@@ -18,6 +18,19 @@ describe("protocol commands", () => {
       text: "hello",
     });
   });
+
+  test("encodes configure patches as opaque JSON objects", () => {
+    const line = encodeBridgeCommand({
+      type: "configure",
+      patch: { model: "anthropic/claude-opus-4-8" },
+    });
+
+    expect(JSON.parse(line)).toEqual({
+      protocol_version: PROTOCOL_VERSION,
+      type: "configure",
+      patch: { model: "anthropic/claude-opus-4-8" },
+    });
+  });
 });
 
 describe("event decoding", () => {
@@ -138,6 +151,94 @@ describe("event decoding", () => {
 
     expect(error.fields).toContain("request.tool_name");
     expect(error.fields).toContain("request.metadata");
+  });
+
+  test("decodes ready, reset, and config documents", () => {
+    const ready = decodeBridgeEventLine(
+      JSON.stringify({
+        protocol_version: "1.0",
+        type: "ready",
+        ts: 1,
+        version: "0.1.0",
+        package: "agentlane-process-bridge",
+        config: { model: "openai/gpt-5.5" },
+      }),
+    );
+    const config = decodeBridgeEventLine(
+      JSON.stringify({
+        protocol_version: "1.0",
+        type: "config",
+        ts: 2,
+        ok: true,
+        config: { model: "anthropic/claude-opus-4-8" },
+        error: null,
+      }),
+    );
+    const reset = decodeBridgeEventLine(
+      JSON.stringify({
+        protocol_version: "1.0",
+        type: "reset",
+        ts: 3,
+        config: { model: "anthropic/claude-opus-4-8" },
+      }),
+    );
+
+    expect(ready).toMatchObject({
+      type: "ready",
+      config: { model: "openai/gpt-5.5" },
+    });
+    expect(config).toMatchObject({ type: "config", ok: true });
+    expect(reset).toMatchObject({
+      type: "reset",
+      config: { model: "anthropic/claude-opus-4-8" },
+    });
+  });
+
+  test("decodes every configure failure code", () => {
+    for (const code of ["invalid", "unsupported", "rejected", "internal"]) {
+      const decoded = decodeBridgeEventLine(
+        JSON.stringify({
+          protocol_version: "1.0",
+          type: "config",
+          ts: 1,
+          ok: false,
+          config: { model: "openai/gpt-5.5" },
+          error: { code, message: `${code} failure` },
+        }),
+      );
+
+      expect(decoded).toMatchObject({
+        type: "config",
+        ok: false,
+        error: { code, message: `${code} failure` },
+      });
+    }
+  });
+
+  test("rejects invalid config settlement invariants", () => {
+    const successWithoutConfig = decodeErrorFor(
+      JSON.stringify({
+        protocol_version: "1.0",
+        type: "config",
+        ts: 1,
+        ok: true,
+        config: null,
+        error: null,
+      }),
+    );
+    const failureWithoutError = decodeErrorFor(
+      JSON.stringify({
+        protocol_version: "1.0",
+        type: "config",
+        ts: 1,
+        ok: false,
+        config: null,
+        error: null,
+      }),
+    );
+
+    expect(successWithoutConfig.fields).toContain("config");
+    expect(failureWithoutError.fields).toContain("error");
   });
 
   test("rejects unknown events", () => {

@@ -29,8 +29,17 @@ MAX_EVENT_ITEMS = 50
 MAX_TOOL_RESULT_PREVIEW_CHARS = 1800
 """Maximum tool-result characters sent in compact run-event previews."""
 
+MAX_CONTRACT_PAYLOAD_BYTES = 32_768
+"""Maximum serialized size for one authoritative protocol payload field."""
 
-type CommandType = Literal["approve", "cancel", "prompt", "reset", "shutdown"]
+type CommandType = Literal[
+    "approve",
+    "cancel",
+    "configure",
+    "prompt",
+    "reset",
+    "shutdown",
+]
 type ErrorScope = Literal["command", "run"]
 
 COMMAND_APPROVE: CommandType = "approve"
@@ -38,6 +47,9 @@ COMMAND_APPROVE: CommandType = "approve"
 
 COMMAND_CANCEL: CommandType = "cancel"
 """Inbound command type for requesting active-run cancellation."""
+
+COMMAND_CONFIGURE: CommandType = "configure"
+"""Inbound command type for applying runtime configuration state."""
 
 COMMAND_PROMPT: CommandType = "prompt"
 """Inbound command type for starting a prompt run."""
@@ -52,6 +64,7 @@ COMMAND_TYPES: frozenset[CommandType] = frozenset(
     {
         COMMAND_APPROVE,
         COMMAND_CANCEL,
+        COMMAND_CONFIGURE,
         COMMAND_PROMPT,
         COMMAND_RESET,
         COMMAND_SHUTDOWN,
@@ -81,6 +94,8 @@ class BridgeEventType(LowercaseStrEnum):
     CANCEL_REQUESTED = "cancel_requested"
     # A cancellation request had no active target.
     CANCEL_IGNORED = "cancel_ignored"
+    # A runtime configuration patch settled.
+    CONFIG = "config"
     # Conversation state was reset.
     RESET = "reset"
     # The bridge is shutting down.
@@ -142,6 +157,10 @@ _WRITE_BATCH_SIZE = 64
 """Maximum number of queued NDJSON lines written by one worker batch."""
 
 
+class ContractPayloadError(ValueError):
+    """Authoritative protocol payload could not be emitted without corruption."""
+
+
 @dataclass(frozen=True, slots=True)
 class ProtocolError:
     """Parse failure for one inbound protocol line."""
@@ -165,6 +184,14 @@ class ApproveCommand:
     allowed: bool
     reason: str | None = None
     type: Literal["approve"] = field(default="approve", init=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureCommand:
+    """Runtime configuration patch from the TypeScript host."""
+
+    patch: dict[str, object] | None
+    type: Literal["configure"] = field(default="configure", init=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +225,7 @@ class UnknownCommand:
 type BridgeCommand = (
     PromptCommand
     | ApproveCommand
+    | ConfigureCommand
     | CancelCommand
     | ResetCommand
     | ShutdownCommand
@@ -245,6 +273,23 @@ class ApproveCommandParser(BridgeCommandParser):
         )
 
 
+class ConfigureCommandParser(BridgeCommandParser):
+    """Parse runtime configuration commands."""
+
+    def __init__(self) -> None:
+        super().__init__(COMMAND_CONFIGURE)
+
+    def parse(self, payload: dict[str, object]) -> ConfigureCommand:
+        patch = payload["patch"] if "patch" in payload else None
+
+        if not isinstance(patch, dict):
+            return ConfigureCommand(patch=None)
+
+        # The bridge validates only the top-level JSON shape. Key meaning and
+        # deeper structure belong to the app-owned RuntimeConfigStore.
+        return ConfigureCommand(patch=cast(dict[str, object], patch))
+
+
 class CancelCommandParser(BridgeCommandParser):
     """Parse cancellation commands."""
 
@@ -284,6 +329,7 @@ class ShutdownCommandParser(BridgeCommandParser):
 COMMAND_PARSERS: tuple[BridgeCommandParser, ...] = (
     PromptCommandParser(),
     ApproveCommandParser(),
+    ConfigureCommandParser(),
     CancelCommandParser(),
     ResetCommandParser(),
     ShutdownCommandParser(),
@@ -313,10 +359,30 @@ class EventWriter:
     _failed: BaseException | None = field(default=None, init=False)
     _closed: bool = field(default=False, init=False)
 
-    async def emit(self, event_type: BridgeEventType, **payload: object) -> None:
+    async def emit(
+        self,
+        event_type: BridgeEventType,
+        *,
+        verbatim_payload: dict[str, object] | None = None,
+        **payload: object,
+    ) -> None:
         """Write one versioned protocol event as a newline-terminated JSON object."""
+        await self.emit_payload(
+            event_type,
+            payload,
+            verbatim_payload=verbatim_payload,
+        )
+
+    async def emit_payload(
+        self,
+        event_type: BridgeEventType,
+        payload: dict[str, object],
+        *,
+        verbatim_payload: dict[str, object] | None = None,
+    ) -> None:
+        """Write one event from an already assembled payload dictionary."""
         self._raise_if_failed()
-        event = build_event(event_type, payload)
+        event = build_event(event_type, payload, verbatim_payload=verbatim_payload)
         line = json.dumps(
             event,
             ensure_ascii=False,
@@ -467,14 +533,24 @@ def build_event(
     payload: dict[str, object],
     *,
     timestamp: float | None = None,
+    verbatim_payload: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build one flat versioned event object."""
     ts = time.time() if timestamp is None else timestamp
+    verbatim_fields = _validated_verbatim_payload(verbatim_payload)
+    overlapping_fields = set(payload) & set(verbatim_fields)
+    if overlapping_fields:
+        field_names = ", ".join(sorted(overlapping_fields))
+        raise ContractPayloadError(
+            f"Contract payload fields overlap regular payload fields: {field_names}.",
+        )
+
     return {
         "protocol_version": PROTOCOL_VERSION,
         "type": event_type.value,
         "ts": round(ts, 3),
         **_truncate_payload(payload),
+        **verbatim_fields,
     }
 
 
@@ -571,6 +647,39 @@ def _supports_protocol_version(value: object) -> bool:
 
 def _truncate_payload(payload: dict[str, object]) -> dict[str, object]:
     return {key: _truncate_value(value) for key, value in payload.items()}
+
+
+def _validated_verbatim_payload(
+    payload: dict[str, object] | None,
+) -> dict[str, object]:
+    if payload is None:
+        return {}
+
+    for key, value in payload.items():
+        _validate_contract_payload_field(key, value)
+
+    return payload
+
+
+def _validate_contract_payload_field(key: str, value: object) -> None:
+    try:
+        serialized = json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ContractPayloadError(
+            f"Contract payload field {key!r} is not JSON-serializable.",
+        ) from exc
+
+    byte_count = len(serialized.encode())
+    if byte_count > MAX_CONTRACT_PAYLOAD_BYTES:
+        raise ContractPayloadError(
+            f"Contract payload field {key!r} exceeds "
+            f"{MAX_CONTRACT_PAYLOAD_BYTES} bytes.",
+        )
 
 
 def _truncate_value(value: object) -> object:

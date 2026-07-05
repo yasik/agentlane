@@ -1,11 +1,24 @@
+// biome-ignore-all lint/nursery/noExcessiveLinesPerFile: The session controller keeps process lifecycle, command FIFO, and promise settlement together; smaller helpers own config, command-error, and reducer adapter logic.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolveBackendSpec } from "./backend-spec.ts";
 import type { BridgeChildLike } from "./channel.ts";
 import { createBridgeChannel } from "./channel.ts";
-import type { BridgeDecodeError } from "./decoders.ts";
+import { BridgeDecodeError } from "./decoders.ts";
 import type { BridgeProcessOptions } from "./process.ts";
 import { spawnBridgeProcess } from "./process.ts";
 import type { BridgeCommand, BridgeEvent } from "./protocol.ts";
+import { handlePendingCommandError } from "./session-command-errors.ts";
+import { SessionConfigState } from "./session-config.ts";
+import {
+  createSessionProcessCallbacks,
+  createSessionReducerCallbacks,
+} from "./session-controller-callbacks.ts";
+import { type Deferred, deferred } from "./session-deferred.ts";
+import { createSessionHandle } from "./session-handle.ts";
+import {
+  type PendingCommand,
+  PendingCommandQueue,
+} from "./session-pending-commands.ts";
 import {
   SessionReducer,
   type SessionReducerCallbacks,
@@ -14,7 +27,6 @@ import {
   type AgentSession,
   type AgentSessionOptions,
   type ReadyInfo,
-  RunError,
   type RunResult,
   type SessionClose,
   SessionClosedError,
@@ -24,33 +36,15 @@ import {
 } from "./session-types.ts";
 
 /**
- * Command waiting for a backend acknowledgement or command-scoped error.
- *
- * The backend handles commands serially, so a command-scoped error belongs to
- * the oldest unsettled command. This keeps rejected prompts from hanging
- * `run()` without adding event-specific heuristics.
- */
-type PendingCommand = {
-  kind: BridgeCommand["type"];
-  reject?: (error: Error) => void;
-};
-
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: Error) => void;
-};
-
-/**
  * Spawn the backend, wire stdio, and resolve once `ready` arrives.
  *
  * Startup failures reject with `SessionStartError` before a live session is
  * exposed. After startup, all operation promises settle through the session
  * lifecycle; app code never needs to observe the raw child process.
  */
-export function createAgentSession(
-  options: AgentSessionOptions,
-): Promise<AgentSession> {
+export function createAgentSession<
+  TConfig extends Record<string, unknown> = Record<string, unknown>,
+>(options: AgentSessionOptions<TConfig>): Promise<AgentSession<TConfig>> {
   let processOptions: BridgeProcessOptions;
   try {
     processOptions = resolveBackendSpec(options.backend);
@@ -62,7 +56,7 @@ export function createAgentSession(
     );
   }
 
-  const controller = new AgentSessionController(options);
+  const controller = new AgentSessionController<TConfig>(options);
   const child = spawnBridgeProcess(
     processOptions,
     controller.processCallbacks(),
@@ -80,12 +74,15 @@ export function createAgentSession(
  * reduction lives in `SessionReducer`, which keeps UI-facing callbacks separate
  * from child-process bookkeeping.
  */
-export class AgentSessionController {
-  private readonly options: AgentSessionOptions;
-  private readonly readyDeferred = deferred<AgentSession>();
-  private readonly pendingCommands: PendingCommand[] = [];
+export class AgentSessionController<
+  TConfig extends Record<string, unknown> = Record<string, unknown>,
+> {
+  private readonly options: AgentSessionOptions<TConfig>;
+  private readonly readyDeferred = deferred<AgentSession<TConfig>>();
+  private readonly pendingCommands = new PendingCommandQueue();
   private readonly cancelWaiters: Array<Deferred<void>> = [];
   private readonly resetWaiters: Array<Deferred<void>> = [];
+  private readonly configState: SessionConfigState<TConfig>;
   private reducer: SessionReducer;
   private channel: ReturnType<typeof createBridgeChannel> | null = null;
   private child:
@@ -101,8 +98,18 @@ export class AgentSessionController {
   private closeRequested = false;
   private shutdownSeen = false;
 
-  constructor(options: AgentSessionOptions) {
+  constructor(options: AgentSessionOptions<TConfig>) {
     this.options = options;
+    this.configState = new SessionConfigState<TConfig>({
+      decodeConfig: options.decodeConfig,
+      onConfigChanged: options.onConfigChanged,
+      callAppHandler: (handler: string, call: () => void): void => {
+        this.callAppHandler(handler, call);
+      },
+      failProtocol: (message: string, fields: readonly string[]): void => {
+        this.failProtocol(message, fields);
+      },
+    });
     this.reducer = new SessionReducer(this.reducerCallbacks());
   }
 
@@ -113,37 +120,31 @@ export class AgentSessionController {
     onSpawnError: (error: Error) => void;
     onStderr: (line: string) => void;
   } {
-    return {
-      onDecodeError: (error: BridgeDecodeError, line: string): void => {
-        // Decode failure is fatal under the strict-companion contract. A lost
-        // terminal event can strand app promises, so we tear down immediately.
-        this.diagnostic({ kind: "protocol", error, line });
-        this.finishClose({
-          reason: "protocol-error",
-          error,
-          code: null,
-          signal: null,
-        });
-        this.child?.kill("SIGKILL");
+    return createSessionProcessCallbacks({
+      diagnostic: (diagnostic: SessionDiagnostic): void => {
+        this.diagnostic(diagnostic);
       },
-      onEvent: (event: BridgeEvent): void => {
+      closeForDecodeError: (error: BridgeDecodeError): void => {
+        this.closeForDecodeError(error);
+      },
+      handleEvent: (event: BridgeEvent): void => {
         this.handleEvent(event);
       },
-      onExit: (code: number | null, signal: NodeJS.Signals | null): void => {
+      handleExit: (
+        code: number | null,
+        signal: NodeJS.Signals | null,
+      ): void => {
         this.handleExit(code, signal);
       },
-      onSpawnError: (error: Error): void => {
+      handleSpawnError: (error: Error): void => {
         this.handleSpawnError(error);
       },
-      onStderr: (line: string): void => {
-        this.diagnostic({ kind: "stderr", line });
-      },
-    };
+    });
   }
 
   start(
     child: ChildProcessWithoutNullStreams | BridgeChildLike,
-  ): Promise<AgentSession> {
+  ): Promise<AgentSession<TConfig>> {
     this.child = child;
     this.channel = createBridgeChannel(child, {
       graceMs: this.options.shutdownGraceMs,
@@ -189,22 +190,26 @@ export class AgentSessionController {
     this.finishClose({ reason, code, signal });
   }
 
-  private session(): AgentSession {
+  private session(): AgentSession<TConfig> {
     const ready = this.readyInfo;
     if (ready === null) throw new SessionStartError("Session is not ready.");
 
-    return {
-      ready,
+    return createSessionHandle(ready, {
+      getConfig: (): Readonly<TConfig> | undefined => this.configState.current,
       run: (text: string): Promise<RunResult> => this.run(text),
       cancel: (): Promise<void> => this.cancel(),
       reset: (): Promise<void> => this.reset(),
+      configure: (patch: Partial<TConfig>): Promise<Readonly<TConfig>> => {
+        return this.configure(patch);
+      },
       close: (): Promise<void> => this.close(),
-    };
+    });
   }
 
   private handleEvent(event: BridgeEvent): void {
     if (event.type === "ready" && this.readyInfo === null) {
       this.resolveReady(event);
+      if (this.startupFailed) return;
     }
 
     // Raw event observers see the strict protocol event before the session
@@ -215,6 +220,15 @@ export class AgentSessionController {
 
     // Command settlement happens before semantic processing so command-scoped
     // errors and terminal events cannot race a pending operation promise.
+    if (event.type === "config") {
+      this.configState.settleEvent(event, this.pendingCommands);
+      return;
+    }
+
+    if (event.type === "reset" && event.config !== undefined) {
+      if (this.configState.apply(event.config, true) === undefined) return;
+    }
+
     this.settleCommandForEvent(event);
     this.reducer.process(event);
   }
@@ -223,6 +237,12 @@ export class AgentSessionController {
     if (this.readyTimer !== null) {
       clearTimeout(this.readyTimer);
       this.readyTimer = null;
+    }
+    if (
+      event.config !== undefined &&
+      this.configState.apply(event.config, false) === undefined
+    ) {
+      return;
     }
     this.readyInfo = {
       version: event.version,
@@ -269,6 +289,29 @@ export class AgentSessionController {
     return waiter.promise;
   }
 
+  private configure(patch: Partial<TConfig>): Promise<Readonly<TConfig>> {
+    if (this.closed !== null) {
+      return Promise.reject(new SessionClosedError(this.closed));
+    }
+
+    const patchDocument: Record<string, unknown> = { ...patch };
+    const patchError = this.configState.validatePatch(patchDocument);
+    if (patchError !== null) return Promise.reject(patchError);
+
+    const waiter = deferred<Readonly<TConfig>>();
+    this.send(
+      { type: "configure", patch: patchDocument },
+      {
+        kind: "configure",
+        resolveConfig: (config: Readonly<Record<string, unknown>>): void => {
+          waiter.resolve(config as Readonly<TConfig>);
+        },
+        reject: waiter.reject,
+      },
+    );
+    return waiter.promise;
+  }
+
   private close(): Promise<void> {
     this.closeRequested = true;
     if (this.closeDeferred === null) {
@@ -305,42 +348,29 @@ export class AgentSessionController {
   }
 
   private reducerCallbacks(): SessionReducerCallbacks {
-    return {
-      approvals: this.options.approvals,
-      onAgentActivity: this.options.onAgentActivity,
-      onApprovalResolved: this.options.onApprovalResolved,
-      onAssistantText: this.options.onAssistantText,
-      onCancelSettled: (): void => {
-        if (this.activeRun === null) this.settleCancelWaiters();
+    return createSessionReducerCallbacks(this.options, {
+      activeRunIsIdle: (): boolean => this.activeRun === null,
+      settleCancelWaiters: (): void => {
+        this.settleCancelWaiters();
       },
-      onCommandError: (message: string): void => {
+      handleCommandError: (message: string): void => {
         this.handleCommandError(message);
       },
-      onDiagnostic: (diagnostic: SessionDiagnostic): void => {
+      diagnostic: (diagnostic: SessionDiagnostic): void => {
         this.diagnostic(diagnostic);
       },
-      onPlan: this.options.onPlan,
-      onReasoningText: this.options.onReasoningText,
-      onReset: (): void => {
+      settleResetWaiters: (): void => {
         this.settleResetWaiters();
       },
-      onRunCancelled: (): void => {
-        this.resolveRun({ status: "cancelled" });
-        this.settleCancelWaiters();
-      },
-      onRunCompleted: (result: RunResult): void => {
+      resolveRun: (result: RunResult): void => {
         this.resolveRun(result);
-        this.settleCancelWaiters();
       },
-      onRunError: (message: string): void => {
-        this.rejectRun(new RunError(message));
-        this.settleCancelWaiters();
+      rejectRun: (error: Error): void => {
+        this.rejectRun(error);
       },
-      onRunStarted: (): void => undefined,
-      onShutdown: (): void => {
+      markShutdownSeen: (): void => {
         this.shutdownSeen = true;
       },
-      onToolActivity: this.options.onToolActivity,
       sendApproval: (
         id: string,
         decision: { allowed: boolean; reason?: string },
@@ -354,30 +384,18 @@ export class AgentSessionController {
           },
           { kind: "approve" },
         ),
-      textDelivery: this.options.textDelivery,
-    };
+    });
   }
 
   private handleCommandError(message: string): void {
-    const command = this.pendingCommands.shift();
-    if (command === undefined) {
-      this.diagnostic({ kind: "command-rejected", message });
-      return;
-    }
-
-    if (command.kind === "prompt") {
-      // Prompt rejection is the only command error that directly belongs to a
-      // public run promise. Local prechecks catch the common misuse cases first.
-      this.rejectRun(new RunError(message));
-      return;
-    }
-
-    if (command.kind === "cancel" || command.kind === "reset") {
-      command.reject?.(new RunError(message));
-      return;
-    }
-
-    this.diagnostic({ kind: "command-rejected", message });
+    handlePendingCommandError(this.pendingCommands.shift(), message, {
+      diagnostic: (diagnostic: SessionDiagnostic): void => {
+        this.diagnostic(diagnostic);
+      },
+      rejectRun: (error: Error): void => {
+        this.rejectRun(error);
+      },
+    });
   }
 
   private settleCommandForEvent(event: BridgeEvent): void {
@@ -393,10 +411,7 @@ export class AgentSessionController {
   }
 
   private settleCommand(kind: BridgeCommand["type"]): void {
-    const index = this.pendingCommands.findIndex(
-      (command: PendingCommand): boolean => command.kind === kind,
-    );
-    if (index >= 0) this.pendingCommands.splice(index, 1);
+    this.pendingCommands.take(kind);
   }
 
   private resolveRun(result: RunResult): void {
@@ -423,6 +438,34 @@ export class AgentSessionController {
     }
   }
 
+  private closeForDecodeError(error: BridgeDecodeError): void {
+    this.finishClose({
+      reason: "protocol-error",
+      error,
+      code: null,
+      signal: null,
+    });
+    this.child?.kill("SIGKILL");
+  }
+
+  private failProtocol(message: string, fields: readonly string[]): void {
+    const error = new BridgeDecodeError(message, fields);
+    this.diagnostic({ kind: "protocol", error, line: "" });
+
+    if (this.readyInfo === null) {
+      this.failStartup(message);
+      return;
+    }
+
+    this.finishClose({
+      reason: "protocol-error",
+      error,
+      code: null,
+      signal: null,
+    });
+    this.child?.kill("SIGKILL");
+  }
+
   private failStartup(message: string, kill: boolean = true): void {
     if (this.readyInfo !== null || this.startupFailed) return;
 
@@ -447,6 +490,7 @@ export class AgentSessionController {
 
     const closedError = new SessionClosedError(close);
     this.rejectRun(closedError);
+    this.pendingCommands.rejectAll(closedError);
     for (const waiter of this.cancelWaiters.splice(0))
       waiter.reject(closedError);
     for (const waiter of this.resetWaiters.splice(0))
@@ -477,8 +521,7 @@ export class AgentSessionController {
   }
 
   private removePending(pending: PendingCommand): void {
-    const index = this.pendingCommands.indexOf(pending);
-    if (index >= 0) this.pendingCommands.splice(index, 1);
+    this.pendingCommands.remove(pending);
   }
 
   private diagnostic(diagnostic: SessionDiagnostic): void {
@@ -506,14 +549,4 @@ export class AgentSessionController {
       this.diagnostic({ kind: "handler-error", handler, error });
     }
   }
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, resolve, reject };
 }

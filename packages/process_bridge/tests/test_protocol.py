@@ -5,7 +5,11 @@ from io import StringIO
 from typing import TextIO, cast
 
 import pytest
-from agentlane_process_bridge import BridgeEventType, EventWriter
+from agentlane_process_bridge import (
+    BridgeEventType,
+    ContractPayloadError,
+    EventWriter,
+)
 
 LONG_TEXT_CHARS = 5004
 LONG_ITEM_COUNT = 52
@@ -47,6 +51,78 @@ def test_event_writer_truncates_custom_object_strings() -> None:
 
         [event] = [json.loads(line) for line in output.getvalue().splitlines()]
         assert event["custom"].endswith("[truncated, +4 more chars]")
+        await writer.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_event_writer_preserves_verbatim_contract_payload() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        writer = EventWriter(output)
+        config = {"items": list(range(LONG_ITEM_COUNT))}
+
+        await writer.emit(
+            BridgeEventType.READY,
+            items=list(range(LONG_ITEM_COUNT)),
+            verbatim_payload={"config": config},
+        )
+
+        [event] = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert event["items"][-1] == "... (+2 more)"
+        assert event["config"] == config
+        await writer.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_event_writer_rejects_non_json_contract_payload() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        writer = EventWriter(output)
+
+        with pytest.raises(ContractPayloadError):
+            await writer.emit(
+                BridgeEventType.READY,
+                verbatim_payload={"config": {"bad": object()}},
+            )
+
+        assert output.getvalue() == ""
+        await writer.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_event_writer_rejects_verbatim_payload_key_collisions() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        writer = EventWriter(output)
+
+        with pytest.raises(ContractPayloadError):
+            await writer.emit(
+                BridgeEventType.READY,
+                config={"truncated": True},
+                verbatim_payload={"config": {"authoritative": True}},
+            )
+
+        assert output.getvalue() == ""
+        await writer.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_event_writer_rejects_oversize_contract_payload() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        writer = EventWriter(output)
+
+        with pytest.raises(ContractPayloadError):
+            await writer.emit(
+                BridgeEventType.READY,
+                verbatim_payload={"config": {"text": "x" * 40_000}},
+            )
+
+        assert output.getvalue() == ""
         await writer.aclose()
 
     asyncio.run(scenario())
