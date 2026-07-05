@@ -158,8 +158,12 @@ describe("process wiring", () => {
           command: "uv",
           args: [
             "run",
+            "--quiet",
             "python",
-            "examples/harness/process_bridge_stdio/backend.py",
+            "-m",
+            "agentlane_process_bridge",
+            "--app",
+            "examples.harness.process_bridge_stdio.backend:create_backend",
           ],
           cwd: repoRoot,
         },

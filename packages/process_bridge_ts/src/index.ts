@@ -4,6 +4,9 @@
  * Exports stay explicit so app consumers see the supported surface and internal
  * helpers do not become accidental API.
  */
+
+export type { BackendSpec, PythonBackendSpec } from "./backend-spec.ts";
+export { resolveBackendSpec } from "./backend-spec.ts";
 export type {
   BridgeChannel,
   BridgeChannelOptions,
@@ -73,3 +76,29 @@ export {
   PROTOCOL_MAJOR,
   PROTOCOL_VERSION,
 } from "./protocol.ts";
+export { createAgentSession } from "./session.ts";
+export type {
+  AgentActivity,
+  AgentInfo,
+  AgentSession,
+  AgentSessionOptions,
+  ApprovalDecision,
+  ApprovalPolicy,
+  ApprovalRequest,
+  ApprovalResolution,
+  PlanStepStatus,
+  PlanUpdate,
+  ReadyInfo,
+  RunResult,
+  SessionClose,
+  SessionDiagnostic,
+  TextChunk,
+  ToolActivity,
+  ToolCallInfo,
+} from "./session-types.ts";
+export {
+  RunError,
+  SessionClosedError,
+  SessionStartError,
+  SessionStateError,
+} from "./session-types.ts";

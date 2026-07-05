@@ -12,7 +12,7 @@ from agentlane.harness import (
 from agentlane.harness.tools import ToolApprovalEvent
 from agentlane.models import ModelStreamEvent, ModelStreamEventKind
 from agentlane.runtime import CancellationToken
-from agentlane_process_bridge import run_stdio
+from agentlane_process_bridge import AgentBackend
 
 
 class ScriptedAgent:
@@ -77,12 +77,8 @@ class ScriptedAgent:
             stream.fail(exc)
 
 
-async def main() -> None:
-    await run_stdio(
+def create_backend() -> AgentBackend:
+    return AgentBackend(
         agent=ScriptedAgent(),
         ready_metadata=lambda: {"example": "process_bridge_stdio"},
     )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

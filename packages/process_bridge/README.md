@@ -11,18 +11,28 @@ network transport, sandbox, or UI reducer.
 
 The main public entrypoints are:
 
-1. `BridgeBackend`
-2. `EventWriter`
-3. `RunEventEncoder`
-4. `BridgeCommandHandler`
-5. `RunEventBridgeHandler`
-6. `serve_stdio`
-7. `run_stdio`
+1. `AgentBackend`
+2. `BridgeBackend`
+3. `EventWriter`
+4. `RunEventEncoder`
+5. `BridgeCommandHandler`
+6. `RunEventBridgeHandler`
+7. `serve_stdio`
+8. `run_stdio`
 
 The backend accepts one active prompt at a time, streams AgentLane
 `RunEvent` values as bridge events, routes diagnostics to stderr, and closes
 active streams with AgentLane's `aclose()` then `result()` drain pattern during
 cancel, reset, shutdown, and EOF teardown.
+
+App-facing TypeScript consumers should usually launch the backend through:
+
+```bash
+python -m agentlane_process_bridge --app my_app.backend:create_backend
+```
+
+The referenced factory may return an `AgentBackend`, an awaitable
+`AgentBackend`, or a bare `AgentRuntime` for approval-free agents.
 
 When the host wires its agent's tool `approval_callback` to a specific
 `ToolApprovalBroker`, it must pass that same broker to `BridgeBackend` /
@@ -90,15 +100,14 @@ the emitted `BridgeEventType` values, and its encoder implementation.
 4. In that handler, declare the upstream `RunEventKind`, the upstream event
    class, every downstream `BridgeEventType` it can emit, and the encoder logic.
 5. Add the handler instance to `RUN_EVENT_BRIDGE_HANDLERS`.
-6. If the TypeScript app should treat the event as known, add the event type to
+6. If the TypeScript app should treat the event as known, add the event type and
+   strict schema entry to `BRIDGE_EVENT_SCHEMAS` in
    `packages/process_bridge_ts/src/protocol.ts`.
-7. Add the decoder entry to `DECODERS` in
-   `packages/process_bridge_ts/src/decoders.ts`.
-8. Add a representative event object to
+7. Add a representative event object to
    `fixtures/protocol/events.json`.
-9. Add or update Python encoding/fixture tests and TypeScript decoder/parity
+8. Add or update Python encoding/fixture tests and TypeScript decoder/parity
     tests.
-10. Run:
+9. Run:
 
     ```bash
     uv run pytest packages/process_bridge/tests -q

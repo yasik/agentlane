@@ -1,26 +1,97 @@
 # Harness Process Bridge
 
-The process bridge is for local apps that want a TypeScript shell around a
-Python AgentLane backend. The TypeScript side starts a Python process, writes
-newline-delimited JSON commands to stdin, reads newline-delimited JSON events
-from stdout, and treats stderr as diagnostics only.
+The process bridge is for local apps that want a TypeScript harness around a
+Python AgentLane backend. The app starts a local Python process, sends prompts
+and control commands, and receives typed session callbacks for text, tools,
+plans, approvals, lifecycle events, and diagnostics.
 
 Use it when:
 
 1. the app UI or terminal shell is TypeScript
-2. the agent implementation, tools, and model clients live in Python
+2. the agent implementation, tools, model clients, and sub-agents live in Python
 3. the backend runs as a local child process owned by the app
-4. the app wants high-level `run_events(...)` lifecycle data instead of raw
-   model deltas only
+4. the app wants high-level `run_events(...)` lifecycle data
 
-Do not use it as a distributed runtime replacement. It does not route work to
-remote workers, expose a network server, sandbox the Python process, or define
-app state. Distributed agents should keep using the runtime and messaging
-primitives under `agentlane.runtime` and `agentlane.messaging`.
+For distributed execution, keep using the runtime and messaging primitives
+under `agentlane.runtime` and `agentlane.messaging`.
+
+## TypeScript App API
+
+Use `createAgentSession` from `@agentlane/process-bridge` as the app-facing
+entrypoint:
+
+```ts
+import { createAgentSession } from "@agentlane/process-bridge";
+
+const session = await createAgentSession({
+  backend: { app: "my_app.backend:create_backend", projectDir: "." },
+  onAssistantText: ({ delta }) => process.stdout.write(delta),
+  onToolActivity: (activity) => app.tools.apply(activity),
+  onPlan: (plan) => app.plan.replace(plan),
+});
+
+await session.run("Summarize this case.");
+await session.close();
+```
+
+`createAgentSession` resolves after the backend emits `ready`. The returned
+handle supports one active `run()` at a time plus `cancel()`, `reset()`, and
+idempotent `close()`.
+
+Session callbacks are balanced by the package:
+
+1. text chunks receive exactly one final `done: true` chunk per segment
+2. tool calls receive `start`, `end`, or synthesized `cancelled`
+3. agent and sub-agent tasks receive `start`, `end`, or synthesized `cancelled`
+4. approval policies are called once per request and receive an abort signal
+5. operation promises settle on completion, cancellation, backend exit, send
+   failure, or protocol failure
+
+Apps that need raw protocol details can subscribe to `onEvent`. That callback
+receives the strict `BridgeEvent` union before semantic processing.
+
+## Python Backend Factory
+
+The Python side owns agent construction, model settings, tools, sub-agents, and
+approval broker wiring. Expose one factory that returns `AgentBackend`:
+
+```python
+from agentlane.harness.tools import ToolApprovalBroker
+from agentlane_process_bridge import AgentBackend
+from my_app.agents import build_agent
+
+def create_backend() -> AgentBackend:
+    broker = ToolApprovalBroker()
+    return AgentBackend(
+        agent=build_agent(approval_callback=broker.callback),
+        approvals=broker,
+    )
+```
+
+The TypeScript backend spec:
+
+```ts
+{ app: "my_app.backend:create_backend", projectDir: "." }
+```
+
+launches:
+
+```bash
+uv run --project . python -m agentlane_process_bridge --app my_app.backend:create_backend
+```
+
+Approval-gated agents must share one `ToolApprovalBroker` between the agent
+tool callbacks and `AgentBackend.approvals`. Agents that do not gate tools can
+return `AgentBackend(agent=agent)` or the bare `AgentRuntime`.
+
+See
+[`examples/harness/process_bridge_stdio`](../../examples/harness/process_bridge_stdio/)
+for a runnable no-model-key smoke example.
 
 ## Protocol
 
-Every command and event is one JSON object followed by `\n`.
+The session API uses a strict stdio protocol internally. Every command and
+event is one JSON object followed by `\n`.
 
 Stdout is reserved for protocol events. Python logging and diagnostics must go
 to stderr; `run_stdio(...)` configures that before emitting the ready event.
@@ -31,7 +102,7 @@ Every protocol object carries:
 2. `type`
 
 Events also carry `ts`, a Unix timestamp rounded to milliseconds. Event fields
-stay flat for easy app consumption.
+stay flat for app consumption.
 
 Commands:
 
@@ -47,8 +118,8 @@ Only JSON boolean `true` grants an approval. Values such as `"true"`, `1`, or
 ## Lifecycle
 
 `BridgeBackend` owns one active run at a time. If a prompt arrives while a run
-is active, the backend emits a command-scoped `error` and leaves the current
-run untouched.
+is active, the backend emits a command-scoped `error` and leaves the current run
+untouched.
 
 Cancel, reset, shutdown, run failure, EOF, and backend close all clear pending
 approvals and close the active `RunEventStream` with the documented AgentLane
@@ -85,9 +156,9 @@ AgentLane adds a new `RunEventKind`, the bridge extension path is one
 class, downstream `BridgeEventType` values, and encoder logic. When the bridge
 adds a command, the extension path is one `BridgeCommandHandler`
 implementation that declares the command class and owns the side effects.
-`BridgeBackend` and `RunEventEncoder` accept explicit handler tuples and
-default to `BRIDGE_COMMAND_HANDLERS` and `RUN_EVENT_BRIDGE_HANDLERS`; fixture
-parity tests fail until new upstream run-event kinds are covered.
+`BridgeBackend` and `RunEventEncoder` accept explicit handler tuples and default
+to `BRIDGE_COMMAND_HANDLERS` and `RUN_EVENT_BRIDGE_HANDLERS`; fixture parity
+tests fail until new upstream run-event kinds are covered.
 
 Lineage fields such as `task_id`, `parent_task_id`, `is_root`, and
 `is_subagent` are preserved on task-carrying events. `tool_end` events include
@@ -99,9 +170,9 @@ diagnostic event. Unknown bridge protocol event names and invalid payloads fail
 strict TypeScript decoding and are reported as `BridgeDecodeError` values
 instead of being delivered to app reducers.
 
-## TypeScript Consumer
+## Low-Level TypeScript Primitives
 
-The TypeScript package exports command, decoder, process, and channel helpers:
+The TypeScript package also exports protocol, process, and channel helpers:
 
 ```ts
 import {
@@ -110,10 +181,19 @@ import {
 } from "@agentlane/process-bridge";
 
 const child = spawnBridgeProcess(
-  { command: "uv", args: ["run", "python", "backend.py"] },
+  {
+    command: "uv",
+    args: [
+      "run",
+      "python",
+      "-m",
+      "agentlane_process_bridge",
+      "--app",
+      "my_app.backend:create_backend",
+    ],
+  },
   {
     onEvent: (event) => {
-      // App reducer owns rendering and state.
       console.log(event.type);
     },
     onStderr: (line) => console.error(line),
@@ -124,6 +204,7 @@ const channel = createBridgeChannel(child);
 channel.send({ type: "prompt", text: "Summarize this case." });
 ```
 
-See
-[`examples/harness/process_bridge_stdio`](../../examples/harness/process_bridge_stdio/)
-for a runnable no-model-key smoke example.
+Use the low-level helpers for tests, custom launchers, or bridge
+infrastructure. Consumers that use them directly own ready gating, command
+correlation, text buffering, approval resolution, operation settlement, and
+lifecycle cleanup.

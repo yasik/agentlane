@@ -5,6 +5,7 @@ import logging
 import sys
 from collections.abc import Callable
 from contextlib import redirect_stdout
+from dataclasses import dataclass
 from typing import TextIO
 
 import structlog
@@ -25,6 +26,20 @@ _logger = structlog.get_logger(__name__)
 
 MAX_COMMAND_LINE_CHARS = 1_000_000
 """Maximum inbound NDJSON command line length accepted from stdin."""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentBackend:
+    """Application backend returned by `--app` factories.
+
+    The factory owns Python-side agent construction. Returning this typed object
+    makes broker sharing explicit when an app wires tool approvals into its
+    agent and the process bridge.
+    """
+
+    agent: AgentRuntime
+    approvals: ToolApprovalBroker | None = None
+    ready_metadata: ReadyMetadataProvider | None = None
 
 
 async def serve_stdio(

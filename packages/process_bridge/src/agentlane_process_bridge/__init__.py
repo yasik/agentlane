@@ -32,10 +32,11 @@ from ._protocol import (
     UnknownCommand,
     parse_command_line,
 )
-from ._stdio import configure_stderr_logging, run_stdio, serve_stdio
+from ._stdio import AgentBackend, configure_stderr_logging, run_stdio, serve_stdio
 
 __all__ = [
     "AgentRuntime",
+    "AgentBackend",
     "ApproveCommand",
     "BRIDGE_EVENT_TYPES",
     "BRIDGE_COMMAND_HANDLERS",

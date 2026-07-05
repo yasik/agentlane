@@ -1,37 +1,38 @@
 import { resolve } from "node:path";
 import {
-  createBridgeChannel,
-  spawnBridgeProcess,
-  type BridgeChannel,
+  createAgentSession,
+  RunError,
 } from "../../../packages/process_bridge_ts/src/index.ts";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
-const backendPath = resolve(import.meta.dir, "backend.py");
 
-let channel: BridgeChannel | null = null;
-
-const child = spawnBridgeProcess(
-  {
-    command: "uv",
-    args: ["run", "python", backendPath],
-    cwd: repoRoot,
+const session = await createAgentSession({
+  backend: {
+    app: "examples.harness.process_bridge_stdio.backend:create_backend",
+    projectDir: repoRoot,
   },
-  {
-    onEvent: (event) => {
-      console.log(event.type);
-      if (event.type === "ready") {
-        channel?.send({ type: "prompt", text: "hello from TypeScript" });
-      }
-      if (event.type === "run_complete") {
-        channel?.shutdown();
-      }
-    },
-    onInvalidLine: (line) => console.error(`invalid stdout: ${line}`),
-    onDecodeError: (error) => console.error(`decode error: ${error.message}`),
-    onStderr: (line) => console.error(line),
+  onEvent: (event) => {
+    console.log(event.type);
   },
-);
-
-channel = createBridgeChannel(child, {
-  onFinalize: () => undefined,
+  onAssistantText: (chunk) => {
+    if (chunk.done) {
+      console.log(`assistant: ${chunk.text}`);
+    }
+  },
 });
+
+try {
+  const result = await session.run("hello from TypeScript");
+
+  if (result.status === "cancelled") {
+    console.log("run_cancelled");
+  }
+} catch (error) {
+  if (error instanceof RunError) {
+    console.error(`run failed: ${error.message}`);
+  } else {
+    throw error;
+  }
+} finally {
+  await session.close();
+}
