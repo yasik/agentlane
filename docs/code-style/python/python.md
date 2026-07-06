@@ -58,6 +58,8 @@ These rules apply to Python code across the repository.
 ## Comments and docstrings
 
 - Use [comments.md](./comments.md) for comment policy and examples.
+- In docstrings and comments, use single backticks for inline code and
+  identifiers (`model_args`), not double backticks.
 - Dataclass and Pydantic fields must use this exact inline docstring style when
   a field comment is required:
 
@@ -81,6 +83,11 @@ field: FieldType
   typed, actionable errors and let the request, run, command-loop, worker, or
   I/O boundary translate those errors into user-visible diagnostics.
 - Return `None` or an empty collection for "not found" cases instead of raising.
+- When a soft limit applies, prefer visible truncation with a pointer to the
+  full source, such as the file path, over silently dropping data so the
+  consumer can recover the rest.
+- Do not add logging as a substitute for surfacing an error. Prefer raising or
+  returning a clear value over logging-and-continuing.
 - Define error codes as enums when structured responses need them.
 
 ## Async and concurrency

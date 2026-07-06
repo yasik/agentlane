@@ -16,9 +16,10 @@ descriptor, one lifecycle, and one runner. The local
 provides the smaller high-level `run(...)`, `run_stream(...)`, and
 `run_events(...)` surface. The
 [`agentlane.harness.shims`](../../src/agentlane/harness/shims/__init__.py)
-package provides the mutating extension seam for instructions, tools, and
-per-run context shaping. The [`Runner`](../../src/agentlane/harness/_runner.py)
-then conducts the actual model loop and produces a
+package provides the mutating extension seam for instructions, tools,
+conversation history, and per-run context shaping. The
+[`Runner`](../../src/agentlane/harness/_runner.py) then conducts the actual
+model loop and produces a
 [`RunResult`](../../src/agentlane/harness/_run.py).
 
 ## What The Harness Adds
@@ -36,8 +37,8 @@ harness adds a higher-level story on top of that:
 5. `DefaultAgent.run_events(...)` provides a broader ordered event feed for
    model events, agent and LLM lifecycle, tools, handoffs, and compact state
    snapshots
-6. shims can adjust effective instructions, tools, and transient turn context
-   without widening the core harness types
+6. shims can adjust effective instructions, tools, conversation history, and
+   transient turn context without widening the core harness types
 7. `Runner` executes the model loop for one run
 8. tools and handoffs become first-class parts of that loop
 
@@ -137,8 +138,8 @@ Instead:
 1. callers either use `DefaultAgent.run(...)` locally or send `RunInput` to the
    lower-level addressed `Agent`
 2. the lifecycle turns that into a working `RunState`
-3. bound shims can adjust the prepared turn and, if needed, the final message
-   list for the next model call
+3. bound shims can adjust the prepared turn, including persisted conversation
+   history, and may replace the final message list for one model call
 4. the runner turns that prepared turn into canonical model messages
 5. provider clients receive the shared `agentlane.models` request shape
 
@@ -167,8 +168,9 @@ Start with [Harness Tasks](./tasks.md) if you need orchestration without an LLM
 loop. Read [Harness Default Agents](./default-agents.md) for the smallest local
 developer surface. Read [Harness Shims](./shims.md) if you need to extend run
 behavior without changing the core harness types. Read [Harness Tools](./tools.md)
-for first-party tool definitions and shim integration. Read [Harness Agents](./agents.md)
-to understand the lower-level addressed agent type. Read
+for first-party tool definitions and shim integration. Read
+[Harness Compaction](./compaction.md) for persisted history rewrite contracts.
+Read [Harness Agents](./agents.md) to understand the lower-level addressed agent type. Read
 [Harness Runner](./runner.md) when you want the actual loop behavior. Read
 [Harness Distributed Agents](./distributed-agents.md) when a harness agent needs
 to coordinate explicit worker runtimes.

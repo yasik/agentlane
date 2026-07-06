@@ -110,7 +110,7 @@ def test_plan_tool_success_returns_structured_plan_update() -> None:
     )
 
 
-def test_plan_tool_updates_plan_with_codex_success_message() -> None:
+def test_plan_tool_updates_plan_with_success_message() -> None:
     output = run_tool(
         plan_tool(),
         explanation="Track the implementation.",

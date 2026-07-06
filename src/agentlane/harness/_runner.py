@@ -15,8 +15,8 @@ control within one run.
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, field, is_dataclass, replace
+from collections.abc import AsyncIterator, Callable, Sequence
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
@@ -69,6 +69,7 @@ from ._lifecycle import (
     DefaultHandoffTool,
     HandoffTool,
 )
+from ._render import normalize_message_content, render_request_messages
 from ._run import (
     LiveRunStateView,
     RunHistoryItem,
@@ -1434,7 +1435,7 @@ def _tool_result_message(
         "role": "tool",
         "tool_call_id": tool_call.id,
         "name": tool_name,
-        "content": _normalize_content(content),
+        "content": normalize_message_content(content),
     }
 
 
@@ -1451,107 +1452,7 @@ def _require_runtime_engine(agent: Task) -> RuntimeEngine:
 
 def _build_request(turn: PreparedTurn) -> list[MessageDict]:
     """Build the full model request from agent config and run state."""
-    messages: list[MessageDict] = []
-
-    messages.extend(_instruction_messages(turn.run_state.instructions))
-    for item in turn.run_state.history:
-        messages.extend(_history_item_to_messages(item))
-
-    return messages
-
-
-def _instruction_messages(
-    instructions: str | PromptSpec[Any] | None,
-) -> list[MessageDict]:
-    """Render system instructions into canonical model messages."""
-    if instructions is None:
-        return []
-    if isinstance(instructions, PromptSpec):
-        return _prompt_messages("system", instructions)
-    return [_normalize_message({"role": "system", "content": instructions})]
-
-
-def _history_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
-    """Render one persisted history item into canonical model messages.
-
-    ``RunHistoryItem`` names the supported shapes explicitly. ``ModelResponse``
-    objects are assistant turns, canonical message dicts pass through
-    unchanged, and the remaining item kinds are treated as user-side input.
-    """
-    if isinstance(item, ModelResponse):
-        return [_assistant_message_from_response(item)]
-    message = _as_message_dict(item)
-    if message is not None:
-        return [_normalize_message(message)]
-    return _user_item_to_messages(item)
-
-
-def _user_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
-    """Render one user-side continuation item into canonical model messages."""
-    if isinstance(item, PromptSpec):
-        return _prompt_messages("user", item)
-    return [_normalize_message({"role": "user", "content": item})]
-
-
-def _prompt_messages(
-    role: Literal["system", "user"],
-    prompt_spec: PromptSpec[Any],
-) -> list[MessageDict]:
-    """Render a ``PromptSpec`` and keep only messages matching ``role``."""
-    messages = [
-        _normalize_message(message)
-        for message in prompt_spec.template.render_messages(prompt_spec.values)
-        if message.get("role") == role
-    ]
-    if messages:
-        return messages
-    raise ValueError(f"PromptSpec must render at least one {role}-role message.")
-
-
-def _normalize_message(message: Mapping[str, object]) -> MessageDict:
-    """Copy one message dict and normalize its ``content`` field."""
-    normalized_message = dict(message)
-    if "content" in normalized_message:
-        normalized_message["content"] = _normalize_content(
-            normalized_message["content"]
-        )
-    return normalized_message
-
-
-def _normalize_content(content: object) -> object:
-    """Normalize arbitrary content into a model-ready value.
-
-    Fast-path checks are ordered by expected frequency:
-      1. ``str`` — most common, returned as-is.
-      2. ``list`` — multi-part content arrays, passed through.
-      3. ``BaseModel`` — Pydantic models serialized to JSON.
-      4. dataclass — stdlib dataclasses serialized to JSON.
-      5. Anything else — attempt ``json.dumps``, fall back to ``str()``.
-    """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return cast(list[object], content)
-    if isinstance(content, BaseModel):
-        return content.model_dump_json()
-    if is_dataclass(content) and not isinstance(content, type):
-        return json.dumps(asdict(content))
-    try:
-        return json.dumps(content)
-    except TypeError:
-        return str(content)
-
-
-def _as_message_dict(item: object) -> dict[str, object] | None:
-    """Return the item when it already looks like one canonical message dict."""
-    if not isinstance(item, dict):
-        return None
-
-    message = cast(dict[str, object], item)
-    role = message.get("role")
-    if isinstance(role, str):
-        return message
-    return None
+    return render_request_messages(turn.run_state.instructions, turn.run_state.history)
 
 
 def _require_runner_task(agent: Task) -> RunnerTask:
@@ -1709,12 +1610,6 @@ def _validate_response_choice(response: ModelResponse) -> None:
         "Runner expected the model response to contain at least one choice.",
         raw_response=response,
     )
-
-
-def _assistant_message_from_response(response: ModelResponse) -> MessageDict:
-    """Extract the first assistant message for continuation history."""
-    _validate_response_choice(response)
-    return response.choices[0].message.model_dump(mode="json", exclude_none=True)
 
 
 def _extract_tool_calls(response: ModelResponse) -> list[ToolCall]:
