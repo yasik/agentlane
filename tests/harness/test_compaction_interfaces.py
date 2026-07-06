@@ -20,6 +20,7 @@ from agentlane.harness.compaction import (
     DefaultCompactorConfig,
     estimate_message_tokens,
     is_summary_item,
+    render_request_messages,
     render_summary_item,
 )
 from agentlane.models import MessageDict
@@ -69,6 +70,7 @@ def test_compaction_shim_config_prefers_explicit_trigger_tokens() -> None:
         {"context_window": 10_000, "trigger_ratio": 0},
         {"context_window": 10_000, "trigger_ratio": 1.1},
         {"context_window": 10_000, "trigger_tokens": 0},
+        {"context_window": 10_000, "trigger_tokens": 10_001},
         {"context_window": 10_000, "on_failure": "ignore"},
         {"context_window": 10_000, "name": ""},
     ],
@@ -156,6 +158,31 @@ def test_render_summary_item_marks_user_message_with_tags() -> None:
     assert "agentlane:" not in item["content"]
     assert is_summary_item(item)
     assert not is_summary_item({"role": "assistant", "content": item["content"]})
+    assert not is_summary_item(
+        {
+            "role": "user",
+            "content": (
+                "Please preserve the literal text <compaction-summary> and "
+                "</compaction-summary>."
+            ),
+        }
+    )
+
+
+def test_public_renderer_uses_runner_message_shape() -> None:
+    messages = render_request_messages(
+        "System instruction.",
+        [
+            "hello",
+            {"role": "assistant", "content": "reply"},
+        ],
+    )
+
+    assert messages == [
+        {"role": "system", "content": "System instruction."},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "reply"},
+    ]
 
 
 def test_summary_item_template_is_jinja2_parameterized() -> None:

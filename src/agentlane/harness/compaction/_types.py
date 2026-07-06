@@ -21,14 +21,6 @@ type OnCompact = Callable[["CompactionReport"], Awaitable[None] | None]
 """Observer callback invoked after each compaction attempt report is created."""
 
 
-class CompactionError(RuntimeError):
-    """One compaction attempt could not produce a valid replacement history."""
-
-
-class ContextOverflowError(CompactionError):
-    """The summarization request cannot fit the summarizer context window."""
-
-
 @dataclass(frozen=True, kw_only=True, slots=True)
 class ContextSignal:
     """Token-accounting snapshot for one trigger evaluation."""
@@ -37,7 +29,7 @@ class ContextSignal:
     """Effective estimate of the next request."""
 
     reported_tokens: int | None
-    """Last server-reported total tokens, or ``None`` when unavailable."""
+    """Last server-reported total tokens, or `None` when unavailable."""
 
     instructions_tokens: int
     """Estimated tokens for rendered run instructions alone."""
@@ -49,7 +41,7 @@ class ContextSignal:
     """Token count at which compaction fires."""
 
     source: Literal["server_usage", "estimate", "mixed"]
-    """How ``estimated_tokens`` was derived."""
+    """How `estimated_tokens` was derived."""
 
     turn_count: int
     """Run turn count at the time of evaluation."""

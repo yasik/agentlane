@@ -10,7 +10,9 @@ DEFAULT_SUMMARY_BRIDGE = (
 )
 """Summary prefix used as the handoff bridge before generated summary text."""
 
-DEFAULT_COMPACTION_PROMPT = """You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.
+DEFAULT_COMPACTION_PROMPT = """
+You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for
+another LLM that will resume the task.
 
 Include:
 - Current progress and key decisions made

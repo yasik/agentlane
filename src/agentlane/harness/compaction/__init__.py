@@ -12,6 +12,7 @@ from ._constants import (
     SUMMARY_CLOSE_TAG,
     SUMMARY_OPEN_TAG,
 )
+from ._errors import CompactionError, ContextOverflowError
 from ._estimate import (
     estimate_message_tokens,
 )
@@ -20,14 +21,13 @@ from ._prompt import (
     DEFAULT_SUMMARY_BRIDGE,
     DEFAULT_SUMMARY_ITEM_TEMPLATE,
 )
+from ._render import render_request_messages
 from ._summary import is_summary_item, render_summary_item
 from ._types import (
-    CompactionError,
     CompactionReport,
     CompactionRequest,
     CompactionResult,
     Compactor,
-    ContextOverflowError,
     ContextSignal,
     OnCompact,
     OnFailure,
@@ -63,5 +63,6 @@ __all__ = [
     "TokenEstimator",
     "estimate_message_tokens",
     "is_summary_item",
+    "render_request_messages",
     "render_summary_item",
 ]

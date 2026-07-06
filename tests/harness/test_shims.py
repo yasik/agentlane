@@ -293,7 +293,8 @@ def test_default_agent_shim_can_transform_messages() -> None:
 
 
 def test_prepared_turn_replace_history_copies_items() -> None:
-    replacement = {"role": "assistant", "content": "kept"}
+    content_parts = [{"type": "text", "text": "kept"}]
+    replacement = {"role": "assistant", "content": content_parts}
     state = RunState(
         instructions=None,
         history=[{"role": "user", "content": "old"}],
@@ -308,7 +309,10 @@ def test_prepared_turn_replace_history_copies_items() -> None:
     turn.replace_history([replacement])
 
     replacement["content"] = "mutated after replacement"
-    assert state.history == [{"role": "assistant", "content": "kept"}]
+    content_parts[0]["text"] = "mutated after replacement"
+    assert state.history == [
+        {"role": "assistant", "content": [{"type": "text", "text": "kept"}]}
+    ]
     assert state.history[0] is not replacement
 
 

@@ -21,8 +21,8 @@ MIN_BLOCKS_TO_SUMMARIZE = 3
 MIN_SHRINK_RATIO = 0.9
 """Maximum post/pre estimate ratio considered a meaningful shrink after compaction."""
 
-SUMMARY_OPEN_TAG = "<compaction-summary>"
+SUMMARY_OPEN_TAG = "<<COMPACTION_SUMMARY_V1_9B2D4C8F_BEGIN>>"
 """Opening marker used to identify a synthetic compaction summary history item."""
 
-SUMMARY_CLOSE_TAG = "</compaction-summary>"
+SUMMARY_CLOSE_TAG = "<<COMPACTION_SUMMARY_V1_9B2D4C8F_END>>"
 """Closing marker used to identify a synthetic compaction summary history item."""

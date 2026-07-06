@@ -1,7 +1,7 @@
 """Internal request rendering shared by the runner and harness helpers."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, is_dataclass
 from typing import Any, Literal, cast
 
@@ -20,7 +20,7 @@ from ._run import RunHistoryItem, RunInstructions
 
 def render_request_messages(
     instructions: RunInstructions,
-    history: list[RunHistoryItem] | tuple[RunHistoryItem, ...],
+    history: Sequence[RunHistoryItem],
 ) -> list[MessageDict]:
     """Build the full model request from one persisted run state slice."""
     messages: list[MessageDict] = []
@@ -62,7 +62,7 @@ def _prompt_messages(
     role: Literal["system", "user"],
     prompt_spec: PromptSpec[Any],
 ) -> list[MessageDict]:
-    """Render a ``PromptSpec`` and keep only messages matching ``role``."""
+    """Render a `PromptSpec` and keep only messages matching `role`."""
     messages = [
         _normalize_message(message)
         for message in prompt_spec.template.render_messages(prompt_spec.values)
@@ -74,7 +74,7 @@ def _prompt_messages(
 
 
 def _normalize_message(message: Mapping[str, object]) -> MessageDict:
-    """Copy one message dict and normalize its ``content`` field."""
+    """Copy one message dict and normalize its `content` field."""
     normalized_message = dict(message)
     if "content" in normalized_message:
         normalized_message["content"] = normalize_message_content(

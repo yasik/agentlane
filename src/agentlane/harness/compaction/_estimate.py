@@ -16,7 +16,7 @@ def estimate_message_tokens(messages: Sequence[MessageDict]) -> int:
     It applies a conservative UTF-8 bytes per token approximation for local
     preflight decisions. Runtime shim logic should prefer provider-reported
     usage when available, and callers that need exact accounting can pass a
-    custom ``TokenEstimator``.
+    custom `TokenEstimator`.
     """
     return sum(_estimate_content(message.get("content")) for message in messages)
 

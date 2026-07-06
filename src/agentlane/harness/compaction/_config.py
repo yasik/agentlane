@@ -19,10 +19,10 @@ class CompactionShimConfig:
     """Maximum context window, in tokens, for the model being protected."""
 
     trigger_ratio: float = DEFAULT_TRIGGER_RATIO
-    """Fraction of ``context_window`` used when ``trigger_tokens`` is unset."""
+    """Fraction of `context_window` used when `trigger_tokens` is unset."""
 
     trigger_tokens: int | None = None
-    """Absolute token threshold for compaction; overrides ``trigger_ratio``."""
+    """Absolute token threshold for compaction; overrides `trigger_ratio`."""
 
     on_failure: OnFailure = "raise"
     """Whether compaction failures raise or skip the rewrite attempt."""
@@ -38,6 +38,11 @@ class CompactionShimConfig:
             raise ValueError("trigger_ratio must be greater than 0 and at most 1.")
         if self.trigger_tokens is not None and self.trigger_tokens <= 0:
             raise ValueError("trigger_tokens must be positive when provided.")
+        if (
+            self.trigger_tokens is not None
+            and self.trigger_tokens > self.context_window
+        ):
+            raise ValueError("trigger_tokens cannot exceed context_window.")
         if self.on_failure not in {"raise", "skip"}:
             raise ValueError("on_failure must be 'raise' or 'skip'.")
         if not self.name:
@@ -67,7 +72,7 @@ class DefaultCompactorConfig:
     """Where the summary item is placed relative to retained recent history."""
 
     summary_max_tokens: int | None = DEFAULT_SUMMARY_MAX_TOKENS
-    """Default summarizer output cap; ``None`` leaves the provider unbounded."""
+    """Default summarizer output cap; `None` leaves the provider unbounded."""
 
     def __post_init__(self) -> None:
         """Validate stock compactor settings."""
