@@ -28,11 +28,15 @@ and `agentlane.messaging`.
 
 ## TypeScript App API
 
-Use `createAgentSession` from `@agentlane/process-bridge` as the app-facing
+Use `createAgentSession` from `@agentlanejs/process-bridge` as the app-facing
 entrypoint:
 
+```bash
+bun add @agentlanejs/process-bridge
+```
+
 ```ts
-import { createAgentSession } from "@agentlane/process-bridge";
+import { createAgentSession } from "@agentlanejs/process-bridge";
 
 const session = await createAgentSession({
   backend: { app: "my_app.backend:create_backend", projectDir: "." },

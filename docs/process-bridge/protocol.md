@@ -90,7 +90,7 @@ The TypeScript package also exports protocol, process, and channel helpers:
 import {
   createBridgeChannel,
   spawnBridgeProcess,
-} from "@agentlane/process-bridge";
+} from "@agentlanejs/process-bridge";
 
 const child = spawnBridgeProcess(
   {

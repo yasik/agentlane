@@ -30,6 +30,9 @@ that gate a change.
 - `tsconfig.json` runs in `strict` mode with `moduleResolution: "Bundler"` and
   Bun types. Keep it strict; do not silence errors with `any`, `@ts-ignore`, or
   `@ts-expect-error` unless you document why in a comment.
+- Published TypeScript packages must also keep a package-local build script that
+  emits `dist/` JavaScript and declaration files. Treat `bun run build` as part
+  of the public package contract, not only a release-time convenience.
 
 ## Formatting
 
@@ -62,8 +65,8 @@ trees they own.
 
 ## Before You Open a PR
 
-- Run `make check-ts` for TypeScript-only changes; it runs lint, type check, and
-  tests together.
+- Run `make check-ts` for TypeScript-only changes; it runs lint, type check,
+  tests, and the package build together.
 - Run the full repository verification script before marking runtime, protocol,
   or package-tooling changes done.
 - If a TypeScript package adds a dependency, update its package manifest and

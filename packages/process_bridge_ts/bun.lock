@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@agentlane/process-bridge",
+      "name": "@agentlanejs/process-bridge",
       "dependencies": {
         "zod": "^4.4.3",
       },

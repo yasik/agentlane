@@ -1,6 +1,6 @@
-# @agentlane/process-bridge
+# @agentlanejs/process-bridge
 
-`@agentlane/process-bridge` is the TypeScript companion for local AgentLane
+`@agentlanejs/process-bridge` is the TypeScript companion for local AgentLane
 harness apps. The primary API is `createAgentSession`: it starts a Python
 AgentLane backend, waits for readiness, streams typed session callbacks, and
 settles run, configure, cancel, reset, and close operations.
@@ -8,8 +8,22 @@ settles run, configure, cancel, reset, and close operations.
 The package is UI-framework agnostic. Apps own rendering, conversation state,
 audit panels, and domain-specific reducers.
 
-The package is currently private to the repository while npm publication policy
-is decided.
+The package is published to npm with the same version as the Python `agentlane`
+package.
+
+## Install
+
+Add the package to the TypeScript app:
+
+```bash
+bun add @agentlanejs/process-bridge
+```
+
+For npm-based apps:
+
+```bash
+npm install @agentlanejs/process-bridge
+```
 
 ## Quickstart
 
@@ -26,7 +40,7 @@ def create_backend() -> AgentBackend:
 Start it from TypeScript:
 
 ```ts
-import { createAgentSession } from "@agentlane/process-bridge";
+import { createAgentSession } from "@agentlanejs/process-bridge";
 
 const session = await createAgentSession({
   backend: { app: "my_app.backend:create_backend", projectDir: "." },
@@ -66,7 +80,7 @@ between static `ready.metadata` and mutable `session.config`, see
 [Process Bridge: Runtime Configuration](../../docs/process-bridge/runtime-configuration.md).
 
 ```ts
-import { createAgentSession } from "@agentlane/process-bridge";
+import { createAgentSession } from "@agentlanejs/process-bridge";
 import { z } from "zod";
 
 const configSchema = z.object({
@@ -166,7 +180,9 @@ bun run format
 bun run lint
 bun run typecheck
 bun run test
+bun run build
 ```
 
 The root `make format`, `make lint`, `make typecheck`, and `make tests` targets
-also run this package's TypeScript gates.
+also run this package's TypeScript gates. `bun run check` is the package-level
+release gate and includes linting, static analysis, tests, and the npm build.

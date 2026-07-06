@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { createAgentSession, RunError } from "@agentlane/process-bridge";
+import { createAgentSession, RunError } from "@agentlanejs/process-bridge";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 

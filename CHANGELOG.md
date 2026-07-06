@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added an injectable `approvals` parameter to `BridgeBackend.__init__` and `run_stdio` so a host can share the `ToolApprovalBroker` it wired into its agent's tool approval callbacks. Without it, the agent's pending requests and the bridge's `approve`/`cancel` commands resolve against different broker instances and interactive approvals never complete.
-- Added token usage to the `llm_end` bridge event: the encoder now carries `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`) from `ModelResponse.usage`, or `null` when the provider omits it, so host telemetry can show context occupancy without parsing model output. Added the matching `TokenUsage` type and decoder to `@agentlane/process-bridge`.
+- Added token usage to the `llm_end` bridge event: the encoder now carries `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`) from `ModelResponse.usage`, or `null` when the provider omits it, so host telemetry can show context occupancy without parsing model output. Added the matching `TokenUsage` type and decoder to `@agentlanejs/process-bridge`.
 
 ## [0.11.0] - 2026-06-14
 

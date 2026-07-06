@@ -1,18 +1,42 @@
 {
-  "name": "@agentlane/process-bridge",
-  "version": "0.0.0",
+  "name": "@agentlanejs/process-bridge",
+  "version": "0.12.0",
   "type": "module",
-  "private": true,
   "description": "TypeScript helpers for AgentLane local process bridge apps.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yasik/agentlane",
+    "directory": "packages/process_bridge_ts"
+  },
+  "bugs": {
+    "url": "https://github.com/yasik/agentlane/issues"
+  },
+  "homepage": "https://github.com/yasik/agentlane#readme",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "format": "biome format --write src tests",
     "lint": "biome check --error-on-warnings src tests",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "check": "bun run lint && bun run typecheck && bun run test"
+    "check": "bun run lint && bun run typecheck && bun run test && bun run build",
+    "prepack": "bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.0",
