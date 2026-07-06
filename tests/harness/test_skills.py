@@ -636,10 +636,12 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
                 "Use this skill for refund questions.\n"
                 "\n"
                 "Skill directory: /skills/refund-policy\n"
-                "Relative paths in this skill are relative to the skill directory.\n"
+                "Use absolute_path values below with filesystem tools. "
+                "The path attribute is the skill-relative display path.\n"
                 "\n"
                 "<skill_resources>\n"
-                "  <file>references/policy.md</file>\n"
+                '  <file path="references/policy.md" '
+                'absolute_path="/skills/refund-policy/references/policy.md" />\n'
                 "</skill_resources>\n"
                 "</skill_content>"
             ),
@@ -1154,8 +1156,14 @@ def test_render_loaded_skill_includes_instructions_and_resources() -> None:
     assert "# Refund Policy" in result
     assert "Follow these steps." in result
     assert "Skill directory: /skills/refund-policy" in result
-    assert "<file>scripts/run.py</file>" in result
-    assert "<file>references/policy.md</file>" in result
+    assert (
+        '<file path="scripts/run.py" '
+        'absolute_path="/skills/refund-policy/scripts/run.py" />'
+    ) in result
+    assert (
+        '<file path="references/policy.md" '
+        'absolute_path="/skills/refund-policy/references/policy.md" />'
+    ) in result
     assert "</skill_content>" in result
 
 

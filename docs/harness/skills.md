@@ -14,15 +14,12 @@ from agentlane.harness.skills import (
     DEFAULT_SKILLS_SYSTEM_PROMPT,
     FilesystemSkillLoader,
     LoadedSkill,
-    SKILL_PATH_PROMPT_GUIDANCE,
     SkillCatalog,
     SkillLoader,
     SkillManifest,
-    SkillRelativePathShim,
     SkillResource,
     SkillsShim,
     discover_skill_catalog,
-    resolve_skill_relative_path,
     SKILL_MAX_COMPATIBILITY_LENGTH,
     SKILL_MAX_DESCRIPTION_LENGTH,
     SKILL_MAX_FILE_LINES,
@@ -39,7 +36,8 @@ A custom `SkillLoader` produces and returns these typed primitives:
    `license`, `compatibility`, `metadata`, `tools`, and `disallowed_tools`
    fields. `SkillLoader.discover()` returns a sequence of these.
 2. `SkillResource` is one bundled file that belongs to an activated skill,
-   carrying a `path` relative to the skill directory.
+   carrying a `path` relative to the skill directory. `SkillsShim` renders an
+   absolute path for each resource when it activates the skill.
 3. `LoadedSkill` is the activated payload returned by `SkillLoader.load(name)`:
    the `manifest`, the rendered `instructions` body, and the bundled
    `resources`.
@@ -68,7 +66,7 @@ descriptor = AgentDescriptor(
 )
 ```
 
-That shim does five things:
+That shim does five core things:
 
 1. discovers skills once when it binds to a concrete agent instance,
 2. appends one skills guidance block to the system instruction before the first
@@ -87,8 +85,8 @@ Before the model activates any skill, it sees:
 4. the absolute `SKILL.md` paths,
 5. the `activate_skill` tool.
 
-If no skills are discovered, the shim does not modify the system instruction
-and does not register the activation tool.
+If no skills are discovered, the shim does not modify the system instruction and
+does not register the activation tool.
 
 ## After Activation
 
@@ -96,10 +94,9 @@ When the model calls `activate_skill`, the shim returns one tool result that
 contains:
 
 1. the full `SKILL.md` body without frontmatter,
-2. a `Skill directory: ...` line and a note that relative paths in the skill
-   are resolved against that directory,
-3. a `<skill_resources>` list of resource file paths relative to the skill
-   directory,
+2. the absolute `Skill directory: ...`,
+3. a `<skill_resources>` list where each resource includes its skill-relative
+   `path` and an `absolute_path` suitable for filesystem tools,
 4. one `<skill_content name="<skill-name>">` block that groups those pieces
    together, where the `name` attribute matches the dedup directive below.
 
@@ -261,8 +258,9 @@ Or let it include the standard local roots:
 2. `~/.agents/skills`
 
 Discovered `SKILL.md` files are normalized to absolute paths. Activated skill
-payloads expose resource file paths relative to the skill directory so the
-model can resolve them against the emitted `Skill directory: ...` line.
+payloads expose resource file paths twice: `path` for the portable
+skill-relative display name, and `absolute_path` for direct use with filesystem
+tools.
 
 ### Filesystem Parsing Policy
 
@@ -349,9 +347,9 @@ These fields filter model exposure. The host application's sandbox,
 permissions, and approval callbacks still decide whether an exposed tool call
 is allowed to execute.
 
-`SkillRelativePathShim` preserves the same active-skill filter after it wraps
-base tools. A name listed in `disallowedTools` stays hidden from the model even
-when the resolver has rebuilt that tool with skill-relative path handling.
+`SkillsShim` applies these filters to the tools that are already present in the
+prepared turn. A name listed in `disallowedTools` stays hidden from the model
+even when the tool was contributed by another shim.
 
 ## State
 
@@ -367,86 +365,42 @@ That gives three important properties:
 The actual skill content remains visible because the activation tool result is
 already part of the persisted conversation history.
 
-## Skill-Relative Path Resolution
+## Bundled Resource Paths
 
-Installed skills reference their own bundled files by paths relative to the
-skill root, but the harness filesystem tools only know the workspace root. The
-opt-in `SkillRelativePathShim` bridges that gap: while a skill is active, a plain
-relative path the model passes to a wrapped path-taking tool is resolved against
-the active skill's root before the underlying tool runs.
+Installed skills often reference their own bundled files by paths relative to
+the skill root, such as `references/policy.md` or `scripts/run.py`.
 
-Pair it with a `SkillsShim` and share one discovered catalog with both:
+`SkillsShim` does not wrap or mutate workspace tools to make those paths mean
+something different. Instead, activation renders the absolute resource path
+beside the relative display path:
+
+```xml
+<skill_resources>
+  <file path="references/policy.md" absolute_path="/app/skills/refund-policy/references/policy.md" />
+</skill_resources>
+```
+
+Use the `absolute_path` value with ordinary filesystem tools:
 
 ```python
 from agentlane.harness.skills import (
-    SkillRelativePathShim,
     SkillsShim,
-    discover_skill_catalog,
     FilesystemSkillLoader,
 )
-from agentlane.harness.tools import base_harness_tools
 
 loader = FilesystemSkillLoader(roots=(SKILLS_ROOT,), include_default_roots=False)
-catalog = await discover_skill_catalog(loader)
 
 descriptor = AgentDescriptor(
     name="Clinical Review",
     model=model,
-    shims=(
-        SkillsShim(catalog=catalog),
-        SkillRelativePathShim(
-            base_harness_tools(cwd=WORKSPACE, include=("read", "grep", "find")),
-            catalog=catalog,
-        ),
-    ),
+    shims=(SkillsShim(loader=loader),),
 )
 ```
 
-By default the shim wraps `read`, `grep`, and `find`, resolving each tool's
-`path` argument. The `path_arg_fields` mapping overrides which tools are wrapped
-and which argument each one resolves; a tool is only wrapped when it appears in
-that mapping. Binding fails loudly (`ValueError`) when a wrapped tool does not
-declare its configured argument, so a renamed tool argument cannot silently turn
-resolution into a no-op.
-
-### Resolution Rules
-
-Resolution is deliberately conservative. A candidate path is resolved only when
-it is a plain workspace-style relative path. The following are returned
-unchanged:
-
-1. absolute paths,
-2. explicitly anchored paths (`./`, `../`, `~`, `~user`),
-3. empty or whitespace-only values,
-4. values carrying glob or brace metacharacters (`*`, `?`, `[`, `]`, `{`, `}`).
-
-When several skills are active, the most recently activated skill wins for a
-shared relative path. A candidate whose `..` segments collapse above the skill
-root is skipped, so the existence probe never reaches files outside the skill,
-and a path that does not exist under any active skill root is returned unchanged
-(so it still resolves against the workspace root as before). Host permission
-policies still apply to the final resolved path.
-
-### Design Limits
-
-This is a narrow, safe contract by design. In particular:
-
-1. **No shell-command rewriting.** The `bash` tool is intentionally out of
-   scope. Splicing resolved paths into a shell command requires a quote-aware
-   splitter plus glob, brace, tilde, and `$`/backtick refusal rules, which is
-   exactly the kind of subtle code that is easy to get wrong. Instead, the skill
-   root is surfaced to the model in the activation result (`Skill directory:
-   ...`) and through `SKILL_PATH_PROMPT_GUIDANCE`, so the model can reference
-   resources by absolute path or with the `read` tool inside commands.
-2. **One declared string argument per tool.** Multi-path arguments and
-   structured argument shapes are not resolved.
-3. **Resolution, not containment.** The shim resolves paths; it does not enforce
-   a workspace or skill boundary. Pass a permission policy to the wrapped tools
-   for containment.
-
-The pure rule is also exposed as `resolve_skill_relative_path(path,
-skill_roots=...)` for applications that need the same resolution outside the
-shim.
+This keeps the tools' existing semantics intact: absolute paths are opened as
+provided, and relative paths still resolve against each tool's configured
+working directory. Host permission policies and approval callbacks still decide
+whether a resource path can actually be read or executed.
 
 ## Customization
 

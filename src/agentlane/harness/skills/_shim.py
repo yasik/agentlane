@@ -114,14 +114,17 @@ class _BoundSkillsShim(BoundShim):
             skill_name,
             lambda value: value,
         )
+
         if not appended:
             return _already_active_message(skill_name)
+
         return render_loaded_skill(loaded_skill)
 
     def _require_shim_state(self) -> ShimState:
         """Return the persisted shim state for the current run."""
         if self._current_run_state is None:
             raise RuntimeError("SkillsShim activation requires an active run state.")
+
         return self._current_run_state.shim_state
 
 
