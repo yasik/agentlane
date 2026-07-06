@@ -119,6 +119,11 @@ prepared turn before the runner builds the canonical message list. They may
 also replace that final message list for one model call when
 `transform_messages(...)` is needed.
 
+The canonical request builder is shared with conversation compaction through
+`agentlane.harness.compaction.render_request_messages(...)`. Compactors should
+use that helper when estimating or summarizing history so their view of the
+request matches the runner's next model call.
+
 ## Streaming
 
 The runner also owns live model streaming for one run.

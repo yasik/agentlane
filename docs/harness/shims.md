@@ -16,7 +16,8 @@ memory, and context compaction. Those features should build on this seam instead
 of adding new special-case fields to the core harness types.
 
 First-party examples include [Harness Tools](./tools.md) and
-[Harness Skills](./skills.md).
+[Harness Skills](./skills.md). For the history-rewrite pattern used by
+conversation compaction, see [Harness Compaction](./compaction.md).
 
 ## Import Path
 
@@ -106,6 +107,7 @@ The most important helpers are:
 2. `append_system_instruction(...)`
 3. `append_history_item(...)`
 4. `append_history_items(...)`
+5. `replace_history(...)`
 
 Use them like this:
 
@@ -113,7 +115,9 @@ Use them like this:
 2. append to the persisted system instruction only when the run needs a
    bootstrap-time behavior change,
 3. append visible conversation items to `RunState.history` for ongoing changes,
-4. write resumable shim-owned state to `RunState.shim_state`.
+4. replace the whole history only for persistent rewrite behavior such as
+   conversation compaction,
+5. write resumable shim-owned state to `RunState.shim_state`.
 
 `append_history_item(...)` uses the same run-history item contract as the rest
 of the harness request builder. Supported items include:
@@ -123,6 +127,10 @@ of the harness request builder. Supported items include:
 3. `PromptSpec` values,
 4. user-side content values such as strings, JSON-like values, or Pydantic
    models.
+
+`replace_history(...)` uses the same item contract and copies the supplied
+items before installing them. It is the sanctioned whole-history rewrite point
+for compaction and similar persisted history transformations.
 
 ## Shim State
 
