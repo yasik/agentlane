@@ -1,0 +1,8 @@
+{
+  "name": "@agentlanejs/process-bridge-stdio-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@agentlanejs/process-bridge": "0.12.0"
+  }
+}

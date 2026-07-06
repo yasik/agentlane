@@ -6,17 +6,9 @@ Read the page that matches the work you are doing instead of treating
 
 ## Pages
 
-1. [Imports and typing](./imports.md): import paths, annotation rules, and type
-   boundary constraints.
+1. [Python conventions](./python/README.md): Python style, imports and typing,
+   comments, modules, tests, and first-party tool design.
 2. [Workspace packages](./workspace-packages.md): how to add and register a new
    workspace package.
-3. [Python conventions](./python.md): Python style, docstrings, async patterns,
-   error handling, and framework-specific rules.
-4. [Comments](./comments.md): comment and doc-comment expectations, including
-   field comment style.
-5. [Module layout and exports](./modules.md): file naming, package layout,
-   `__init__.py` usage, and export rules.
-6. [Testing and pull requests](./testing-and-prs.md): test conventions, fixture
-   placement, PR expectations, and commit message guidance.
-7. [Tool design](./tool-design.md): first-party tool contracts, model-facing
-   results, error boundaries, docs, examples, and tests.
+3. [TypeScript conventions](./typescript/README.md): TypeScript tooling,
+   strictness, exports, and package script expectations.

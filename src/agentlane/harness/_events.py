@@ -24,8 +24,9 @@ Lineage and scope semantics (see the "Run Events" section of
 
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
+
+from strenum import LowercaseStrEnum
 
 from agentlane.models import (
     MessageDict,
@@ -48,29 +49,98 @@ if TYPE_CHECKING:
 _RUN_EVENT_STREAM_END = object()
 
 
-class RunEventKind(StrEnum):
-    """Normalized event kinds emitted by high-level harness run streams."""
+class HarnessEventType(LowercaseStrEnum):
+    """Stable event names for downstream apps consuming harness activity."""
 
+    # A user prompt run has started.
+    RUN_START = "run_start"
+    # A user prompt run completed with a result.
+    RUN_COMPLETE = "run_complete"
+    # A user prompt run was cancelled.
+    RUN_CANCELLED = "run_cancelled"
+    # A command, run, or model error occurred.
+    ERROR = "error"
+
+    # Run-stream wrapper; bridges may expand it into model subevents.
     MODEL_STREAM = "model_stream"
+    # An agent task started.
     AGENT_START = "agent_start"
+    # An agent task ended.
     AGENT_END = "agent_end"
+    # A model request started.
     LLM_START = "llm_start"
+    # A model request ended.
     LLM_END = "llm_end"
+    # A tool call started.
     TOOL_START = "tool_start"
+    # A tool call ended.
     TOOL_END = "tool_end"
+    # Run-stream wrapper; bridges may expand it by approval status.
     TOOL_APPROVAL = "tool_approval"
+    # A handoff transfer started.
     HANDOFF_START = "handoff_start"
+    # A handoff transfer ended.
     HANDOFF_END = "handoff_end"
+    # A compact run state snapshot was emitted.
     STATE_SNAPSHOT = "state_snapshot"
+    # A structured plan update was emitted.
     PLAN_UPDATED = "plan_updated"
 
+    # Assistant-visible text streamed from the model.
+    ASSISTANT_DELTA = "assistant_delta"
+    # Reasoning text or metadata streamed from the model.
+    REASONING_DELTA = "reasoning_delta"
+    # Tool-call arguments streamed from the model.
+    TOOL_ARGUMENTS_DELTA = "tool_arguments_delta"
+    # Provider-native stream metadata was observed.
+    PROVIDER_EVENT = "provider_event"
+    # A tool approval request is waiting for a decision.
+    APPROVAL_REQUEST = "approval_request"
+    # A tool approval request was resolved.
+    APPROVAL_RESOLVED = "approval_resolved"
+    # Fallback wrapper for an unknown future run event.
+    RUN_EVENT = "run_event"
 
-class RunStateSnapshotBoundary(StrEnum):
+
+class RunEventKind(LowercaseStrEnum):
+    """Normalized event kinds emitted by high-level harness run streams."""
+
+    # Run-stream wrapper around one model stream event.
+    MODEL_STREAM = HarnessEventType.MODEL_STREAM.value
+    # An agent task started.
+    AGENT_START = HarnessEventType.AGENT_START.value
+    # An agent task ended.
+    AGENT_END = HarnessEventType.AGENT_END.value
+    # A model request started.
+    LLM_START = HarnessEventType.LLM_START.value
+    # A model request ended.
+    LLM_END = HarnessEventType.LLM_END.value
+    # A tool call started.
+    TOOL_START = HarnessEventType.TOOL_START.value
+    # A tool call ended.
+    TOOL_END = HarnessEventType.TOOL_END.value
+    # Run-stream wrapper around one tool approval lifecycle event.
+    TOOL_APPROVAL = HarnessEventType.TOOL_APPROVAL.value
+    # A handoff transfer started.
+    HANDOFF_START = HarnessEventType.HANDOFF_START.value
+    # A handoff transfer ended.
+    HANDOFF_END = HarnessEventType.HANDOFF_END.value
+    # A compact run state snapshot was emitted.
+    STATE_SNAPSHOT = HarnessEventType.STATE_SNAPSHOT.value
+    # A structured plan update was emitted.
+    PLAN_UPDATED = HarnessEventType.PLAN_UPDATED.value
+
+
+class RunStateSnapshotBoundary(LowercaseStrEnum):
     """Stable run boundaries where compact state snapshots are emitted."""
 
-    RUN_START = "run_start"
+    # Snapshot captured at the run start boundary.
+    RUN_START = HarnessEventType.RUN_START.value
+    # Snapshot captured after a turn is prepared.
     TURN_PREPARED = "turn_prepared"
+    # Snapshot captured after a tool round ends.
     TOOL_ROUND_END = "tool_round_end"
+    # Snapshot captured at the run end boundary.
     RUN_END = "run_end"
 
 

@@ -3,6 +3,7 @@
 Thoughtful comments explain why code exists, how to use it, and capture non-obvious decisions; they do not restate what the code already says.
 
 ## Python specific:
+
 - Use Google-style docstrings for public functions, classes, and methods.
 - Dataclass and Pydantic field comments must use this exact style when inline
   field documentation is needed:
@@ -297,6 +298,57 @@ func SendWithRetries(ctx context.Context, msg []byte, maxRetries int) error {
 - Jokes, sarcasm, or unclear metaphors in core logic.  
 
 Rule of thumb: if deleting a comment would not remove useful knowledge for a future maintainer, that comment probably should not exist.
+
+***
+
+## AgentLane contract documentation
+
+Framework and bridge code often defines contracts that another implementor will
+extend later. Document those contracts at the definition site.
+
+- Public protocols, abstract classes, and handler base classes must document
+  what each required method does for callers and what implementors are expected
+  to own.
+- Named callback types should document when callbacks fire, whether they are
+  best-effort, and whether they receive raw or validated data.
+- Exported constants and operation-critical internal constants should have a
+  helpful comment or docstring explaining the invariant they carry, not just the
+  literal value.
+- Protocol and transport comments should mark trust boundaries, lifecycle
+  ownership, ordering constraints, and failure behavior.
+- Inline comments should explain non-obvious branches such as cancellation
+  cleanup, stream draining, approval unblocking, decode rejection, and shutdown
+  escalation.
+- Do not use comments to compensate for vague data shapes. If a method depends
+  on fields such as `entity.get("task_id")`, replace the top-level shape with a
+  dataclass, Pydantic model, enum, or typed value object and document that type.
+
+Good bridge comments:
+
+```python
+class BridgeCommandHandler(ABC):
+    """Owns parsing and side effects for one app-to-backend command type."""
+
+    @abstractmethod
+    def handle(self, backend: BridgeBackend, command: BridgeCommand) -> None:
+        """Apply `command` and emit any downstream events before returning."""
+```
+
+```python
+# The child process may still flush stdout after it observes shutdown. Close the
+# stream only after the run boundary has emitted its terminal event.
+await writer.drain()
+```
+
+Avoid comments like:
+
+```python
+# Get task id from entity.
+task_id = entity.get("task_id")
+```
+
+That comment documents an implicit architecture problem; the entity should be a
+well-defined type instead.
 
 ***
 

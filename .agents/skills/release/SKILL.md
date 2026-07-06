@@ -79,6 +79,9 @@ Read versions from:
 
 1. `pyproject.toml`
 2. any workspace package `pyproject.toml` files discovered under `packages/`
+3. `packages/process_bridge_ts/package.json`
+4. app-facing example package manifests that pin `@agentlanejs/process-bridge`
+   by version
 
 All discovered versions must match before release preparation.
 
@@ -118,17 +121,19 @@ Run:
 ```bash
 /usr/bin/make format
 /usr/bin/make lint
+/usr/bin/make typecheck
 /usr/bin/make tests
+cd packages/process_bridge_ts && bun run check && npm pack --dry-run
 ```
 
-Do not commit or tag until all three pass.
+Do not commit or tag until all verification commands pass.
 
 ### 6. Commit And Tag
 
 Commit only the files changed for the release:
 
 ```bash
-git add pyproject.toml CHANGELOG.md
+git add pyproject.toml packages/process_bridge_ts/package.json examples/harness/process_bridge_stdio/package.json CHANGELOG.md
 git commit -m "release: v<version>"
 ```
 
@@ -160,6 +165,16 @@ The helper:
 7. pushes the tag to `origin`
 8. creates the GitHub release with `gh release create`
 
+The GitHub release triggers the package publishing workflows:
+
+1. `Publish Python Packages` builds and publishes Python distributions to PyPI.
+2. `Publish NPM Packages` builds and publishes `@agentlanejs/process-bridge` to
+   npm with provenance.
+
+The npm package must have trusted publishing configured for
+`.github/workflows/npm-publish.yml` and the `npm` GitHub environment before the
+first release that should publish to npm.
+
 If confirmation is declined, publishing is skipped and no remote changes are
 made.
 
@@ -173,3 +188,4 @@ Report:
 4. verification results
 5. release commit
 6. whether publishing was confirmed or skipped
+7. PyPI and npm workflow status when publishing was confirmed

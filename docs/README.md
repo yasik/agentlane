@@ -93,15 +93,17 @@ mental model:
 9. If you want to define agents and sub-agents from markdown files, read
    [Harness Markdown Agent Definitions](./harness/agent-definitions.md) after
    [Harness Default Agents](./harness/default-agents.md).
-10. If you want to understand prompt construction or tool exposure, read
-   [Models Overview](./models/overview.md) and
-   [Models: Prompt Templating](./models/prompt-templating.md).
-11. If you specifically want streaming, read [Models Overview](./models/overview.md)
+10. If you are building a TypeScript app around a local Python AgentLane
+    backend, read [Process Bridge](./process-bridge/README.md).
+11. If you want to understand prompt construction or tool exposure, read
+    [Models Overview](./models/overview.md) and
+    [Models: Prompt Templating](./models/prompt-templating.md).
+12. If you specifically want streaming, read [Models Overview](./models/overview.md)
     first, then [Harness Default Agents](./harness/default-agents.md).
-12. If you want high-level harness agents coordinating distributed workers, read
+13. If you want high-level harness agents coordinating distributed workers, read
     [Harness Distributed Agents](./harness/distributed-agents.md) after the
     runtime distributed docs.
-13. Run one of the examples under [examples/](../examples/README.md).
+14. Run one of the examples under [examples/](../examples/README.md).
 
 ## Contents
 
@@ -137,6 +139,13 @@ mental model:
 9. [Markdown Agent Definitions](./harness/agent-definitions.md)
 10. [Runner](./harness/runner.md)
 11. [Distributed Agents](./harness/distributed-agents.md)
+
+### Process Bridge
+
+1. [Overview](./process-bridge/README.md)
+2. [Runtime Configuration](./process-bridge/runtime-configuration.md)
+3. [Protocol and Lifecycle](./process-bridge/protocol.md)
+4. [Development](./process-bridge/development.md)
 
 ### Tracing
 

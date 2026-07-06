@@ -23,3 +23,11 @@ Use these rules for imports, annotations, and type definitions.
   types instead.
 - Use `TypeAlias` for complex type definitions.
 - Use `strenum.LowercaseStrEnum` for string enumerations.
+- Define top-level domain, protocol, command, and response entities as concrete
+  types. Avoid passing generic `Mapping[str, object]` or `dict[str, object]`
+  through method bodies and reading fields with `.get("key")`; parse untrusted
+  dictionaries once at the boundary, then pass a named dataclass, Pydantic
+  model, enum, `TypedDict`, or protocol-specific value object.
+- Use broad mapping types only for genuinely dynamic maps such as metadata,
+  caches, JSON passthrough blobs, or serialization internals. Name those fields
+  after their dynamic nature, such as `metadata` or `raw_payload`.

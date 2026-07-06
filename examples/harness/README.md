@@ -20,10 +20,14 @@ harness directly.
 13. [default_agent_tool_note_writer](./default_agent_tool_note_writer/): generic `agent` tool demo where the model chooses a finance helper name and focused task.
 14. [handoff_to_clinical_escalation](./handoff_to_clinical_escalation/): predefined first-class handoff demo where patient triage transfers the conversation to a nurse triage specialist.
 15. [default_handoff_takeover](./default_handoff_takeover/): generic `handoff` demo where patient triage transfers the conversation to a fresh specialist created from `DefaultHandoff(...)`.
+16. [process_bridge_stdio](./process_bridge_stdio/): no-model-key stdio bridge demo with a scripted Python backend and TypeScript client.
 
 ## Run
 
 All harness demos require `OPENAI_API_KEY` in the environment:
+
+The `process_bridge_stdio` demo is the exception; it uses a scripted backend and
+does not call a model provider.
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -43,4 +47,5 @@ uv run python examples/harness/default_agent_tool_note_writer/main.py
 uv run python examples/harness/handoff_to_clinical_escalation/main.py
 uv run python examples/harness/default_handoff_takeover/main.py
 uv run python examples/harness/base_tools_plan_quickstart/main.py
+(cd examples/harness/process_bridge_stdio && bun install && bun run client.ts)
 ```

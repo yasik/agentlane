@@ -10,6 +10,12 @@ Use this page for test conventions and review-ready change expectations.
 - Name tests with the pattern:
   `test_<what>_<condition>_<expected_result>`
 - Mock external dependencies with `pytest-mock`.
+- For bridge, transport, and protocol work, add parity tests that compare the
+  canonical command/event vocabulary with handlers, encoders, fixtures, and any
+  downstream decoder registry. Drift should fail loudly in tests.
+- Add at least one representative fixture for every public protocol event or
+  command shape. Keep fixtures small and hand-auditable unless a real generator
+  owns them.
 
 ## Fixture placement
 

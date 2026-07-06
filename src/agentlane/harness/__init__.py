@@ -2,6 +2,7 @@
 
 from ._agent import Agent
 from ._events import (
+    HarnessEventType,
     RunAgentEndEvent,
     RunAgentStartEvent,
     RunEvent,
@@ -60,6 +61,7 @@ __all__ = [
     "AgentDescriptor",
     "DefaultAgentTool",
     "DefaultHandoff",
+    "HarnessEventType",
     "INHERIT_TOOLS",
     "InheritTools",
     "LiveRunStateView",

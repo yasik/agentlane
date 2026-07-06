@@ -101,17 +101,10 @@ The sections above define the working model. Use the docs under
 
 - [`docs/code-style/README.md`](docs/code-style/README.md): index of the
   detailed coding standards.
-- [`docs/code-style/imports.md`](docs/code-style/imports.md): import paths,
-  annotation rules, and typing boundaries.
 - [`docs/code-style/workspace-packages.md`](docs/code-style/workspace-packages.md):
   how to add and register a new workspace package.
-- [`docs/code-style/python.md`](docs/code-style/python.md): Python conventions,
-  async patterns, error handling, Pydantic/FastAPI guidance, and tooling rules.
-- [`docs/code-style/comments.md`](docs/code-style/comments.md): comment,
-  docstring, and field comment expectations.
-- [`docs/code-style/modules.md`](docs/code-style/modules.md): file naming,
-  package layout, `__init__.py`, and export rules.
-- [`docs/code-style/testing-and-prs.md`](docs/code-style/testing-and-prs.md):
-  test naming, fixtures, PR expectations, and commit message guidance.
-- [`docs/code-style/tool-design.md`](docs/code-style/tool-design.md): tool
-  contracts, model-facing results, error boundaries, docs, examples, and tests.
+- [`docs/code-style/python/README.md`](docs/code-style/python/README.md):
+  Python conventions, imports and typing, comments, modules, tests, and
+  first-party tool design.
+- [`docs/code-style/typescript/README.md`](docs/code-style/typescript/README.md):
+  TypeScript conventions, strictness, exports, tooling, and package scripts.

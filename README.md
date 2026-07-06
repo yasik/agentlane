@@ -34,7 +34,8 @@ AgentLane is organized into layers that can be used together or independently:
    outputs, native tools, and provider clients.
 3. **[Harness](src/agentlane/harness/)** — `DefaultAgent`, markdown agent
    definitions, resumable run state, tool execution, handoffs, agent-as-tool
-   delegation, shims, and skills.
+   delegation, shims, skills, and a local stdio process bridge for TypeScript
+   app shells.
 4. **[Transport](src/agentlane/transport/)** — wire-safe serialization
    boundaries for distributed payloads.
 5. **[Tracing](src/agentlane/tracing/)** — observability across runtime, model,

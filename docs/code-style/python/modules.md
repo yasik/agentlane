@@ -17,6 +17,9 @@ Use this page for file naming, package layout, `__init__.py`, and export rules.
    level.
 3. Choose between a module and a subpackage based on the size and cohesion of
    the code. Public surfaces should stay easy to understand and export cleanly.
+4. Keep canonical protocol vocabularies in code modules, not in hidden sidecar
+   files, unless there is a real generation or runtime discovery workflow.
+   Representative payload examples belong in obvious `fixtures/` directories.
 
 Example layout:
 
@@ -67,6 +70,10 @@ del os
    import paths unclear for consumers.
 4. Export entities from the nearest nesting level only. Deeper packages should
    re-export their own public surface.
+5. For bridge and transport packages, expose supported command and event
+   vocabularies from the upstream package that owns the behavior. Downstream
+   apps should import those constants or enums instead of duplicating string
+   literals.
 
 Examples:
 

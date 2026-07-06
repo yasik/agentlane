@@ -1,0 +1,464 @@
+import asyncio
+import sys
+import time
+from collections.abc import AsyncIterator, Callable
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
+from typing import TextIO, cast
+
+import pytest
+from agentlane_process_bridge import (
+    BridgeBackend,
+    ContractPayloadError,
+    EventWriter,
+    run_stdio,
+    serve_stdio,
+)
+
+from agentlane.harness.tools import (
+    ToolApprovalEvent,
+    ToolOperation,
+    ToolPermissionDecision,
+    ToolPermissionRequest,
+)
+from agentlane.runtime import CancellationToken
+
+from .helpers import FakeAgent, FakeRunEventStream, emitted_events, wait_for_stream
+
+
+class _PrintingAgent(FakeAgent):
+    async def run_events(
+        self,
+        input: str,
+        /,
+        *,
+        approval_events: AsyncIterator[ToolApprovalEvent],
+        cancellation_token: CancellationToken | None = None,
+    ) -> FakeRunEventStream:
+        print("diagnostic from agent")
+        return await super().run_events(
+            input,
+            approval_events=approval_events,
+            cancellation_token=cancellation_token,
+        )
+
+
+class _HugeConfigStore:
+    def snapshot(self) -> dict[str, object]:
+        return {"model": "openai/gpt-5.5"}
+
+    def apply(self, patch: dict[str, object]) -> dict[str, object]:
+        del patch
+
+        return {"catalog": "x" * 40_000}
+
+
+class _FailingSnapshotStore:
+    def snapshot(self) -> dict[str, object]:
+        raise RuntimeError("snapshot failed")
+
+    def apply(self, patch: dict[str, object]) -> dict[str, object]:
+        del patch
+
+        return {}
+
+
+def _read_lines(lines: list[str]) -> Callable[[int], str]:
+    input_lines = iter(lines)
+    return lambda _limit: next(input_lines, "")
+
+
+def test_serve_stdio_reports_bad_command_and_survives() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(output))
+
+        await serve_stdio(
+            backend,
+            readline=_read_lines(
+                ["not-json\n", '{"protocol_version":"1.0","type":"shutdown"}\n']
+            ),
+        )
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["error", "shutdown"]
+        assert events[0]["scope"] == "command"
+
+    asyncio.run(scenario())
+
+
+def test_cli_factory_stdout_is_not_protocol_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module_path = tmp_path / "printing_bridge_app.py"
+    module_path.write_text(
+        """
+from agentlane_process_bridge import AgentBackend
+
+
+class Agent:
+    @property
+    def run_state(self):
+        return None
+
+    def reset(self):
+        return None
+
+    async def run_events(self, input, /, *, approval_events, cancellation_token=None):
+        raise AssertionError("run_events should not be called")
+
+
+def create_backend():
+    print("factory stdout noise")
+    return AgentBackend(agent=Agent(), ready_metadata=lambda: {"app": "printing"})
+""",
+    )
+
+    async def scenario() -> None:
+        from agentlane_process_bridge.__main__ import run_app_reference
+
+        protocol_output = StringIO()
+        stderr = StringIO()
+        sys.path.insert(0, str(tmp_path))
+        monkeypatch.setattr(
+            sys,
+            "stdin",
+            StringIO('{"protocol_version":"1.0","type":"shutdown"}\n'),
+        )
+
+        try:
+            with redirect_stdout(protocol_output), redirect_stderr(stderr):
+                await run_app_reference("printing_bridge_app:create_backend")
+        finally:
+            sys.path.remove(str(tmp_path))
+
+        events = emitted_events(protocol_output)
+        assert [event["type"] for event in events] == ["ready", "shutdown"]
+        assert events[0]["metadata"] == {"app": "printing"}
+        assert "factory stdout noise" in stderr.getvalue()
+
+    asyncio.run(scenario())
+
+
+def test_run_stdio_ready_metadata_stdout_is_not_protocol_output() -> None:
+    def ready_metadata() -> dict[str, object]:
+        print("ready metadata stdout noise")
+        return {"app": "printing"}
+
+    async def scenario() -> None:
+        protocol_output = StringIO()
+        stderr = StringIO()
+
+        with redirect_stdout(protocol_output), redirect_stderr(stderr):
+            await run_stdio(
+                agent=FakeAgent(),
+                stdin=StringIO('{"protocol_version":"1.0","type":"shutdown"}\n'),
+                ready_metadata=ready_metadata,
+            )
+
+        events = emitted_events(protocol_output)
+        assert [event["type"] for event in events] == ["ready", "shutdown"]
+        assert events[0]["metadata"] == {"app": "printing"}
+        assert "ready metadata stdout noise" in stderr.getvalue()
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_rejects_invalid_command_shapes() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(output))
+
+        await serve_stdio(
+            backend,
+            readline=_read_lines(
+                [
+                    "[]\n",
+                    "{}\n",
+                    '{"type":"prompt","text":"missing version"}\n',
+                    (
+                        '{"protocol_version":"2.0","type":"prompt",'
+                        '"text":"bad version"}\n'
+                    ),
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
+                ]
+            ),
+        )
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == [
+            "error",
+            "error",
+            "error",
+            "error",
+            "shutdown",
+        ]
+        assert all(event["scope"] == "command" for event in events[:-1])
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_denies_non_boolean_approval_values() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(output))
+        approval_task = asyncio.create_task(
+            backend.approvals.callback(
+                ToolPermissionRequest(
+                    tool_name="write",
+                    operation=ToolOperation.CREATE_FILE,
+                    cwd=Path("/workspace"),
+                ),
+                ToolPermissionDecision.require_approval("needs review"),
+            )
+        )
+        for _ in range(100):
+            pending = backend.approvals.pending()
+            if pending:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("Expected pending approval.")
+
+        await serve_stdio(
+            backend,
+            readline=_read_lines(
+                [
+                    (
+                        '{"protocol_version":"1.0","type":"approve",'
+                        f'"id":"{pending[0].request_id}","allowed":"true"}}\n'
+                    ),
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
+                ]
+            ),
+        )
+        decision = await approval_task
+
+        assert not decision.allowed
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_reports_unknown_command_and_survives() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(output))
+
+        await serve_stdio(
+            backend,
+            readline=_read_lines(
+                [
+                    '{"protocol_version":"1.0","type":"future_command"}\n',
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
+                ]
+            ),
+        )
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["error", "shutdown"]
+        assert events[0]["scope"] == "command"
+        assert events[0]["message"] == "Unknown command: future_command"
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_reraises_contract_payload_errors() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(
+            agent=FakeAgent(),
+            events=EventWriter(output),
+            config=_HugeConfigStore(),
+        )
+
+        with pytest.raises(ContractPayloadError):
+            await serve_stdio(
+                backend,
+                readline=_read_lines(
+                    ['{"protocol_version":"1.0","type":"configure","patch":{}}\n']
+                ),
+            )
+
+        assert emitted_events(output) == []
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_reraises_config_snapshot_errors_after_reset() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        backend = BridgeBackend(
+            agent=agent,
+            events=EventWriter(output),
+            config=_FailingSnapshotStore(),
+        )
+
+        with pytest.raises(ContractPayloadError):
+            await serve_stdio(
+                backend,
+                readline=_read_lines(['{"protocol_version":"1.0","type":"reset"}\n']),
+            )
+
+        assert agent.reset_calls == 1
+        assert emitted_events(output) == []
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_rejects_oversized_command_line() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(output))
+
+        await serve_stdio(
+            backend,
+            readline=_read_lines(
+                [
+                    '{"protocol_version":"1.0","type":"prompt","text":"'
+                    + ("x" * 64)
+                    + '"}\n',
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
+                ]
+            ),
+            max_command_line_chars=48,
+        )
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["error", "shutdown"]
+        assert events[0]["message"] == "Command line exceeds bridge size limit."
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_discards_oversized_unterminated_command_line() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(output))
+
+        await serve_stdio(
+            backend,
+            readline=_read_lines(
+                [
+                    "x" * 96,
+                    "tail\n",
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
+                ]
+            ),
+            max_command_line_chars=48,
+        )
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["error", "shutdown"]
+        assert events[0]["message"] == "Command line exceeds bridge size limit."
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_broken_stdout_during_error_report_closes_cleanly() -> None:
+    class BrokenOutput(StringIO):
+        def write(self, value: str) -> int:
+            del value
+            raise BrokenPipeError("stdout closed")
+
+    async def scenario() -> None:
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(BrokenOutput()))
+
+        await serve_stdio(
+            backend,
+            readline=_read_lines(["not-json\n"]),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_eof_closes_active_run_without_shutdown_event() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        backend = BridgeBackend(agent=agent, events=EventWriter(output))
+        sent_prompt = False
+
+        def readline(_limit: int) -> str:
+            nonlocal sent_prompt
+            if not sent_prompt:
+                sent_prompt = True
+                return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
+            for _ in range(100):
+                if agent.streams:
+                    return ""
+                time.sleep(0.01)
+            return ""
+
+        await serve_stdio(backend, readline=readline)
+        stream = await wait_for_stream(agent)
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["run_start"]
+        assert stream.aclose_calls == 1
+        assert stream.result_awaits == 1
+
+    asyncio.run(scenario())
+
+
+def test_serve_stdio_read_error_closes_active_run() -> None:
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        backend = BridgeBackend(agent=agent, events=EventWriter(output))
+        sent_prompt = False
+
+        def readline(_limit: int) -> str:
+            nonlocal sent_prompt
+            if not sent_prompt:
+                sent_prompt = True
+                return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
+            for _ in range(100):
+                if agent.streams:
+                    raise OSError("stdin closed")
+                time.sleep(0.01)
+            raise OSError("stdin closed")
+
+        await serve_stdio(backend, readline=readline)
+        stream = await wait_for_stream(agent)
+
+        events = emitted_events(output)
+        assert [event["type"] for event in events] == ["run_start"]
+        assert stream.aclose_calls == 1
+        assert stream.result_awaits == 1
+
+    asyncio.run(scenario())
+
+
+def test_run_stdio_routes_python_prints_to_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        protocol = StringIO()
+        diagnostics = StringIO()
+        agent = _PrintingAgent()
+        monkeypatch.setattr("sys.stdout", protocol)
+        monkeypatch.setattr("sys.stderr", diagnostics)
+
+        class PromptThenEof:
+            sent_prompt = False
+
+            def readline(self, _limit: int) -> str:
+                if not self.sent_prompt:
+                    self.sent_prompt = True
+                    return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
+                for _ in range(100):
+                    if agent.streams:
+                        return ""
+                    time.sleep(0.01)
+                return ""
+
+        await run_stdio(agent=agent, stdin=cast(TextIO, PromptThenEof()))
+
+        events = emitted_events(protocol)
+        assert [event["type"] for event in events] == ["ready", "run_start"]
+        assert diagnostics.getvalue() == "diagnostic from agent\n"
+
+    asyncio.run(scenario())
