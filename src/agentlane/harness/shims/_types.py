@@ -46,7 +46,7 @@ class PreparedTurn:
     This state is intentionally ephemeral. It lives for the duration of one
     run, is shared across all turns in that run, and is discarded when the run
     ends. Shims that need resumable state should write to
-    ``PreparedTurn.run_state.shim_state`` instead.
+    `PreparedTurn.run_state.shim_state` instead.
     """
 
     def set_system_instruction(self, value: RunInstructions) -> None:
@@ -78,3 +78,7 @@ class PreparedTurn:
         """Append multiple items to persisted conversation history."""
         for item in items:
             self.append_history_item(item)
+
+    def replace_history(self, items: list[RunHistoryItem]) -> None:
+        """Replace persisted conversation history with copied items."""
+        self.run_state.history = [copy_history_item(item) for item in items]

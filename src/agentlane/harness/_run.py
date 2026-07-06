@@ -16,11 +16,11 @@ from agentlane.models import MessageDict, ModelResponse, PromptSpec, RunStateVie
 from agentlane.models.run import DefaultRunContext
 
 ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX = ":active-skill-names"
-"""Documented ``shim_state`` key suffix that holds active skill names.
+"""Documented `shim_state` key suffix that holds active skill names.
 
 A skills shim records the names of the skills active for the current run under
 a key ending in this suffix (the shim name is the prefix, so multiple skills
-shims never collide). ``RunStateView.active_skill_names`` reads every such key
+shims never collide). `RunStateView.active_skill_names` reads every such key
 so tools can resolve skill-relative resources without coupling to a specific
 shim name or reaching for a private key. The value must be a list of strings.
 """
@@ -83,11 +83,14 @@ class RunState:
     """Single persisted system instruction for this run."""
 
     history: list[RunHistoryItem]
-    """Append-only persisted conversation history for this run.
+    """Persisted conversation history for this run.
 
-    Items may be prior ``ModelResponse`` assistant turns, canonical message
+    Items may be prior `ModelResponse` assistant turns, canonical message
     dicts, prompt specs, or user-side content values. The runner resolves each
-    item into canonical ``MessageDict`` at request time.
+    item into canonical `MessageDict` at request time. Normal operation
+    appends to this list; whole-list replacement through
+    `PreparedTurn.replace_history(...)` is the sanctioned rewrite point for
+    compaction and other history-rewrite shims.
     """
 
     responses: list[ModelResponse]
@@ -101,9 +104,9 @@ class RunState:
 
     The runner increments this at the start of each turn, before shims prepare
     the turn and before the model is called. While turn N is being prepared or
-    executed, ``turn_count`` is ``N``; the first turn therefore observes
-    ``turn_count == 1``. After the run finishes, it equals the total number of
-    turns that ran. Gate first-turn logic on ``turn_count == 1`` rather than a
+    executed, `turn_count` is `N`; the first turn therefore observes
+    `turn_count == 1`. After the run finishes, it equals the total number of
+    turns that ran. Gate first-turn logic on `turn_count == 1` rather than a
     "completed-turns" reading.
     """
 
@@ -111,10 +114,10 @@ class RunState:
 type RunInput = str | list[RunHistoryItem] | RunState
 """Public input accepted by the default harness agent.
 
-A plain ``str`` starts or continues a conversation with a single user
-message. A ``list[RunHistoryItem]`` provides a richer multi-item payload (e.g.
-a ``PromptSpec`` mixed with prior ``ModelResponse`` objects). A
-``RunState`` resumes a previously persisted conversation wholesale.
+A plain `str` starts or continues a conversation with a single user
+message. A `list[RunHistoryItem]` provides a richer multi-item payload (e.g.
+a `PromptSpec` mixed with prior `ModelResponse` objects). A
+`RunState` resumes a previously persisted conversation wholesale.
 """
 
 
@@ -131,8 +134,8 @@ class RunResult:
     turn_count: int
     """Total number of model turns that ran for this completed run.
 
-    Equal to the final value of ``RunState.turn_count`` (which the runner
-    increments at the start of each turn), so a single-turn run reports ``1``.
+    Equal to the final value of `RunState.turn_count` (which the runner
+    increments at the start of each turn), so a single-turn run reports `1`.
     """
 
     run_state: RunState | None = None
@@ -140,7 +143,7 @@ class RunResult:
 
 
 def copy_run_state(run_state: RunState | None) -> RunState | None:
-    """Return an isolated copy of one run state, or ``None`` passthrough."""
+    """Return an isolated copy of one run state, or `None` passthrough."""
     if run_state is None:
         return None
 
@@ -177,27 +180,24 @@ def copy_instructions(instructions: RunInstructions) -> RunInstructions:
 
 
 def copy_history_item(item: RunHistoryItem) -> RunHistoryItem:
-    """Copy one typed run-history item when shallow ownership is needed.
+    """Copy one typed run-history item for isolated ownership.
 
-    Mutable containers and structured ``BaseModel`` payloads are copied.
-    Everything else — strings, ``ModelResponse``, ``PromptSpec`` — is treated
+    Mutable containers and structured `BaseModel` payloads are copied.
+    Everything else — strings, `ModelResponse`, `PromptSpec` — is treated
     as immutable.
     """
-    if isinstance(item, list):
-        return list(item)
-    if isinstance(item, dict):
-        return dict(cast(dict[str, object], item))
-    if isinstance(item, BaseModel):
-        return cast(RunHistoryItem, item.model_copy(deep=True))
-    return item
+    return cast(RunHistoryItem, copy_generic_value(item))
 
 
 def copy_generic_value(value: object) -> object:
-    """Copy one generic shim-state value when shallow ownership is needed."""
+    """Copy one generic shim-state value for isolated ownership."""
     if isinstance(value, list):
-        return list(cast(list[object], value))
+        return [copy_generic_value(item) for item in cast(list[object], value)]
     if isinstance(value, dict):
-        return dict(cast(dict[str, object], value))
+        return {
+            key: copy_generic_value(item)
+            for key, item in cast(dict[str, object], value).items()
+        }
     if isinstance(value, BaseModel):
         return value.model_copy(deep=True)
     return value
@@ -205,11 +205,11 @@ def copy_generic_value(value: object) -> object:
 
 @dataclass(frozen=True, slots=True)
 class LiveRunStateView(RunStateView):
-    """Read-only ``RunStateView`` backed by one live harness ``RunState``.
+    """Read-only `RunStateView` backed by one live harness `RunState`.
 
-    Cheap to construct: it wraps the live ``RunState`` and the run's task
+    Cheap to construct: it wraps the live `RunState` and the run's task
     identity by reference, reading through on each access. The runner builds
-    one per local tool call and stamps it onto ``ToolExecutionContext`` so tool
+    one per local tool call and stamps it onto `ToolExecutionContext` so tool
     handlers can observe the run without an app-built side channel.
     """
 
@@ -218,7 +218,7 @@ class LiveRunStateView(RunStateView):
 
     @property
     def task_id(self) -> str:
-        """Return the stable task identity (``str`` of the run's task id)."""
+        """Return the stable task identity (`str` of the run's task id)."""
         return str(self._task_id)
 
     @property
