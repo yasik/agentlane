@@ -4,12 +4,18 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v0.12.0.
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-publish-${{ github.event.release.tag_name }}
+  group: npm-publish-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +28,8 @@ jobs:
       id-token: write
     environment:
       name: npm
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     defaults:
       run:
         working-directory: packages/process_bridge_ts
@@ -29,6 +37,14 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
@@ -50,10 +66,10 @@ jobs:
       - name: Verify package version matches release tag
         run: |
           package_version="$(node -p "require('./package.json').version")"
-          release_version="${GITHUB_REF_NAME#v}"
+          release_version="${RELEASE_TAG#v}"
 
           if [ "${package_version}" != "${release_version}" ]; then
-            echo "package.json version ${package_version} does not match release tag ${GITHUB_REF_NAME}."
+            echo "package.json version ${package_version} does not match release tag ${RELEASE_TAG}."
             exit 1
           fi
 
