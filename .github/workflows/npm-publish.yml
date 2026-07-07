@@ -79,5 +79,18 @@ jobs:
       - name: Inspect package contents
         run: npm pack --dry-run
 
+      - name: Check whether package version is already published
+        id: published-version
+        run: |
+          release_version="${RELEASE_TAG#v}"
+
+          if npm view "@agentlanejs/process-bridge@${release_version}" version >/dev/null 2>&1; then
+            echo "published=true" >> "${GITHUB_OUTPUT}"
+            echo "@agentlanejs/process-bridge@${release_version} is already published."
+          else
+            echo "published=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Publish package
+        if: steps.published-version.outputs.published != 'true'
         run: npm publish --provenance --access public
