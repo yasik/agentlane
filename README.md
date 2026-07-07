@@ -330,8 +330,9 @@ Start here:
 3. [Architecture](docs/harness/architecture.md)
 4. [Tools](docs/harness/tools.md)
 5. [Shims](docs/harness/shims.md)
-6. [Skills](docs/harness/skills.md)
-7. [Distributed Agents](docs/harness/distributed-agents.md)
+6. [Compaction](docs/harness/compaction.md)
+7. [Skills](docs/harness/skills.md)
+8. [Distributed Agents](docs/harness/distributed-agents.md)
 
 ## Documentation
 

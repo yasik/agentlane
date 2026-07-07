@@ -14,11 +14,15 @@ def estimate_message_tokens(messages: Sequence[MessageDict]) -> int:
     """Estimate message tokens with the byte heuristic.
 
     It applies a conservative UTF-8 bytes per token approximation for local
-    preflight decisions. Runtime shim logic should prefer provider-reported
-    usage when available, and callers that need exact accounting can pass a
-    custom `TokenEstimator`.
+    preflight decisions over message content and assistant tool-call payloads.
+    Runtime shim logic can report provider usage when available, and callers
+    that need exact accounting can pass a custom `TokenEstimator`.
     """
-    return sum(_estimate_content(message.get("content")) for message in messages)
+    return sum(
+        _estimate_content(message.get("content"))
+        + _estimate_tool_calls(message.get("tool_calls"))
+        for message in messages
+    )
 
 
 def _estimate_content(content: object) -> int:
@@ -43,6 +47,12 @@ def _estimate_content_part(part: object) -> int:
             return _estimate_text(text)
 
     return NON_TEXT_PART_TOKENS
+
+
+def _estimate_tool_calls(tool_calls: object) -> int:
+    if tool_calls is None:
+        return 0
+    return _estimate_text(_stringify(tool_calls))
 
 
 def _estimate_text(text: str) -> int:

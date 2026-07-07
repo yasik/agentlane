@@ -103,6 +103,7 @@ dev = [
   "ruff>=0.14.14",
   "yamllint>=1.37.0",
   "vulture>=2.16",
+  "pytest-asyncio>=1.4.0",
 ]
 
 [build-system]

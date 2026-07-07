@@ -14,8 +14,8 @@ type SummaryPlacement = Literal["before_tail", "after_tail"]
 type TokenEstimator = Callable[[Sequence[MessageDict]], int]
 """Callable that estimates token cost for already-rendered model messages."""
 
-type OnFailure = Literal["raise", "skip"]
-"""Compaction failure policy: surface the error or skip the rewrite attempt."""
+type OnFailure = Literal["inject", "skip"]
+"""Compaction failure policy: add a model-visible notice or skip silently."""
 
 type OnCompact = Callable[["CompactionReport"], Awaitable[None] | None]
 """Observer callback invoked after each compaction attempt report is created."""
