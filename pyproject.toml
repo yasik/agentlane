@@ -15,7 +15,6 @@ dependencies = [
   "PyYAML>=6.0.0,<7.0.0",
   "protobuf>=5.29.0,<6.0.0",
   "grpcio>=1.71.0,<2.0.0",
-  "structlog>=25.1.0,<26.0.0",
   "strenum>=0.4.15,<0.5.0",
   "tenacity>=9.0.0,<10.0.0",
   "typing-extensions>=4.12.0",
@@ -103,6 +102,7 @@ dev = [
   "ruff>=0.14.14",
   "yamllint>=1.37.0",
   "vulture>=2.16",
+  "pytest-asyncio>=1.4.0",
 ]
 
 [build-system]

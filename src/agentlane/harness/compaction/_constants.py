@@ -6,8 +6,11 @@ DEFAULT_TRIGGER_RATIO = 0.9
 DEFAULT_KEEP_RECENT_TOKENS = 20_000
 """Default approximate-token budget for verbatim recent history retained after compaction."""
 
+DEFAULT_KEEP_RECENT_MESSAGES = 4
+"""Default minimum count of newest history items retained after compaction."""
+
 DEFAULT_SUMMARY_MAX_TOKENS = 4_096
-"""Default summarizer output cap when the caller has not supplied `max_tokens`."""
+"""Default summarizer output cap when the caller has not supplied an output cap."""
 
 BYTES_PER_TOKEN = 4
 """Approximate UTF-8 bytes per token used by the byte heuristic estimator."""

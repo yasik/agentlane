@@ -8,6 +8,12 @@ from .._run import RunHistoryItem
 from ._constants import SUMMARY_CLOSE_TAG, SUMMARY_OPEN_TAG
 from ._prompt import DEFAULT_SUMMARY_ITEM_TEMPLATE
 
+_SUMMARY_ITEM_TEMPLATE = Template(
+    DEFAULT_SUMMARY_ITEM_TEMPLATE,
+    trim_blocks=True,
+    lstrip_blocks=True,
+)
+
 
 def render_summary_item(*, bridge: str, summary_text: str) -> MessageDict:
     """Return the canonical user-role summary message.
@@ -19,11 +25,7 @@ def render_summary_item(*, bridge: str, summary_text: str) -> MessageDict:
             The text is inserted between stable summary markers so later
             compaction passes can detect and replace prior summaries.
     """
-    content = Template(
-        DEFAULT_SUMMARY_ITEM_TEMPLATE,
-        trim_blocks=True,
-        lstrip_blocks=True,
-    ).render(
+    content = _SUMMARY_ITEM_TEMPLATE.render(
         open_tag=SUMMARY_OPEN_TAG,
         bridge=bridge,
         summary_text=summary_text,

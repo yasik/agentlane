@@ -15,9 +15,11 @@ history, then installs that replacement through `PreparedTurn.replace_history`.
 from agentlane.harness.compaction import (
     CompactionRequest,
     CompactionResult,
+    CompactionShim,
     CompactionShimConfig,
     Compactor,
     ContextSignal,
+    DefaultCompactor,
     DefaultCompactorConfig,
     estimate_message_tokens,
     is_summary_item,
@@ -26,9 +28,9 @@ from agentlane.harness.compaction import (
 )
 ```
 
-The package exports configuration types, request/result dataclasses, observer
-report types, summary helpers, a default estimator, and the `Compactor`
-protocol.
+The package exports the stock `CompactionShim`, configuration types,
+request/result dataclasses, observer report types, summary helpers, a default
+estimator, the `Compactor` protocol, and the stock `DefaultCompactor`.
 
 ## Configuration
 
@@ -39,14 +41,87 @@ shim:
 2. `trigger_ratio` chooses the threshold as a fraction of `context_window`.
 3. `trigger_tokens` sets an absolute threshold and takes precedence over
    `trigger_ratio`.
-4. `on_failure` is either `"raise"` or `"skip"`.
-5. `name` is the stable shim-state key prefix for one compaction instance.
+4. `on_failure` is either `"inject"` or `"skip"`.
+5. `name` is the stable prefix for compaction reports and attempt keys.
 
 Use `resolved_trigger_tokens()` when the shim needs the absolute threshold.
 
 `DefaultCompactorConfig` carries the shared settings for summary-plus-tail
 compactors: the summarization prompt, summary bridge, recent-history budget,
 summary placement, and optional summary output cap.
+
+## Default Compactor
+
+`DefaultCompactor` is the stock summary-plus-tail implementation. It keeps a
+recent history tail using both `keep_recent_messages` as a minimum history-item
+floor and `keep_recent_tokens` as an approximate token budget, summarizes older
+history with the model supplied on `CompactionRequest`, and returns replacement
+history with one tagged summary item plus the retained tail. The newest
+non-summary history item is always retained even when it alone is larger than
+the configured tail budget.
+
+```python
+from agentlane.harness.compaction import DefaultCompactor, DefaultCompactorConfig
+
+
+compactor = DefaultCompactor(
+    DefaultCompactorConfig(
+        keep_recent_tokens=20_000,
+        keep_recent_messages=4,
+        summary_max_tokens=4_096,
+    )
+)
+result = await compactor.compact(request)
+```
+
+The default compactor does not decide when compaction should run. A shim still
+owns trigger evaluation, failure policy, observer reports, and the final
+`turn.replace_history(result.history)` call.
+
+When `summary_max_tokens` is set, the compactor adds it as `max_tokens` only if
+the request's `model_args` did not already provide `max_tokens` or
+`max_output_tokens`. Other `model_args` are passed through to the summarizer
+call, so callers with main-turn provider arguments that should not apply to
+summarization should provide a custom compactor or sanitized request arguments.
+Existing summary items are summarized again and replaced rather than stacked.
+
+For preemptive or manual requests below the trigger threshold, the compactor
+returns a no-op result when there are fewer than the minimum older blocks to
+summarize. Triggered automatic requests are allowed to summarize fewer blocks
+because the request is already at the configured threshold. It raises
+`ContextOverflowError` when the summarizer request cannot fit the configured
+context window and `CompactionError` when the model returns an empty summary or
+the replacement does not shrink the estimated request meaningfully.
+
+## Compaction Shim
+
+`CompactionShim` is the stock runtime shim. It evaluates the configured trigger
+before a model turn, calls a compactor when the request is at or above the
+threshold, installs successful replacement history with
+`turn.replace_history(...)`, and emits optional `CompactionReport` values.
+
+```python
+from agentlane.harness.compaction import (
+    CompactionShim,
+    CompactionShimConfig,
+    DefaultCompactor,
+)
+
+
+shim = CompactionShim(
+    CompactionShimConfig(context_window=128_000),
+    DefaultCompactor(),
+)
+```
+
+By default, the shim uses `DefaultCompactor`, `estimate_message_tokens`, and
+`on_failure="inject"`. A compactor or replacement-validation error leaves the
+original history unchanged, adds a one-turn user-role note to the next model
+request, and continues the run. Set `on_failure="skip"` to leave history
+unchanged without injecting a model-visible note. Pass `on_compact=...` to
+receive a `CompactionReport` after each triggered attempt, including no-op
+attempts and failures. Observer callback errors are ignored and do not change
+the compaction result.
 
 ## Request Rendering
 
@@ -72,7 +147,11 @@ UTF-8 byte heuristic for text and a fixed charge for non-text content parts.
 
 Exact accounting depends on the provider and model. A compaction shim can pass a
 custom `TokenEstimator` into `CompactionRequest` when it has access to a
-provider-specific tokenizer or usage API.
+provider-specific tokenizer or usage API. The stock shim records the latest
+provider-reported usage when available, but it does not let that reported value
+trigger compaction by itself when the locally rendered request is still below
+threshold. That avoids false compaction after handoffs or resumes where older
+responses may have been produced by a different model context.
 
 `ContextSignal` records one trigger evaluation. It includes the effective token
 estimate, optional server-reported token count, instruction-only estimate,

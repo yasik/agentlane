@@ -3,6 +3,7 @@
 from ._config import CompactionShimConfig, DefaultCompactorConfig
 from ._constants import (
     BYTES_PER_TOKEN,
+    DEFAULT_KEEP_RECENT_MESSAGES,
     DEFAULT_KEEP_RECENT_TOKENS,
     DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_TRIGGER_RATIO,
@@ -12,6 +13,7 @@ from ._constants import (
     SUMMARY_CLOSE_TAG,
     SUMMARY_OPEN_TAG,
 )
+from ._default import DefaultCompactor
 from ._errors import CompactionError, ContextOverflowError
 from ._estimate import (
     estimate_message_tokens,
@@ -22,6 +24,7 @@ from ._prompt import (
     DEFAULT_SUMMARY_ITEM_TEMPLATE,
 )
 from ._render import render_request_messages
+from ._shim import CompactionShim
 from ._summary import is_summary_item, render_summary_item
 from ._types import (
     CompactionReport,
@@ -38,6 +41,7 @@ from ._types import (
 __all__ = [
     "BYTES_PER_TOKEN",
     "DEFAULT_COMPACTION_PROMPT",
+    "DEFAULT_KEEP_RECENT_MESSAGES",
     "DEFAULT_KEEP_RECENT_TOKENS",
     "DEFAULT_SUMMARY_BRIDGE",
     "DEFAULT_SUMMARY_ITEM_TEMPLATE",
@@ -52,10 +56,12 @@ __all__ = [
     "CompactionReport",
     "CompactionRequest",
     "CompactionResult",
+    "CompactionShim",
     "CompactionShimConfig",
     "Compactor",
     "ContextOverflowError",
     "ContextSignal",
+    "DefaultCompactor",
     "DefaultCompactorConfig",
     "OnCompact",
     "OnFailure",

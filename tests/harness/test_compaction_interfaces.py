@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from agentlane.harness.compaction import (
+    DEFAULT_KEEP_RECENT_MESSAGES,
     DEFAULT_KEEP_RECENT_TOKENS,
     DEFAULT_SUMMARY_BRIDGE,
     DEFAULT_SUMMARY_ITEM_TEMPLATE,
@@ -14,9 +15,11 @@ from agentlane.harness.compaction import (
     SUMMARY_OPEN_TAG,
     CompactionError,
     CompactionResult,
+    CompactionShim,
     CompactionShimConfig,
     Compactor,
     ContextSignal,
+    DefaultCompactor,
     DefaultCompactorConfig,
     estimate_message_tokens,
     is_summary_item,
@@ -87,6 +90,7 @@ def test_default_compactor_config_uses_public_defaults() -> None:
 
     assert config.prompt
     assert config.summary_bridge == DEFAULT_SUMMARY_BRIDGE
+    assert config.keep_recent_messages == DEFAULT_KEEP_RECENT_MESSAGES
     assert config.keep_recent_tokens == DEFAULT_KEEP_RECENT_TOKENS
     assert config.summary_placement == "before_tail"
     assert config.summary_max_tokens == DEFAULT_SUMMARY_MAX_TOKENS
@@ -105,6 +109,7 @@ def test_constants_are_defined_in_constants_module() -> None:
     [
         {"prompt": ""},
         {"summary_bridge": ""},
+        {"keep_recent_messages": 0},
         {"keep_recent_tokens": 0},
         {"summary_placement": "middle"},
         {"summary_max_tokens": 0},
@@ -131,6 +136,30 @@ def test_estimate_message_tokens_counts_text_and_non_text_parts() -> None:
     ]
 
     assert estimate_message_tokens(messages) == 1 + 2 + NON_TEXT_PART_TOKENS + 2
+
+
+def test_estimate_message_tokens_counts_tool_call_payloads() -> None:
+    content_only = estimate_message_tokens([{"role": "assistant", "content": None}])
+    with_tool_call = estimate_message_tokens(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": "abcdefgh",
+                        },
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert with_tool_call >= content_only + 2
 
 
 def test_default_prompts_match_checkpoint_language() -> None:
@@ -199,8 +228,8 @@ def test_compactor_protocol_is_runtime_checkable() -> None:
     assert isinstance(InlineCompactor(), Compactor)
 
 
-def test_first_branch_does_not_export_runtime_implementations() -> None:
+def test_compaction_exports_stock_implementations() -> None:
     import agentlane.harness.compaction as compaction
 
-    assert not hasattr(compaction, "CompactionShim")
-    assert not hasattr(compaction, "DefaultCompactor")
+    assert compaction.CompactionShim is CompactionShim
+    assert compaction.DefaultCompactor is DefaultCompactor
