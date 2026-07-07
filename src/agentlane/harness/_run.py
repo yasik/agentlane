@@ -20,9 +20,9 @@ ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX = ":active-skill-names"
 
 A skills shim records the names of the skills active for the current run under
 a key ending in this suffix (the shim name is the prefix, so multiple skills
-shims never collide). `RunStateView.active_skill_names` reads every such key
-so tools can resolve skill-relative resources without coupling to a specific
-shim name or reaching for a private key. The value must be a list of strings.
+shims never collide). `RunStateView.active_skill_names` reads every such key so
+tools can inspect active skills without coupling to a specific shim name or
+reaching for a private key. The value must be a list of strings.
 """
 
 

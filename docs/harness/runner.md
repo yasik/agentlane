@@ -426,7 +426,7 @@ observe the run it is executing inside without an app-built side channel:
   skills shim records these under a `shim_state` key ending in
   [`ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX`](../../src/agentlane/harness/_run.py)
   (the shim name is the key prefix, so multiple skills shims never collide);
-  the accessor unions every such key. Tools resolving skill-relative resources
+  the accessor unions every such key. Tools that need active-skill context can
   read this instead of reaching for a private state key.
 
 `context.run_state` is `None` when a tool runs outside a runner loop (for

@@ -1,10 +1,11 @@
 """Prompt and payload rendering for harness skills."""
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from jinja2 import Template
 
-from ._types import LoadedSkill, SkillManifest
+from ._types import LoadedSkill, SkillManifest, SkillResource
 
 DEFAULT_SKILLS_SYSTEM_PROMPT = """
 <skills_system>
@@ -38,11 +39,11 @@ LOADED_SKILL_TEMPLATE = """
 {{ skill.instructions }}
 
 Skill directory: {{ skill.manifest.root }}
-Relative paths in this skill are relative to the skill directory.
+Use absolute_path values below with filesystem tools. The path attribute is the skill-relative display path.
 
 <skill_resources>
 {% for resource in skill.resources %}
-  <file>{{ resource.path }}</file>
+  <file path="{{ resource.path }}" absolute_path="{{ resource.absolute_path }}" />
 {% endfor %}
 </skill_resources>
 </skill_content>
@@ -58,6 +59,23 @@ class SkillsSystemPromptContext:
 
     skills: tuple[SkillManifest, ...]
     """Discovered skills visible to the model before activation."""
+
+
+@dataclass(frozen=True, slots=True)
+class _LoadedSkillTemplateContext:
+    """Template context with absolute resource paths precomputed."""
+
+    manifest: SkillManifest
+    instructions: str
+    resources: tuple["_SkillResourceTemplateContext", ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _SkillResourceTemplateContext:
+    """Template context for one skill resource."""
+
+    path: str
+    absolute_path: Path
 
 
 def render_skills_system_prompt(
@@ -79,4 +97,33 @@ def render_skills_system_prompt(
 def render_loaded_skill(loaded_skill: LoadedSkill) -> str:
     """Render activated skill content into the tool-result payload."""
     template = Template(LOADED_SKILL_TEMPLATE, trim_blocks=True, lstrip_blocks=True)
-    return template.render(skill=loaded_skill).strip()
+    return template.render(skill=_loaded_skill_template_context(loaded_skill)).strip()
+
+
+def _loaded_skill_template_context(
+    loaded_skill: LoadedSkill,
+) -> _LoadedSkillTemplateContext:
+    """Return a render context with absolute resource paths."""
+    return _LoadedSkillTemplateContext(
+        manifest=loaded_skill.manifest,
+        instructions=loaded_skill.instructions,
+        resources=tuple(
+            _skill_resource_template_context(
+                resource,
+                root=loaded_skill.manifest.root,
+            )
+            for resource in loaded_skill.resources
+        ),
+    )
+
+
+def _skill_resource_template_context(
+    resource: SkillResource,
+    *,
+    root: Path,
+) -> _SkillResourceTemplateContext:
+    """Return a render context for one skill resource."""
+    return _SkillResourceTemplateContext(
+        path=resource.path,
+        absolute_path=(root / resource.path).resolve(strict=False),
+    )

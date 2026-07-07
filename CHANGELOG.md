@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an injectable `approvals` parameter to `BridgeBackend.__init__` and `run_stdio` so a host can share the `ToolApprovalBroker` it wired into its agent's tool approval callbacks. Without it, the agent's pending requests and the bridge's `approve`/`cancel` commands resolve against different broker instances and interactive approvals never complete.
 - Added token usage to the `llm_end` bridge event: the encoder now carries `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`) from `ModelResponse.usage`, or `null` when the provider omits it, so host telemetry can show context occupancy without parsing model output. Added the matching `TokenUsage` type and decoder to `@agentlanejs/process-bridge`.
 
+### Changed
+
+- Removed skill-relative tool wrapping from the skills API. `SkillsShim` now keeps workspace tools' path semantics unchanged and emits absolute paths for bundled skill resources in the activation payload.
+
 ## [0.11.0] - 2026-06-14
 
 AgentLane `0.11.0` makes harness runs easier for host applications to observe and control: tool calls now have typed success/failure outcomes, plan updates and delegation show up as structured run events, tools can read live run state, skills can resolve bundled resources by relative paths, and permission helpers cover app tools and network egress.
