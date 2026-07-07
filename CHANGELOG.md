@@ -7,14 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-07
+
+AgentLane `0.12.0` expands the harness into a fuller app platform: markdown agent definitions, resilient context compaction, and Python/TypeScript process-bridge APIs now give host applications a typed path for configuring, observing, and controlling local AgentLane sessions.
+
 ### Added
 
-- Added an injectable `approvals` parameter to `BridgeBackend.__init__` and `run_stdio` so a host can share the `ToolApprovalBroker` it wired into its agent's tool approval callbacks. Without it, the agent's pending requests and the bridge's `approve`/`cancel` commands resolve against different broker instances and interactive approvals never complete.
-- Added token usage to the `llm_end` bridge event: the encoder now carries `usage` (`prompt_tokens`, `completion_tokens`, `total_tokens`) from `ModelResponse.usage`, or `null` when the provider omits it, so host telemetry can show context occupancy without parsing model output. Added the matching `TokenUsage` type and decoder to `@agentlanejs/process-bridge`.
+- Added markdown agent definitions with `descriptor_from_markdown(...)`, `DefaultAgent.from_markdown(...)`, model resolution, sub-agent links, handoff support, and `disallowedTools` filtering for file-backed harness agents ([`d2a6159`](https://github.com/yasik/agentlane/commit/d2a6159), [`1fbebc7`](https://github.com/yasik/agentlane/commit/1fbebc7), [`4466dcb`](https://github.com/yasik/agentlane/commit/4466dcb))
+- Added public harness compaction contracts, the stock compaction shim, and the default summary-plus-tail compactor so long-running harness agents can compact history without crashing the run when compaction fails ([`8490f76`](https://github.com/yasik/agentlane/commit/8490f76), [`aad9810`](https://github.com/yasik/agentlane/commit/aad9810), [`fabd917`](https://github.com/yasik/agentlane/commit/fabd917), [`89f24be`](https://github.com/yasik/agentlane/commit/89f24be))
+- Added Python and TypeScript process bridge packages for NDJSON command/event streaming, plus the app-facing `createAgentSession(...)` API, backend entrypoint, typed callbacks, text streaming helpers, approval controls, and stdio example updates ([`a7c3f56`](https://github.com/yasik/agentlane/commit/a7c3f56), [`afe7eb4`](https://github.com/yasik/agentlane/commit/afe7eb4), [`f550f84`](https://github.com/yasik/agentlane/commit/f550f84))
+- Added runtime configuration to the process bridge so TypeScript hosts can update model settings through typed session controls and receive authoritative config events from the Python backend ([`7dae388`](https://github.com/yasik/agentlane/commit/7dae388))
+- Added token usage to the `llm_end` bridge event and the matching `TokenUsage` TypeScript decoder so host telemetry can show provider token totals without parsing model output ([`89f24be`](https://github.com/yasik/agentlane/commit/89f24be))
 
 ### Changed
 
-- Removed skill-relative tool wrapping from the skills API. `SkillsShim` now keeps workspace tools' path semantics unchanged and emits absolute paths for bundled skill resources in the activation payload.
+- Published `@agentlanejs/process-bridge` as a real npm package with dist exports, declarations, package-local checks, and a release-triggered npm publish workflow ([`5bb4cb1`](https://github.com/yasik/agentlane/commit/5bb4cb1))
+- Removed skill-relative tool wrapping from the skills API. `SkillsShim` now keeps workspace tools' path semantics unchanged and emits absolute paths for bundled skill resources in the activation payload ([`5c5399c`](https://github.com/yasik/agentlane/commit/5c5399c))
+- Moved process-bridge documentation into `docs/process-bridge/` and refreshed TypeScript/Python code-style guidance around strict protocol decoding, extension contracts, and package verification ([`7dae388`](https://github.com/yasik/agentlane/commit/7dae388), [`28ebe61`](https://github.com/yasik/agentlane/commit/28ebe61))
+
+### Fixed
+
+- Hardened process-bridge protocol edge cases around startup stdout hygiene, prompt cancellation, strict decode errors, approval-policy failures, and typed approval request payloads ([`5dfa260`](https://github.com/yasik/agentlane/commit/5dfa260), [`896867b`](https://github.com/yasik/agentlane/commit/896867b), [`f550f84`](https://github.com/yasik/agentlane/commit/f550f84))
+- Fixed the Claude streaming tool-thinking example and LiteLLM lock metadata for the current dependency set ([`9097700`](https://github.com/yasik/agentlane/commit/9097700))
+- Restored the `structlog` dependency so clean CI installs include the runtime import surface checked by pyright ([`ebc2e26`](https://github.com/yasik/agentlane/commit/ebc2e26))
 
 ## [0.11.0] - 2026-06-14
 
@@ -220,6 +235,7 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
+[0.12.0]: https://github.com/yasik/agentlane/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/yasik/agentlane/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/yasik/agentlane/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/yasik/agentlane/compare/v0.8.0...v0.9.0
