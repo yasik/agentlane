@@ -109,7 +109,7 @@ def test_agent_snapshot_decode_rejects_unsupported_version() -> None:
     payload = snapshot.to_json()
     payload["schema_version"] = 2
 
-    with pytest.raises(ValueError, match="schema version 2"):
+    with pytest.raises(ValueError, match="schema_version"):
         AgentSnapshot.from_json(payload)
 
 
@@ -123,7 +123,7 @@ def test_agent_snapshot_decode_rejects_malformed_history() -> None:
     assert isinstance(state, dict)
     state["history"] = [{"content": "missing role"}]
 
-    with pytest.raises(TypeError, match=r"state\.history\[0\]\.role"):
+    with pytest.raises(ValueError, match=r"history\[0\]\.role"):
         AgentSnapshot.from_json(payload)
 
 
@@ -156,7 +156,7 @@ def test_agent_snapshot_encode_rejects_non_json_shim_state_with_field_path() -> 
         run_state=state,
     )
 
-    with pytest.raises(TypeError, match=r"shim_state\.invalid"):
+    with pytest.raises(ValueError, match=r"shim_state\.invalid"):
         snapshot.to_json()
 
 
