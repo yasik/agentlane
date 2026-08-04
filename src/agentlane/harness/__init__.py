@@ -35,6 +35,7 @@ from ._run import (
     ShimState,
 )
 from ._runner import Runner
+from ._snapshot import AgentSnapshot
 from ._stream import RunStream
 from ._task import Task
 from ._tool_result import (
@@ -59,6 +60,7 @@ __all__ = [
     "ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX",
     "Agent",
     "AgentDescriptor",
+    "AgentSnapshot",
     "DefaultAgentTool",
     "DefaultHandoff",
     "HarnessEventType",
