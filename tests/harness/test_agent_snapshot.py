@@ -26,6 +26,20 @@ class _StructuredContent(BaseModel):
     value: str
 
 
+_AGENT_ID = AgentId.from_values("assistant", "main")
+
+
+def _snapshot(run_state: RunState | None = None) -> AgentSnapshot:
+    return AgentSnapshot.capture(
+        agent_id=_AGENT_ID,
+        run_state=(
+            run_state
+            if run_state is not None
+            else RunState(instructions=None, history=[], responses=[])
+        ),
+    )
+
+
 def test_agent_snapshot_round_trip_preserves_canonical_state() -> None:
     instructions = PromptSpec(
         template=PromptTemplate[dict[str, str], str](
@@ -47,48 +61,40 @@ def test_agent_snapshot_round_trip_preserves_canonical_state() -> None:
         turn_count=2,
     )
     state.shim_state["skills:active-skill-names"] = ["triage"]
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=state,
-    )
+    snapshot = _snapshot(state)
 
     encoded = snapshot.to_json()
     decoded = AgentSnapshot.from_json(json.loads(json.dumps(encoded)))
 
     assert decoded.agent_id == snapshot.agent_id
-    assert decoded.run_state.instructions == "You support ops."
-    assert decoded.run_state.history == [
+    restored = decoded.to_run_state()
+    assert restored.instructions == "You support ops."
+    assert restored.history == [
         {"role": "user", "content": "First question"},
         {"role": "assistant", "content": "First answer"},
         {"role": "user", "content": "Follow up with ops."},
     ]
-    assert decoded.run_state.responses == [response]
-    assert decoded.run_state.shim_state == {"skills:active-skill-names": ["triage"]}
-    assert decoded.run_state.turn_count == 2
+    assert restored.responses == [response]
+    assert restored.shim_state == {"skills:active-skill-names": ["triage"]}
+    assert restored.turn_count == 2
 
 
 def test_agent_snapshot_renders_structured_content_for_model_reuse() -> None:
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=RunState(
+    snapshot = _snapshot(
+        RunState(
             instructions=None,
             history=[_StructuredContent(value="kept")],
             responses=[],
-        ),
+        )
     )
 
-    decoded = AgentSnapshot.from_json(snapshot.to_json())
+    restored = AgentSnapshot.from_json(snapshot.to_json()).to_run_state()
 
-    assert decoded.run_state.history == [
-        {"role": "user", "content": '{"value":"kept"}'}
-    ]
+    assert restored.history == [{"role": "user", "content": '{"value":"kept"}'}]
 
 
 def test_agent_snapshot_decode_tolerates_unknown_fields() -> None:
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=RunState(instructions=None, history=[], responses=[]),
-    )
+    snapshot = _snapshot()
     payload = snapshot.to_json()
     payload["future"] = {"ignored": True}
     state = payload["state"]
@@ -98,14 +104,11 @@ def test_agent_snapshot_decode_tolerates_unknown_fields() -> None:
     decoded = AgentSnapshot.from_json(payload)
 
     assert decoded.agent_id == snapshot.agent_id
-    assert decoded.run_state == snapshot.run_state
+    assert decoded.to_run_state() == snapshot.to_run_state()
 
 
 def test_agent_snapshot_decode_rejects_unsupported_version() -> None:
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=RunState(instructions=None, history=[], responses=[]),
-    )
+    snapshot = _snapshot()
     payload = snapshot.to_json()
     payload["schema_version"] = 2
 
@@ -113,11 +116,17 @@ def test_agent_snapshot_decode_rejects_unsupported_version() -> None:
         AgentSnapshot.from_json(payload)
 
 
+@pytest.mark.parametrize("field", ["schema_version", "created_at"])
+def test_agent_snapshot_decode_requires_envelope_fields(field: str) -> None:
+    payload = _snapshot().to_json()
+    del payload[field]
+
+    with pytest.raises(ValueError, match=field):
+        AgentSnapshot.from_json(payload)
+
+
 def test_agent_snapshot_decode_rejects_malformed_history() -> None:
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=RunState(instructions=None, history=[], responses=[]),
-    )
+    snapshot = _snapshot()
     payload = snapshot.to_json()
     state = payload["state"]
     assert isinstance(state, dict)
@@ -134,30 +143,27 @@ def test_agent_snapshot_isolates_captured_state() -> None:
         responses=[],
     )
     state.shim_state["nested"] = ["original"]
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=state,
-    )
+    snapshot = _snapshot(state)
 
     state.history.append({"role": "user", "content": "later"})
     nested = state.shim_state["nested"]
     assert isinstance(nested, list)
     cast(list[object], nested).append("later")
 
-    assert snapshot.run_state.history == [{"role": "user", "content": "original"}]
-    assert snapshot.run_state.shim_state == {"nested": ["original"]}
+    restored = snapshot.to_run_state()
+    assert restored.history == [{"role": "user", "content": "original"}]
+    assert restored.shim_state == {"nested": ["original"]}
+
+    restored.history.append({"role": "user", "content": "restored mutation"})
+    assert snapshot.to_run_state().history == [{"role": "user", "content": "original"}]
 
 
-def test_agent_snapshot_encode_rejects_non_json_shim_state_with_field_path() -> None:
+def test_agent_snapshot_capture_rejects_non_json_shim_state_with_field_path() -> None:
     state = RunState(instructions=None, history=[], responses=[])
     state.shim_state["invalid"] = object()
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=state,
-    )
 
     with pytest.raises(ValueError, match=r"shim_state\.invalid"):
-        snapshot.to_json()
+        _snapshot(state)
 
 
 def test_agent_snapshot_golden_fixture_v1_decodes() -> None:
@@ -165,8 +171,8 @@ def test_agent_snapshot_golden_fixture_v1_decodes() -> None:
 
     snapshot = AgentSnapshot.from_json(json.loads(fixture.read_text(encoding="utf-8")))
 
-    assert snapshot.agent_id == AgentId.from_values("assistant", "main")
-    assert snapshot.run_state.history == [
+    assert snapshot.agent_id == _AGENT_ID
+    assert snapshot.to_run_state().history == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi"},
     ]
@@ -206,10 +212,7 @@ def test_default_agent_snapshot_restores_and_continues_same_address() -> None:
 
 
 def test_default_agent_snapshot_rejects_mismatched_agent_id() -> None:
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=RunState(instructions=None, history=[], responses=[]),
-    )
+    snapshot = _snapshot()
 
     with pytest.raises(ValueError, match="does not match"):
         DefaultAgent(
@@ -221,10 +224,7 @@ def test_default_agent_snapshot_rejects_mismatched_agent_id() -> None:
 
 def test_default_agent_snapshot_rejects_run_state() -> None:
     state = RunState(instructions=None, history=[], responses=[])
-    snapshot = AgentSnapshot(
-        agent_id=AgentId.from_values("assistant", "main"),
-        run_state=state,
-    )
+    snapshot = _snapshot(state)
 
     with pytest.raises(ValueError, match="either run_state or snapshot"):
         DefaultAgent(
@@ -289,7 +289,7 @@ def test_default_agent_snapshot_during_run_returns_committed_baseline() -> None:
         during = agent.snapshot()
 
         assert during is not None
-        assert during.run_state == before.run_state
+        assert during.to_run_state() == before.to_run_state()
         blocking_model.release.set()
         await running
 

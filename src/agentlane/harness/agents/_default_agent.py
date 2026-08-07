@@ -122,8 +122,11 @@ class DefaultAgent(AgentBase):
             if snapshot is not None
             else agent_id or _default_agent_id(self._descriptor)
         )
-        initial_state = snapshot.run_state if snapshot is not None else run_state
-        self._run_state = copy_run_state(initial_state)
+        self._run_state = (
+            snapshot.to_run_state()
+            if snapshot is not None
+            else copy_run_state(run_state)
+        )
 
         # The agent persists one resumable state value and one stable runtime
         # identity locally. Concurrent ``run(...)`` calls on the same agent
@@ -230,7 +233,10 @@ class DefaultAgent(AgentBase):
         """
         if self._run_state is None:
             return None
-        return AgentSnapshot(agent_id=self._agent_id, run_state=self._run_state)
+        return AgentSnapshot.capture(
+            agent_id=self._agent_id,
+            run_state=self._run_state,
+        )
 
     async def run(
         self,
