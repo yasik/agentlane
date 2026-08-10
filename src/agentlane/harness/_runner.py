@@ -250,124 +250,12 @@ class Runner:
         runner mutates it freely (incrementing ``turn_count``, appending
         responses) without risking the persisted baseline.
         """
-        resolved_hooks = coerce_runner_hooks(hooks)
-        result: RunResult | None = None
-
-        # Narrow the agent to the runner protocol once per run. All helper
-        # functions receive the narrowed value instead of re-checking.
-        runner_task = _require_runner_task(agent)
-        shim_manager = _shim_manager(agent)
-        transient_state = DefaultRunContext()
-
-        # Incremental tool-usage counters — updated after each tool batch
-        # so we never re-scan all prior responses.
-        tool_call_counts: dict[str, int] = {}
-        tool_round_trips = 0
-
-        # Hook receives the same working copy — safe because the lifecycle
-        # already isolated it before calling us.
-        await resolved_hooks.on_agent_start(agent, state)
-        if shim_manager is not None:
-            await shim_manager.on_run_start(state, transient_state)
-        try:
-            # One generation span scopes the entire agent run: every model call
-            # records onto it (accumulating usage across turns) and every tool
-            # call nests under it, regardless of which turn triggered the tool.
-            with generation_span(
-                disabled=_require_model(runner_task).tracing.is_disabled(),
-            ) as gen_span:
-                while True:
-                    state.turn_count += 1
-                    _check_turn_limit(state.turn_count, self._max_turns)
-                    prepared_turn = PreparedTurn(
-                        run_state=state,
-                        tools=_visible_tools(
-                            runner_task, tool_call_counts, tool_round_trips
-                        ),
-                        model_args=_model_args(runner_task),
-                        transient_state=transient_state,
-                    )
-                    if shim_manager is not None:
-                        await shim_manager.prepare_turn(prepared_turn)
-
-                    messages = _build_request(prepared_turn)
-                    if shim_manager is not None:
-                        messages = await shim_manager.transform_messages(
-                            prepared_turn,
-                            messages,
-                        )
-                    response = await self._run_with_retry(
-                        agent=agent,
-                        runner_task=runner_task,
-                        messages=messages,
-                        tools=prepared_turn.tools,
-                        model_args=prepared_turn.model_args,
-                        hooks=resolved_hooks,
-                        cancellation_token=cancellation_token,
-                        parent_span=gen_span,
-                    )
-
-                    state.responses.append(response)
-                    if shim_manager is not None:
-                        await shim_manager.on_model_response(prepared_turn, response)
-                    tool_calls = _extract_tool_calls(response)
-                    if tool_calls:
-                        handoff_call = _extract_handoff_call(
-                            tools=prepared_turn.tools,
-                            tool_calls=tool_calls,
-                        )
-                        if handoff_call is not None:
-                            return await self._execute_handoff(
-                                agent=agent,
-                                runner_task=runner_task,
-                                state=state,
-                                response=response,
-                                handoff_call=handoff_call,
-                                tools=prepared_turn.tools,
-                                hooks=resolved_hooks,
-                                cancellation_token=cancellation_token,
-                            )
-
-                        # Tool and sub-agent calls continue the same loop, so the
-                        # raw assistant turn is committed before execution and fed
-                        # back into the next model request together with the tool
-                        # result messages.
-                        state.history.append(response)
-                        tool_messages = await self._execute_tool_calls(
-                            agent=agent,
-                            runner_task=runner_task,
-                            tools=prepared_turn.tools,
-                            tool_calls=tool_calls,
-                            response=response,
-                            hooks=resolved_hooks,
-                            cancellation_token=cancellation_token,
-                            parent_span=gen_span,
-                            run_state=state,
-                        )
-                        state.history.extend(tool_messages)
-
-                        # Update incremental counters from this batch
-                        tool_round_trips += 1
-                        for tc in tool_calls:
-                            name = tc.function.name or ""
-                            tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
-
-                        continue
-
-                    state.history.append(response)
-                    _validate_terminal_response(response)
-                    result = RunResult(
-                        final_output=_extract_direct_answer(response),
-                        responses=list(state.responses),
-                        turn_count=state.turn_count,
-                        run_state=copy_run_state(state),
-                    )
-                    return result
-        finally:
-            if shim_manager is not None:
-                await shim_manager.on_run_end(result, transient_state)
-            # Always fire the end hook — result is None if the loop raised.
-            await resolved_hooks.on_agent_end(agent, result)
+        return await self._run_loop(
+            agent=agent,
+            state=state,
+            hooks=coerce_runner_hooks(hooks),
+            cancellation_token=cancellation_token,
+        )
 
     def run_stream(
         self,
@@ -448,7 +336,7 @@ class Runner:
     ) -> None:
         """Drive one streamed run and resolve the provided stream handle."""
         try:
-            result = await self._run_stream_internal(
+            result = await self._run_loop(
                 agent=agent,
                 state=state,
                 emit=stream.emit,
@@ -475,7 +363,7 @@ class Runner:
     ) -> None:
         """Drive one high-level event run and resolve the stream handle."""
         try:
-            result = await self._run_stream_internal(
+            result = await self._run_loop(
                 agent=agent,
                 state=state,
                 emit=event_emitter.model_stream_event,
@@ -491,33 +379,48 @@ class Runner:
         else:
             stream.finish(result)
 
-    async def _run_stream_internal(
+    async def _run_loop(
         self,
         *,
         agent: Task,
         state: RunState,
-        emit: Callable[[ModelStreamEvent], None],
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None = None,
+        emit: Callable[[ModelStreamEvent], None] | None = None,
         run_events: RunEventEmitter | None = None,
     ) -> RunResult:
-        """Execute the generic harness loop while forwarding model events."""
+        """Execute the generic harness loop shared by all run entry points.
+
+        ``emit`` selects the model-call mode: when ``None`` each turn is a
+        terminal call under the configured retry policy; when provided each
+        turn streams live model events through it (and never retries — see
+        ``_stream_model_call``). ``run_events`` optionally adds high-level
+        run-event snapshots at state boundaries.
+        """
         result: RunResult | None = None
+
+        # Narrow the agent to the runner protocol once per run. All helper
+        # functions receive the narrowed value instead of re-checking.
         runner_task = _require_runner_task(agent)
         shim_manager = _shim_manager(agent)
         transient_state = DefaultRunContext()
+
+        # Incremental tool-usage counters — updated after each tool batch
+        # so we never re-scan all prior responses.
         tool_call_counts: dict[str, int] = {}
         tool_round_trips = 0
 
+        # Hook receives the same working copy — safe because the lifecycle
+        # already isolated it before calling us.
         await hooks.on_agent_start(agent, state)
         if shim_manager is not None:
             await shim_manager.on_run_start(state, transient_state)
         if run_events is not None:
             run_events.state_snapshot(RunStateSnapshotBoundary.RUN_START, state)
         try:
-            # See the non-stream loop above. One generation span scopes the
-            # whole run so usage accumulates across turns and tools nest under
-            # one parent regardless of which turn triggered them.
+            # One generation span scopes the entire agent run: every model call
+            # records onto it (accumulating usage across turns) and every tool
+            # call nests under it, regardless of which turn triggered the tool.
             with generation_span(
                 disabled=_require_model(runner_task).tracing.is_disabled(),
             ) as gen_span:
@@ -549,17 +452,29 @@ class Runner:
                             prepared_turn,
                             messages,
                         )
-                    response = await self._stream_model_call(
-                        agent=agent,
-                        runner_task=runner_task,
-                        messages=messages,
-                        tools=prepared_turn.tools,
-                        model_args=prepared_turn.model_args,
-                        emit=emit,
-                        hooks=hooks,
-                        cancellation_token=cancellation_token,
-                        parent_span=gen_span,
-                    )
+                    if emit is None:
+                        response = await self._run_with_retry(
+                            agent=agent,
+                            runner_task=runner_task,
+                            messages=messages,
+                            tools=prepared_turn.tools,
+                            model_args=prepared_turn.model_args,
+                            hooks=hooks,
+                            cancellation_token=cancellation_token,
+                            parent_span=gen_span,
+                        )
+                    else:
+                        response = await self._stream_model_call(
+                            agent=agent,
+                            runner_task=runner_task,
+                            messages=messages,
+                            tools=prepared_turn.tools,
+                            model_args=prepared_turn.model_args,
+                            emit=emit,
+                            hooks=hooks,
+                            cancellation_token=cancellation_token,
+                            parent_span=gen_span,
+                        )
 
                     state.responses.append(response)
                     if shim_manager is not None:
@@ -571,19 +486,23 @@ class Runner:
                             tool_calls=tool_calls,
                         )
                         if handoff_call is not None:
-                            return await self._execute_handoff_stream(
+                            return await self._execute_handoff(
                                 agent=agent,
                                 runner_task=runner_task,
                                 state=state,
                                 response=response,
                                 handoff_call=handoff_call,
                                 tools=prepared_turn.tools,
-                                emit=emit,
                                 hooks=hooks,
                                 cancellation_token=cancellation_token,
+                                emit=emit,
                                 run_events=run_events,
                             )
 
+                        # Tool and sub-agent calls continue the same loop, so the
+                        # raw assistant turn is committed before execution and fed
+                        # back into the next model request together with the tool
+                        # result messages.
                         state.history.append(response)
                         tool_messages = await self._execute_tool_calls(
                             agent=agent,
@@ -939,83 +858,15 @@ class Runner:
         tools: Tools | None,
         hooks: RunnerHooks,
         cancellation_token: CancellationToken | None,
-    ) -> RunResult:
-        """Transfer control to another agent and return its final result."""
-        if tools is None:
-            raise _model_behavior_error(
-                "Runner received a handoff call, but the agent exposes no tools.",
-                raw_response=response,
-            )
-
-        tool_definition = _require_handoff_tool_definition(
-            tools=tools,
-            tool_call=handoff_call,
-            response=response,
-        )
-        parsed_input = _parse_delegated_task_input(
-            tool_call=handoff_call,
-            args_model=tool_definition.args_type(),
-        )
-        await hooks.on_tool_call_start(agent, handoff_call)
-
-        transferred_state = replace(
-            state,
-            history=list(state.history),
-            responses=list(state.responses),
-        )
-        # Handoff is a control-transfer primitive. The downstream agent should
-        # see why control moved, so we preserve the parent assistant tool-call
-        # turn, add a synthetic tool acknowledgement, and then add the optional
-        # user-side delegation message.
-        transferred_state.history.append(response)
-        transferred_state.history.append(
-            _tool_result_message(
-                tool_call=handoff_call,
-                tool_name=tool_definition.name,
-                content=default_handoff_tool_result(tool_definition.name),
-            )
-        )
-        transferred_state.history.append(
-            parsed_input.task or default_handoff_task_message()
-        )
-
-        handoff_descriptor = _resolved_handoff_descriptor(
-            runner_task=runner_task,
-            tool_definition=tool_definition,
-        )
-        transferred_state.instructions = copy_instructions(
-            handoff_descriptor.instructions
-        )
-        handoff_result = await self._deliver_handoff(
-            agent=agent,
-            runner_task=runner_task,
-            tool_name=tool_definition.name,
-            descriptor=handoff_descriptor,
-            transferred_state=transferred_state,
-            cancellation_token=cancellation_token,
-        )
-
-        if handoff_result.run_state is not None:
-            _overwrite_run_state(state, handoff_result.run_state)
-
-        await hooks.on_tool_call_end(agent, handoff_call, handoff_result.final_output)
-        return handoff_result
-
-    async def _execute_handoff_stream(
-        self,
-        *,
-        agent: Task,
-        runner_task: RunnerTask,
-        state: RunState,
-        response: ModelResponse,
-        handoff_call: ToolCall,
-        tools: Tools | None,
-        emit: Callable[[ModelStreamEvent], None],
-        hooks: RunnerHooks,
-        cancellation_token: CancellationToken | None,
+        emit: Callable[[ModelStreamEvent], None] | None = None,
         run_events: RunEventEmitter | None = None,
     ) -> RunResult:
-        """Transfer control to another agent and continue streaming there."""
+        """Transfer control to another agent and return its final result.
+
+        Mirrors the run-loop modes: with ``emit`` the child run streams its
+        model events through the same callback; without it the child runs to
+        completion via runtime messaging.
+        """
         if tools is None:
             raise _model_behavior_error(
                 "Runner received a handoff call, but the agent exposes no tools.",
@@ -1048,6 +899,10 @@ class Runner:
             history=list(state.history),
             responses=list(state.responses),
         )
+        # Handoff is a control-transfer primitive. The downstream agent should
+        # see why control moved, so we preserve the parent assistant tool-call
+        # turn, add a synthetic tool acknowledgement, and then add the optional
+        # user-side delegation message.
         transferred_state.history.append(response)
         transferred_state.history.append(
             _tool_result_message(
@@ -1063,15 +918,25 @@ class Runner:
         transferred_state.instructions = copy_instructions(
             handoff_descriptor.instructions
         )
-        handoff_result = await self._deliver_handoff_stream(
-            agent=agent,
-            runner_task=runner_task,
-            tool_name=tool_definition.name,
-            descriptor=handoff_descriptor,
-            transferred_state=transferred_state,
-            emit=emit,
-            cancellation_token=cancellation_token,
-        )
+        if emit is None:
+            handoff_result = await self._deliver_handoff(
+                agent=agent,
+                runner_task=runner_task,
+                tool_name=tool_definition.name,
+                descriptor=handoff_descriptor,
+                transferred_state=transferred_state,
+                cancellation_token=cancellation_token,
+            )
+        else:
+            handoff_result = await self._deliver_handoff_stream(
+                agent=agent,
+                runner_task=runner_task,
+                tool_name=tool_definition.name,
+                descriptor=handoff_descriptor,
+                transferred_state=transferred_state,
+                emit=emit,
+                cancellation_token=cancellation_token,
+            )
 
         if handoff_result.run_state is not None:
             _overwrite_run_state(state, handoff_result.run_state)
