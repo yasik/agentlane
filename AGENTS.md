@@ -8,6 +8,10 @@ You are not just writing code. You are shaping the future of this project. The p
 
 Fight entropy. Leave the codebase better than you found it.
 
+## Language
+
+Always talk and write documentation in ASD-STE100 Simplified Technical English.
+
 ## Workflow Orchestration
 
 ### 1. Plan Mode Default
