@@ -28,6 +28,7 @@ from .._hooks import RunnerHooks
 from .._lifecycle import AgentDescriptor
 from .._run import RunInput, RunResult, RunState, copy_run_state
 from .._runner import Runner
+from .._snapshot import AgentSnapshot
 from .._stream import RunStream
 from .._stream_base import close_stream_callback
 from ._base import AgentBase
@@ -72,6 +73,7 @@ class DefaultAgent(AgentBase):
         hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         agent_id: AgentId | None = None,
         run_state: RunState | None = None,
+        snapshot: AgentSnapshot | None = None,
     ) -> None:
         """Initialize one stateful default agent.
 
@@ -92,7 +94,18 @@ class DefaultAgent(AgentBase):
                 low-level agent lifecycle callbacks.
             agent_id: Optional stable runtime id override.
             run_state: Optional initial resumable state.
+            snapshot: Optional durable snapshot to restore. This cannot be
+                combined with `run_state`; an explicit `agent_id` must match
+                the snapshot address.
         """
+        if run_state is not None and snapshot is not None:
+            raise ValueError("Pass either run_state or snapshot, not both.")
+        if snapshot is not None and agent_id not in (None, snapshot.agent_id):
+            raise ValueError(
+                f"Agent id {agent_id} does not match snapshot id "
+                f"{snapshot.agent_id}."
+            )
+
         self._descriptor = with_subagents(
             _resolve_descriptor(
                 descriptor=descriptor,
@@ -104,8 +117,16 @@ class DefaultAgent(AgentBase):
         self._runtime = runtime
         self._runner = runner
         self._hooks = hooks
-        self._agent_id = agent_id or _default_agent_id(self._descriptor)
-        self._run_state = copy_run_state(run_state)
+        self._agent_id = (
+            snapshot.agent_id
+            if snapshot is not None
+            else agent_id or _default_agent_id(self._descriptor)
+        )
+        self._run_state = (
+            snapshot.to_run_state()
+            if snapshot is not None
+            else copy_run_state(run_state)
+        )
 
         # The agent persists one resumable state value and one stable runtime
         # identity locally. Concurrent ``run(...)`` calls on the same agent
@@ -202,6 +223,20 @@ class DefaultAgent(AgentBase):
     def run_state(self) -> RunState | None:
         """Return a defensive copy of the latest persisted run state."""
         return copy_run_state(self._run_state)
+
+    def snapshot(self) -> AgentSnapshot | None:
+        """Return the latest committed state as a portable snapshot.
+
+        An agent with no completed run has no state to snapshot. While a run is
+        active, this returns the prior committed baseline rather than the
+        private working state.
+        """
+        if self._run_state is None:
+            return None
+        return AgentSnapshot.capture(
+            agent_id=self._agent_id,
+            run_state=self._run_state,
+        )
 
     async def run(
         self,

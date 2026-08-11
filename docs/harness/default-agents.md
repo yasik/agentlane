@@ -135,6 +135,7 @@ model resolution, tool policy, and sub-agent wiring.
 5. live streaming through `run_stream(...)`
 6. high-level lifecycle streaming through `run_events(...)`
 7. binding and reuse of any configured harness shims
+8. portable committed-state snapshots through `snapshot()`
 
 It delegates the real orchestration to the existing runtime-facing harness
 stack:
@@ -210,6 +211,47 @@ high-level run events instead of only model stream events.
 
 If the descriptor declares shims, `DefaultAgent` binds them once for that
 concrete agent instance and reuses those bound sessions across repeated runs.
+
+## Portable Snapshots
+
+`DefaultAgent.snapshot()` returns an `AgentSnapshot` for the latest completed
+run. It returns `None` before the first run completes. A snapshot requested
+while a run is active contains the previous committed state.
+
+```python
+from agentlane.harness import AgentDescriptor, AgentSnapshot
+from agentlane.harness.agents import DefaultAgent
+from agentlane.messaging import AgentId
+
+agent_id = AgentId.from_values("portfolio-risk", "main")
+agent = DefaultAgent(
+    descriptor=AgentDescriptor(name="Portfolio Risk", model=model),
+    agent_id=agent_id,
+)
+await agent.run("Review semiconductor exposure.")
+
+snapshot = agent.snapshot()
+if snapshot is None:
+    raise RuntimeError("the agent has no completed run")
+
+payload = snapshot.to_json()
+restored_snapshot = AgentSnapshot.from_json(payload)
+restored = DefaultAgent(
+    descriptor=AgentDescriptor(name="Portfolio Risk", model=model),
+    snapshot=restored_snapshot,
+)
+result = await restored.run("Now summarize the main risk.")
+```
+
+The versioned JSON value contains the stable `AgentId`, creation time, rendered
+instructions, canonical model-ready history, raw model responses, JSON-safe
+shim state, and turn count. Prompt templates are stored as rendered content.
+Unsupported schema versions and non-JSON shim values raise errors.
+
+The restoring process supplies the live descriptor, model, tools, and shims.
+The snapshot stores committed run state and logical identity. Storage remains
+an application choice; `to_json()` returns a value accepted by the standard
+JSON encoder.
 
 ## Streaming Semantics
 
