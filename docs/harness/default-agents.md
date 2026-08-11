@@ -136,6 +136,7 @@ model resolution, tool policy, and sub-agent wiring.
 6. high-level lifecycle streaming through `run_events(...)`
 7. binding and reuse of any configured harness shims
 8. portable committed-state snapshots through `snapshot()`
+9. atomic local persistence through `state_path=` or a custom `StateStore`
 
 It delegates the real orchestration to the existing runtime-facing harness
 stack:
@@ -212,6 +213,75 @@ high-level run events instead of only model stream events.
 If the descriptor declares shims, `DefaultAgent` binds them once for that
 concrete agent instance and reuses those bound sessions across repeated runs.
 
+## Persistent State Path
+
+Pass `state_path=` to make a `DefaultAgent` survive process restarts without
+writing persistence glue:
+
+```python
+from agentlane.harness import AgentDescriptor
+from agentlane.harness.agents import DefaultAgent
+
+agent = DefaultAgent(
+    descriptor=AgentDescriptor(name="Portfolio Risk", model=model),
+    state_path=".agentlane/portfolio-risk.json",
+)
+result = await agent.run("Review semiconductor exposure.")
+```
+
+If the file exists, construction restores its agent address, instructions,
+conversation, responses, shim state, turn count, and revision. The new prompt
+continues that state. After a successful primary run, the next committed
+revision atomically replaces the file. A missing file is created after the
+first successful run. File read, JSON parsing, and snapshot validation errors
+propagate to the caller.
+
+`run(...)`, `run_stream(...)`, and `run_events(...)` all use the same persistence
+path. `fork(...)` remains isolated and does not overwrite the primary state.
+`reset()` removes the persisted file. It raises `RuntimeError` if a primary run
+is active.
+
+The local file store assumes one live writer per agent. Atomic replacement
+prevents torn JSON files. On POSIX systems, the store also syncs the file and
+its parent directory. Revision checks reject stale sequential saves.
+Applications that allow concurrent writers must coordinate them outside the
+harness.
+
+`StateStore` is the public abstract base class for custom storage. Implement
+`load()`, `save()`, and `delete()`, then pass the store to `DefaultAgent`:
+
+```python
+from agentlane.harness import AgentSnapshot, StateStore
+
+
+class DatabaseStateStore(StateStore):
+    def load(self) -> AgentSnapshot | None:
+        ...
+
+    def save(
+        self,
+        snapshot: AgentSnapshot,
+        *,
+        expected_revision: int | None,
+    ) -> None:
+        ...
+
+    def delete(self, *, expected_revision: int | None) -> None:
+        ...
+
+
+agent = DefaultAgent(
+    descriptor=AgentDescriptor(name="Portfolio Risk", model=model),
+    state_store=database_state_store,
+)
+```
+
+Each store instance manages one agent snapshot. The `save()` and `delete()`
+methods must check `expected_revision`. When `expected_revision` is not `None`,
+`save()` must also require a greater snapshot revision. These checks reject
+stale or non-increasing state changes. Use `state_path=` when the built-in
+`JsonFileStateStore` is sufficient.
+
 ## Portable Snapshots
 
 `DefaultAgent.snapshot()` returns an `AgentSnapshot` for the latest completed
@@ -243,15 +313,17 @@ restored = DefaultAgent(
 result = await restored.run("Now summarize the main risk.")
 ```
 
-The versioned JSON value contains the stable `AgentId`, creation time, rendered
-instructions, canonical model-ready history, raw model responses, JSON-safe
-shim state, and turn count. Prompt templates are stored as rendered content.
-Unsupported schema versions and non-JSON shim values raise errors.
+The versioned JSON value contains the stable `AgentId`, revision, creation
+time, rendered instructions, canonical model-ready history, raw model
+responses, JSON-safe shim state, and turn count. Prompt templates are stored
+as rendered content. Unsupported schema versions and non-JSON shim values
+raise errors.
 
 The restoring process supplies the live descriptor, model, tools, and shims.
-The snapshot stores committed run state and logical identity. Storage remains
-an application choice; `to_json()` returns a value accepted by the standard
-JSON encoder.
+The snapshot stores committed run state and logical identity. Use
+`JsonFileStateStore` for the local default, implement `StateStore` for another
+storage system, or persist the value returned by `to_json()` in application-owned
+storage.
 
 ## Streaming Semantics
 
@@ -348,7 +420,9 @@ After that call:
 
 That path is an explicit resume request. The agent does not combine the passed
 `RunState` with its already saved conversation state. It resumes from the
-provided state only, then stores the returned updated state afterward.
+provided state only, then stores the returned updated state afterward. When a
+state store is configured, the stored revision remains the durable revision
+baseline for that commit.
 
 `DefaultAgent.fork(...)` also accepts `RunState`. That creates a branch from
 the provided state and still does not write the branch result back into the
@@ -359,7 +433,8 @@ agent's stored primary state.
 `DefaultAgent.reset()` clears the agent's saved `RunState`.
 
 Use it when the same agent instance should start a new conversation instead
-of continuing the previous one.
+of continuing the previous one. It raises `RuntimeError` while a primary run is
+active.
 
 ## Boundary
 

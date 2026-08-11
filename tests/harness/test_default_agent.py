@@ -1,10 +1,12 @@
 import asyncio
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from agentlane.harness import (
     Agent,
     AgentDescriptor,
+    JsonFileStateStore,
     Runner,
     RunnerHooks,
     RunResult,
@@ -445,17 +447,68 @@ def test_default_agent_run_stream_reuses_persisted_state() -> None:
     asyncio.run(scenario())
 
 
-def test_default_agent_run_stream_close_cancels_without_committing_state() -> None:
+def test_default_agent_stream_entry_points_persist_state(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        state_path = tmp_path / "assistant.json"
+        stream_model = _StreamingSequenceModel([make_assistant_response("first reply")])
+        first = DefaultAgent(
+            descriptor=AgentDescriptor(name="Support", model=stream_model),
+            state_path=state_path,
+        )
+
+        model_stream = await first.run_stream("first question")
+        await _collect_run_stream(model_stream)
+        first_result = await model_stream.result()
+
+        event_model = _SequenceModel([make_assistant_response("second reply")])
+        second = DefaultAgent(
+            descriptor=AgentDescriptor(name="Support", model=event_model),
+            state_path=state_path,
+        )
+        event_stream = await second.run_events("second question")
+        async for _ in event_stream:
+            pass
+        second_result = await event_stream.result()
+
+        stored = JsonFileStateStore(state_path).load()
+        assert first_result.run_state is not None
+        assert first_result.run_state.revision == 1
+        assert second_result.run_state is not None
+        assert second_result.run_state.revision == 2
+        assert stored is not None
+        assert stored.revision == 2
+        assert event_model.calls == [
+            [
+                {"role": "user", "content": "first question"},
+                {"role": "assistant", "content": "first reply"},
+                {"role": "user", "content": "second question"},
+            ]
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_default_agent_run_stream_close_cancels_without_committing_state(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         model = _StreamingSequenceModel([], wait_for_cancel=True)
+        state_path = tmp_path / "assistant.json"
         agent = DefaultAgent(
             descriptor=AgentDescriptor(
                 name="Support",
                 model=model,
-            )
+            ),
+            state_path=state_path,
         )
 
         stream = await agent.run_stream("hello")
+        try:
+            agent.reset()
+        except RuntimeError as exc:
+            assert "primary run is active" in str(exc)
+        else:
+            raise AssertionError("Expected reset to reject the scheduled stream.")
         await asyncio.sleep(0)
         await stream.aclose()
 
@@ -467,6 +520,7 @@ def test_default_agent_run_stream_close_cancels_without_committing_state() -> No
             raise AssertionError("Expected cancelled stream result.")
 
         assert agent.run_state is None
+        assert not state_path.exists()
 
     asyncio.run(scenario())
 
