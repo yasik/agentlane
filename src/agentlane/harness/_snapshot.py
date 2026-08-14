@@ -55,6 +55,9 @@ class AgentSnapshot(BaseModel):
     agent_id: AgentId
     """Stable logical address that owns the state."""
 
+    revision: NonNegativeInt = 0
+    """Committed state generation used to reject stale saves."""
+
     created_at: AwareDatetime
     """UTC timestamp for when the snapshot value was created."""
 
@@ -90,6 +93,7 @@ class AgentSnapshot(BaseModel):
         return cls(
             schema_version=1,
             agent_id=agent_id,
+            revision=run_state.revision,
             created_at=datetime.now(UTC),
             state=_RunStatePayload.model_validate(
                 {
@@ -111,6 +115,7 @@ class AgentSnapshot(BaseModel):
             responses=state.responses,
             shim_state=ShimState(context=state.shim_state),
             turn_count=state.turn_count,
+            revision=self.revision,
         )
 
     def to_json(self) -> dict[str, object]:

@@ -59,6 +59,7 @@ def test_agent_snapshot_round_trip_preserves_canonical_state() -> None:
         history=["First question", response, user_prompt],
         responses=[response],
         turn_count=2,
+        revision=4,
     )
     state.shim_state["skills:active-skill-names"] = ["triage"]
     snapshot = _snapshot(state)
@@ -67,6 +68,7 @@ def test_agent_snapshot_round_trip_preserves_canonical_state() -> None:
     decoded = AgentSnapshot.from_json(json.loads(json.dumps(encoded)))
 
     assert decoded.agent_id == snapshot.agent_id
+    assert decoded.revision == 4
     restored = decoded.to_run_state()
     assert restored.instructions == "You support ops."
     assert restored.history == [
@@ -77,6 +79,7 @@ def test_agent_snapshot_round_trip_preserves_canonical_state() -> None:
     assert restored.responses == [response]
     assert restored.shim_state == {"skills:active-skill-names": ["triage"]}
     assert restored.turn_count == 2
+    assert restored.revision == 4
 
 
 def test_agent_snapshot_renders_structured_content_for_model_reuse() -> None:
@@ -105,6 +108,16 @@ def test_agent_snapshot_decode_tolerates_unknown_fields() -> None:
 
     assert decoded.agent_id == snapshot.agent_id
     assert decoded.to_run_state() == snapshot.to_run_state()
+
+
+def test_agent_snapshot_decode_defaults_missing_revision() -> None:
+    payload = _snapshot().to_json()
+    del payload["revision"]
+
+    decoded = AgentSnapshot.from_json(payload)
+
+    assert decoded.revision == 0
+    assert decoded.to_run_state().revision == 0
 
 
 def test_agent_snapshot_decode_rejects_unsupported_version() -> None:
@@ -172,6 +185,7 @@ def test_agent_snapshot_golden_fixture_v1_decodes() -> None:
     snapshot = AgentSnapshot.from_json(json.loads(fixture.read_text(encoding="utf-8")))
 
     assert snapshot.agent_id == _AGENT_ID
+    assert snapshot.revision == 0
     assert snapshot.to_run_state().history == [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi"},

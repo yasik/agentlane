@@ -25,10 +25,12 @@ from .._agent import Agent as RuntimeAgent
 from .._cancellation import cancel_task_callback, cancellation_relay_task
 from .._events import RunEventStream
 from .._hooks import RunnerHooks
+from .._json_file_state_store import JsonFileStateStore
 from .._lifecycle import AgentDescriptor
 from .._run import RunInput, RunResult, RunState, copy_run_state
 from .._runner import Runner
 from .._snapshot import AgentSnapshot
+from .._state_store import StateStore
 from .._stream import RunStream
 from .._stream_base import close_stream_callback
 from ._base import AgentBase
@@ -74,6 +76,8 @@ class DefaultAgent(AgentBase):
         agent_id: AgentId | None = None,
         run_state: RunState | None = None,
         snapshot: AgentSnapshot | None = None,
+        state_path: str | Path | None = None,
+        state_store: StateStore | None = None,
     ) -> None:
         """Initialize one stateful default agent.
 
@@ -97,13 +101,36 @@ class DefaultAgent(AgentBase):
             snapshot: Optional durable snapshot to restore. This cannot be
                 combined with `run_state`; an explicit `agent_id` must match
                 the snapshot address.
+            state_path: Optional JSON file that is loaded at construction and
+                atomically updated after each successful primary run. This
+                cannot be combined with `run_state` or `snapshot`.
+            state_store: Optional custom snapshot store. This cannot be
+                combined with `state_path`, `run_state`, or `snapshot`.
         """
         if run_state is not None and snapshot is not None:
             raise ValueError("Pass either run_state or snapshot, not both.")
-        if snapshot is not None and agent_id not in (None, snapshot.agent_id):
+        if state_path is not None and state_store is not None:
+            raise ValueError("Pass either state_path or state_store, not both.")
+        if (state_path is not None or state_store is not None) and (
+            run_state is not None or snapshot is not None
+        ):
+            raise ValueError(
+                "Pass state_path or state_store without run_state or snapshot."
+            )
+
+        self._state_store = (
+            JsonFileStateStore(state_path) if state_path is not None else state_store
+        )
+        restored_snapshot = (
+            self._state_store.load() if self._state_store is not None else snapshot
+        )
+        if restored_snapshot is not None and agent_id not in (
+            None,
+            restored_snapshot.agent_id,
+        ):
             raise ValueError(
                 f"Agent id {agent_id} does not match snapshot id "
-                f"{snapshot.agent_id}."
+                f"{restored_snapshot.agent_id}."
             )
 
         self._descriptor = with_subagents(
@@ -118,13 +145,13 @@ class DefaultAgent(AgentBase):
         self._runner = runner
         self._hooks = hooks
         self._agent_id = (
-            snapshot.agent_id
-            if snapshot is not None
+            restored_snapshot.agent_id
+            if restored_snapshot is not None
             else agent_id or _default_agent_id(self._descriptor)
         )
         self._run_state = (
-            snapshot.to_run_state()
-            if snapshot is not None
+            restored_snapshot.to_run_state()
+            if restored_snapshot is not None
             else copy_run_state(run_state)
         )
 
@@ -139,6 +166,7 @@ class DefaultAgent(AgentBase):
         #
         # The full-run lock is intentional for one stateful agent instance.
         self._run_lock = asyncio.Lock()
+        self._primary_stream_tasks: set[asyncio.Task[None]] = set()
 
     @classmethod
     def from_markdown(
@@ -154,6 +182,8 @@ class DefaultAgent(AgentBase):
         hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         agent_id: AgentId | None = None,
         run_state: RunState | None = None,
+        state_path: str | Path | None = None,
+        state_store: StateStore | None = None,
     ) -> Self:
         """Build a runnable agent from a Claude-Code-style markdown file.
 
@@ -175,6 +205,9 @@ class DefaultAgent(AgentBase):
             hooks: Optional runner hook or ordered hook list.
             agent_id: Optional stable runtime id override.
             run_state: Optional initial resumable state.
+            state_path: Optional JSON file loaded at construction and updated
+                after each successful primary run.
+            state_store: Optional custom snapshot store.
 
         Returns:
             DefaultAgent: A runnable agent bound to the parsed descriptor.
@@ -207,6 +240,8 @@ class DefaultAgent(AgentBase):
             hooks=hooks,
             agent_id=agent_id,
             run_state=run_state,
+            state_path=state_path,
+            state_store=state_store,
         )
 
     @property
@@ -257,14 +292,14 @@ class DefaultAgent(AgentBase):
         """
         async with self._run_lock:
             effective_runner = self._resolved_runner()
-            initial_state = None if isinstance(input, RunState) else self._run_state
+            run_input, initial_state = self._prepare_primary_run(input)
 
             if self._runtime is None:
                 async with single_threaded_runtime() as runtime:
                     result = await self._run_once(
                         runtime=runtime,
                         runner=effective_runner,
-                        input=input,
+                        input=run_input,
                         initial_state=initial_state,
                         agent_id=self._agent_id,
                         cancellation_token=cancellation_token,
@@ -274,13 +309,13 @@ class DefaultAgent(AgentBase):
                     result = await self._run_once(
                         runtime=runtime,
                         runner=effective_runner,
-                        input=input,
+                        input=run_input,
                         initial_state=initial_state,
                         agent_id=self._agent_id,
                         cancellation_token=cancellation_token,
                     )
 
-            self._run_state = copy_run_state(result.run_state)
+            self._commit_run_state(result.run_state)
             return result
 
     async def fork(
@@ -340,10 +375,21 @@ class DefaultAgent(AgentBase):
     def reset(self) -> None:
         """Clear the stored primary-line run state for future runs.
 
-        This resets only the agent's persisted ``RunState`` baseline. It does
-        not replace the resolved descriptor, stable ``agent_id``, configured
+        When a state store is configured, this also removes its snapshot. It
+        does not replace the resolved descriptor, stable ``agent_id``, configured
         runtime, runner, or hooks.
+
+        Raises:
+            RuntimeError: If a primary run is active.
         """
+        if self._run_lock.locked() or self._primary_stream_tasks:
+            raise RuntimeError("Cannot reset while a primary run is active.")
+
+        if self._state_store is not None:
+            expected_revision = (
+                self._run_state.revision if self._run_state is not None else None
+            )
+            self._state_store.delete(expected_revision=expected_revision)
         self._run_state = None
 
     async def run_stream(
@@ -369,6 +415,8 @@ class DefaultAgent(AgentBase):
                 cancellation_token=stream_token,
             )
         )
+        self._primary_stream_tasks.add(stream_task)
+        stream_task.add_done_callback(self._primary_stream_tasks.discard)
         stream.add_cleanup(cancel_task_callback(stream_task))
         return stream
 
@@ -397,6 +445,8 @@ class DefaultAgent(AgentBase):
                 cancellation_token=stream_token,
             )
         )
+        self._primary_stream_tasks.add(stream_task)
+        stream_task.add_done_callback(self._primary_stream_tasks.discard)
         stream.add_cleanup(cancel_task_callback(stream_task))
         return stream
 
@@ -454,14 +504,14 @@ class DefaultAgent(AgentBase):
         try:
             async with self._run_lock:
                 effective_runner = self._resolved_runner()
-                initial_state = None if isinstance(input, RunState) else self._run_state
+                run_input, initial_state = self._prepare_primary_run(input)
 
                 if self._runtime is None:
                     async with single_threaded_runtime() as runtime:
                         result = await self._run_stream_once(
                             runtime=runtime,
                             runner=effective_runner,
-                            input=input,
+                            input=run_input,
                             initial_state=initial_state,
                             agent_id=self._agent_id,
                             stream=stream,
@@ -472,14 +522,14 @@ class DefaultAgent(AgentBase):
                         result = await self._run_stream_once(
                             runtime=runtime,
                             runner=effective_runner,
-                            input=input,
+                            input=run_input,
                             initial_state=initial_state,
                             agent_id=self._agent_id,
                             stream=stream,
                             cancellation_token=cancellation_token,
                         )
 
-                self._run_state = copy_run_state(result.run_state)
+                self._commit_run_state(result.run_state)
         except Exception as exc:
             stream.fail(exc)
         except BaseException as exc:
@@ -500,14 +550,14 @@ class DefaultAgent(AgentBase):
         try:
             async with self._run_lock:
                 effective_runner = self._resolved_runner()
-                initial_state = None if isinstance(input, RunState) else self._run_state
+                run_input, initial_state = self._prepare_primary_run(input)
 
                 if self._runtime is None:
                     async with single_threaded_runtime() as runtime:
                         result = await self._run_events_once(
                             runtime=runtime,
                             runner=effective_runner,
-                            input=input,
+                            input=run_input,
                             initial_state=initial_state,
                             agent_id=self._agent_id,
                             stream=stream,
@@ -519,7 +569,7 @@ class DefaultAgent(AgentBase):
                         result = await self._run_events_once(
                             runtime=runtime,
                             runner=effective_runner,
-                            input=input,
+                            input=run_input,
                             initial_state=initial_state,
                             agent_id=self._agent_id,
                             stream=stream,
@@ -527,7 +577,7 @@ class DefaultAgent(AgentBase):
                             cancellation_token=cancellation_token,
                         )
 
-                self._run_state = copy_run_state(result.run_state)
+                self._commit_run_state(result.run_state)
         except Exception as exc:
             stream.fail(exc)
         except BaseException as exc:
@@ -579,6 +629,42 @@ class DefaultAgent(AgentBase):
             turn_count=result.turn_count,
             run_state=runtime_agent.run_state,
         )
+
+    def _commit_run_state(self, run_state: RunState | None) -> None:
+        """Keep and, when configured, durably save one committed state."""
+        committed_state = copy_run_state(run_state)
+        if self._state_store is None or committed_state is None:
+            self._run_state = committed_state
+            return
+
+        snapshot = AgentSnapshot.capture(
+            agent_id=self._agent_id,
+            run_state=committed_state,
+        )
+        expected_revision = (
+            self._run_state.revision if self._run_state is not None else None
+        )
+        self._state_store.save(
+            snapshot,
+            expected_revision=expected_revision,
+        )
+        self._run_state = committed_state
+
+    def _prepare_primary_run(
+        self,
+        run_input: RunInput,
+    ) -> tuple[RunInput, RunState | None]:
+        """Prepare one primary input against the durable revision baseline."""
+        if not isinstance(run_input, RunState):
+            return run_input, self._run_state
+        if self._state_store is None or self._run_state is None:
+            return run_input, None
+
+        resumed_state = copy_run_state(run_input)
+        if resumed_state is None:
+            raise AssertionError("RunState copy unexpectedly returned None.")
+        resumed_state.revision = self._run_state.revision
+        return resumed_state, None
 
     async def _run_events_once(
         self,

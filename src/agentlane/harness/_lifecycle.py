@@ -643,7 +643,10 @@ class AgentLifecycle:
                     # may complete through a delegated child agent, so the
                     # runner can return a different final run state than the
                     # local working copy that started the turn.
-                    self._run_state = copy_run_state(result.run_state) or working_state
+                    committed_state = copy_run_state(result.run_state) or working_state
+                    committed_state.revision = working_state.revision + 1
+                    self._run_state = committed_state
+                    result.run_state = copy_run_state(committed_state)
                     _resolve_queued_input(active_input, result)
                 finally:
                     active_input = None

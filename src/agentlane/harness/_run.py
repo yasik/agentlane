@@ -110,6 +110,9 @@ class RunState:
     "completed-turns" reading.
     """
 
+    revision: int = 0
+    """Committed state generation, incremented after each successful run."""
+
 
 type RunInput = str | list[RunHistoryItem] | RunState
 """Public input accepted by the default harness agent.
@@ -153,6 +156,7 @@ def copy_run_state(run_state: RunState | None) -> RunState | None:
         responses=list(run_state.responses),
         shim_state=copy_shim_state(run_state.shim_state),
         turn_count=run_state.turn_count,
+        revision=run_state.revision,
     )
 
 

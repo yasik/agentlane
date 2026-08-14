@@ -261,6 +261,11 @@ def test_agent_continues_existing_run_after_idle() -> None:
         assert agent.run_state is not None
         assert agent.run_state.history[0] == "first"
         assert agent.run_state.turn_count == 2
+        assert first_result.run_state is not None
+        assert first_result.run_state.revision == 1
+        assert second_result.run_state is not None
+        assert second_result.run_state.revision == 2
+        assert agent.run_state.revision == 2
         assert len(agent.run_state.responses) == 2
 
     asyncio.run(scenario())

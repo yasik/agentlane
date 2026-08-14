@@ -23,6 +23,7 @@ from ._events import (
     RunToolStartEvent,
 )
 from ._hooks import RunnerHooks
+from ._json_file_state_store import JsonFileStateStore
 from ._lifecycle import AgentDescriptor, DefaultAgentTool, DefaultHandoff
 from ._run import (
     ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX,
@@ -36,6 +37,7 @@ from ._run import (
 )
 from ._runner import Runner
 from ._snapshot import AgentSnapshot
+from ._state_store import StateStore
 from ._stream import RunStream
 from ._task import Task
 from ._tool_result import (
@@ -66,6 +68,7 @@ __all__ = [
     "HarnessEventType",
     "INHERIT_TOOLS",
     "InheritTools",
+    "JsonFileStateStore",
     "LiveRunStateView",
     "OVERRIDE_TOOLS",
     "OverrideTools",
@@ -94,6 +97,7 @@ __all__ = [
     "RestrictTools",
     "RestrictToolsBuilder",
     "ShimState",
+    "StateStore",
     "RunStream",
     "RunToolApprovalEvent",
     "RunToolEndEvent",
