@@ -46,6 +46,39 @@ Use registration when state should follow the normal `AgentId` reuse model. Use
 binding when you already have a concrete stateful instance and want that exact
 instance tied to one identity.
 
+## External Agent Tasks
+
+A `Task` can give an external agent harness an AgentLane identity. The optional
+Claude Agent SDK package provides one small integration:
+
+```bash
+uv sync --extra claude-agent-sdk
+```
+
+```python
+from agentlane_claude_agent_sdk import ClaudeAgent
+
+ClaudeAgent.bind(runtime, claude_agent_id)
+```
+
+`ClaudeAgent` accepts addressed text messages. It starts one fresh Claude Agent
+SDK query for each message and returns the final text through the AgentLane
+delivery result. Its default options disable tools, skills, settings sources,
+and MCP servers. They also limit the query to one turn. Explicit SDK options
+can change those settings, but session continuation options are rejected.
+
+SDK failures and invalid terminal results become AgentLane handler errors. The
+SDK child process inherits the parent process environment, and message content
+is sent to Anthropic. Run it with only the required credentials and use data
+that is safe to send to that provider.
+
+The runnable
+[`claude_agent_sdk_coworker`](../../examples/harness/claude_agent_sdk_coworker/)
+example shows a native AgentLane agent sending an addressed task to Claude and
+using the returned text to complete its own run. The result returns through the
+delivery call. The example does not show a second addressed message from Claude
+or shared session continuity between messages.
+
 ## A Useful Rule Of Thumb
 
 If you start adding prompt construction, model configuration, or tool policies

@@ -103,7 +103,10 @@ mental model:
 13. If you want high-level harness agents coordinating distributed workers, read
     [Harness Distributed Agents](./harness/distributed-agents.md) after the
     runtime distributed docs.
-14. Run one of the examples under [examples/](../examples/README.md).
+14. If you want to give an external agent harness an AgentLane identity, read
+    [Harness Tasks](./harness/tasks.md) and run the
+    [Claude Agent SDK coworker example](../examples/harness/claude_agent_sdk_coworker/).
+15. Run one of the examples under [examples/](../examples/README.md).
 
 ## Contents
 
