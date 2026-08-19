@@ -164,6 +164,11 @@ def test_claude_agent_uses_isolated_tool_free_default_options(
         ClaudeAgentOptions(fork_session=True),
         ClaudeAgentOptions(resume_session_at="message-1"),
         ClaudeAgentOptions(resume_drops_turn="prompt-1"),
+        ClaudeAgentOptions(extra_args={"continue": None}),
+        ClaudeAgentOptions(extra_args={"resume": "session-1"}),
+        ClaudeAgentOptions(extra_args={"fork-session": None}),
+        ClaudeAgentOptions(extra_args={"resume-session-at": "message-1"}),
+        ClaudeAgentOptions(extra_args={"resume-drops-turn": "prompt-1"}),
     ],
     ids=[
         "continue-conversation",
@@ -171,6 +176,11 @@ def test_claude_agent_uses_isolated_tool_free_default_options(
         "fork-session",
         "resume-session-at",
         "resume-drops-turn",
+        "extra-continue",
+        "extra-resume",
+        "extra-fork-session",
+        "extra-resume-session-at",
+        "extra-resume-drops-turn",
     ],
 )
 def test_claude_agent_rejects_continuity_options_before_query(

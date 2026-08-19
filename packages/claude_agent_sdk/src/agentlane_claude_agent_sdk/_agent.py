@@ -60,5 +60,12 @@ def _reject_continuity_options(options: ClaudeAgentOptions) -> None:
         or options.fork_session
         or options.resume_session_at is not None
         or options.resume_drops_turn is not None
+        or not {
+            "continue",
+            "resume",
+            "fork-session",
+            "resume-session-at",
+            "resume-drops-turn",
+        }.isdisjoint(options.extra_args)
     ):
         raise ValueError("ClaudeAgent options must start a fresh session.")
