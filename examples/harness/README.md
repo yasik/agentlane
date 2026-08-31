@@ -22,13 +22,15 @@ harness directly.
 15. [default_handoff_takeover](./default_handoff_takeover/): generic `handoff` demo where patient triage transfers the conversation to a fresh specialist created from `DefaultHandoff(...)`.
 16. [process_bridge_stdio](./process_bridge_stdio/): no-model-key stdio bridge demo with a scripted Python backend and TypeScript client.
 17. [persistent_agent_quickstart](./persistent_agent_quickstart/): path-backed `DefaultAgent` that restores its address and conversation across separate process runs.
+18. [claude_agent_sdk_coworker](./claude_agent_sdk_coworker/): real OpenAI-to-Claude-to-OpenAI proof where a native AgentLane agent sends an addressed task to a Claude Agent SDK participant and completes the original run.
 
 ## Run
 
 All harness demos require `OPENAI_API_KEY` in the environment:
 
 The `process_bridge_stdio` demo is the exception; it uses a scripted backend and
-does not call a model provider.
+does not call a model provider. The `claude_agent_sdk_coworker` demo also needs
+`ANTHROPIC_API_KEY` and the `claude-agent-sdk` extra.
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -50,5 +52,8 @@ uv run python examples/harness/default_handoff_takeover/main.py
 uv run python examples/harness/base_tools_plan_quickstart/main.py
 uv run python examples/harness/persistent_agent_quickstart/main.py "Remember that my risk limit is 8%."
 uv run python examples/harness/persistent_agent_quickstart/main.py "What is my risk limit?"
+uv sync --extra claude-agent-sdk
+export ANTHROPIC_API_KEY=...
+uv run python examples/harness/claude_agent_sdk_coworker/main.py
 (cd examples/harness/process_bridge_stdio && bun install && bun run client.ts)
 ```

@@ -45,12 +45,16 @@ classifiers = [
 braintrust = [
   "braintrust>=0.0.168",
 ]
+claude-agent-sdk = [
+  "claude-agent-sdk==0.2.141",
+]
 litellm = [
   "litellm>=1.71.1",
 ]
 openai = []
 all = [
   "braintrust>=0.0.168",
+  "claude-agent-sdk==0.2.141",
   "litellm>=1.71.1",
 ]
 
@@ -78,6 +82,7 @@ ignore_missing_imports = true
 packages = [
   "src/agentlane",
   "packages/braintrust/src/agentlane_braintrust",
+  "packages/claude_agent_sdk/src/agentlane_claude_agent_sdk",
   "packages/litellm/src/agentlane_litellm",
   "packages/openai/src/agentlane_openai",
   "packages/process_bridge/src/agentlane_process_bridge",
@@ -86,6 +91,7 @@ packages = [
 [tool.hatch.build.targets.wheel.sources]
 "src" = ""
 "packages/braintrust/src" = ""
+"packages/claude_agent_sdk/src" = ""
 "packages/litellm/src" = ""
 "packages/openai/src" = ""
 "packages/process_bridge/src" = ""
