@@ -1,65 +1,3 @@
-# AgentLane
-
-**AgentLane is a runtime-first framework for building reliable, inspectable AI
-agent systems.**
-
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
-![PyPI](https://img.shields.io/pypi/v/agentlane.svg)
-
-AgentLane is for AI workflows where agent behavior is part of the application
-architecture. It gives agents stable identities, routes work through explicit
-messages, and lets a local agent loop grow into background workers, pub/sub
-flows, and distributed runtimes without changing the core communication model.
-
-Most agent frameworks start with a prompt, a few tools, and a loop. AgentLane
-starts one layer lower: runtime, addressed messaging, delivery outcomes, and
-agent instance reuse. Model calls, tools, handoffs, and the default harness sit
-on top of that runtime foundation.
-
-That shape matters when users depend on the system. You need to know which agent
-handled work, where state lives, which messages and tools were involved, how
-work was delegated, and how the workflow can be tested, reproduced, and
-operated.
-
-## What You Get
-
-AgentLane is organized into layers that can be used together or independently:
-
-1. **[Runtime](src/agentlane/runtime/) and
-   [Messaging](src/agentlane/messaging/)** — addressed agents, direct sends,
-   scheduling, pub/sub, delivery outcomes, local execution, and distributed
-   workers.
-2. **[Models](src/agentlane/models/)** — prompt templates, schemas, structured
-   outputs, native tools, and provider clients.
-3. **[Harness](src/agentlane/harness/)** — `DefaultAgent`, markdown agent
-   definitions, resumable run state, tool execution, handoffs, agent-as-tool
-   delegation, shims, skills, and a local stdio process bridge for TypeScript
-   app shells.
-4. **[Transport](src/agentlane/transport/)** — wire-safe serialization
-   boundaries for distributed payloads.
-5. **[Tracing](src/agentlane/tracing/)** — observability across runtime, model,
-   and harness execution.
-
-These layers let you start with a simple local agent and keep the same runtime
-model as the workflow grows into addressed services, background specialists,
-fan-out and fan-in, or distributed execution.
-
-## When To Use AgentLane
-
-Use AgentLane when you are building AI systems that need one or more of:
-
-1. local agents with tools, handoffs, delegation, or resumable runs
-2. stable identities for agents, services, and background specialists
-3. explicit routing between model-backed agents and deterministic workers
-4. fan-out, fan-in, pub/sub, or human-review workflows
-5. structured model calls with schemas, tools, and provider adapters
-6. a path from local development to distributed execution
-7. orchestration that stays in application code
-
-AgentLane is especially useful when the agent workflow is part of the product
-architecture and carries responsibilities beyond a single model call.
-
 ```text
 ╔════════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                    ║
@@ -70,37 +8,143 @@ architecture and carries responsibilities beyond a single model call.
 ║   ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ███████╗██║  ██║██║ ╚████║███████╗   ║
 ║   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝   ║
 ║                                                                                    ║
-║                reliable, inspectable AI agent workflows                            ║
+║                the open runtime for persistent, addressable agents                 ║
 ║                                                                                    ║
-║              runtime • messaging • model primitives • harness                      ║
-║                                                                                    ║
-║                 from local agents → distributed agent systems                      ║
+║          identity • inbox • state • delivery • local → distributed                  ║
 ║                                                                                    ║
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
-## Installation
+**AgentLane gives an AI agent a stable address, an inbox, and state that lasts
+longer than a single run.** You can swap the model, the harness, the process,
+or the machine underneath it, and the agent is still the same agent.
 
-Install AgentLane with `uv`:
+The idea comes from a simple observation: a single agent loop stops scaling
+once you need background jobs, long-running work, human review, specialist
+agents, and plain deterministic services working together. Those are not
+prompt problems. They are distributed systems problems, and the fix is to
+treat agents like members of an organization, each with an identity, an inbox,
+and state of its own. The full argument is in
+[Distributed Agents Are What Make AI Systems Work Like Organizations](https://www.yasik.org/writings/distributed-agents).
+
+![PyPI](https://img.shields.io/pypi/v/agentlane.svg)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)
+![npm](https://img.shields.io/npm/v/%40agentlanejs%2Fprocess-bridge.svg?label=process-bridge)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
+[See it](#see-it) · [Why](#why-agentlane) · [Install](#install) · [Quick start](#quick-start) · [Other harnesses](#connect-other-harnesses) · [Layers](#layers) · [Docs](docs/README.md) · [Examples](examples/README.md) · [Changelog](CHANGELOG.md)
+
+## See it
+
+Two processes, two models, one agent. The agent keeps its address and its
+memory in a file. Everything else changes underneath it.
+
+`care_navigator.md`:
+
+```markdown
+---
+name: care-navigator
+description: Follows a patient's medication questions over time.
+---
+You are a concise patient care navigation agent. Remember what you were told
+about a patient and give one clear next step.
+```
+
+`monday.py`:
+
+```python
+import asyncio
+import os
+
+from agentlane_openai import ResponsesClient
+
+from agentlane.harness.agents import DefaultAgent
+from agentlane.models import Config
+
+
+async def main() -> None:
+    agent = DefaultAgent.from_markdown(
+        "care_navigator.md",
+        model=<model_client_openai>,
+        state_path=".agentlane/care-navigator.json",
+    )
+    await agent.run("Patient 4471 started lisinopril today. Keep an eye on it.")
+    print(agent.agent_id)
+
+
+asyncio.run(main())
+```
+
+`tuesday.py`, a new process with a different model:
+
+```python
+async def main() -> None:
+    agent = DefaultAgent.from_markdown(
+        "care_navigator.md",
+        model=<model_client_claude>,
+        state_path=".agentlane/care-navigator.json",
+    )
+    result = await agent.run("Patient 4471 feels lightheaded this morning. What now?")
+    print(agent.agent_id)  # same address as Monday
+    print(result.final_output)  # knows about yesterday's lisinopril
+```
+
+Nothing was passed between the two scripts except the state file. The agent's
+identity, conversation, and turn count live with the agent. The model, the
+process, and the run loop are supplied fresh each time. Swap `state_path=`
+for your own `StateStore` when a file is not enough, and bind the agent to a
+distributed runtime when it needs to live on a worker. Same agent, same
+address.
+
+## Why AgentLane
+
+Most agent frameworks start with a prompt, a few tools, and a loop. AgentLane
+starts one layer lower. Every agent has an identity, a job, permissions, tools,
+state, and a place in the system. Some agents are long-lived employees with
+ongoing responsibilities. Others are temporary contractors that fan out, do
+their part, and go away. Both talk to each other the same way: through
+addressed messages.
+
+That gives you three things:
+
+1. **State stays with whoever owns it.** Review status, user preferences, and
+   conversation history belong to the agent or task that owns them, not to one
+   chat transcript.
+2. **You can see what happened.** Which agent got the task, which worker ran it,
+   which messages and tools were involved, and what came back.
+3. **Local grows into distributed.** The agent you run in one process today
+   can run on a pool of workers tomorrow. The way agents talk to each other
+   does not change.
+
+## Install
 
 ```bash
 uv add agentlane
 ```
 
-If you are trying the repository directly instead:
+Add a provider or integration as an extra:
+
+```bash
+uv add "agentlane[openai]"            # OpenAI Responses client (default provider)
+uv add "agentlane[litellm]"           # any model LiteLLM supports
+uv add "agentlane[claude-agent-sdk]"  # Claude Agent SDK coworkers
+uv add "agentlane[braintrust]"        # export traces to Braintrust
+```
+
+Working from a checkout of this repo:
 
 ```bash
 uv sync --all-extras
 ```
 
-## Quick Start
+## Quick start
 
-Define an agent in a markdown file — frontmatter for config, the body as its
-system prompt — and run it. The four steps below are one progression: the same
-agent grows from a single file to a coordinated team, and from one local
-process to a distributed runtime, without changing the model or the run loop.
+An agent is a markdown file. The frontmatter is the config and the body is the
+system prompt. The two steps below build on each other: the same agent goes
+from a single file to a team on a distributed runtime. The model and the run
+loop never change.
 
-All four reuse one model client:
+Both steps share one model client:
 
 ```python
 import asyncio
@@ -141,15 +185,15 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-One file, one `run(...)`. The frontmatter configures the agent; the body is its
-system prompt. It runs on a local single-threaded runtime by default, and each
-`run(...)` stores resumable state on the agent.
+One file, one `run(...)`. By default it runs on a local single-threaded
+runtime, and every run leaves resumable state on the agent. Add `state_path=`
+to keep that state across processes, as in [See it](#see-it).
 
-### 2. Two markdown agents on a distributed runtime
+### 2. A team on a distributed runtime
 
-Add a specialist as a sub-agent and bind the pair to a distributed runtime. The
-specialist becomes an addressed agent the lead delegates to — ready to move onto
-its own worker later. Only `subagents=` and `runtime=` change.
+Add a specialist with `subagents=` and bind both to a distributed runtime. The
+specialist becomes an addressed agent the lead can delegate to, and the runtime
+can later move it onto its own worker.
 
 `med_safety.md`:
 
@@ -184,174 +228,66 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The lead calls the `med_safety` specialist as a tool, gets its result, and
-answers. `model: inherit` lets the specialist reuse the lead's model.
+The lead calls `med_safety` as a tool, gets the note back, and answers.
+`model: inherit` lets the specialist reuse the lead's model.
 
-### 3. Full programmatic control
+Markdown is the fast path. When you need real Python tools, tuned model calls,
+or run-loop limits, build an `AgentDescriptor` directly. Any plain function can
+be a tool, with no decorator or registration. See
+[Default Agents](docs/harness/default-agents.md),
+[Markdown Agent Definitions](docs/harness/agent-definitions.md), and
+[Distributed Agents](docs/harness/distributed-agents.md).
 
-When you need real Python tools, tuned model calls, and run-loop limits, build
-the descriptor directly. A plain function becomes a tool — no decorators or
-registration:
+## Connect other harnesses
 
-```python
-from agentlane.harness import AgentDescriptor, Runner
-from agentlane.models import Tools
+An AgentLane address does not need an AgentLane model loop behind it. Anything
+bound to the runtime as a `Task` can receive addressed work.
 
-
-def lookup_medication(name: str) -> str:
-    """Return basic guidance for a medication by name."""
-    return f"{name}: take with food; report severe dizziness or fainting to your care team."
-
-
-async def main() -> None:
-    agent = DefaultAgent(
-        descriptor=AgentDescriptor(
-            name="care-navigator",
-            model=model,
-            instructions="Call lookup_medication before advising on a medication. Give one next step.",
-            tools=Tools(tools=[lookup_medication]),
-            model_args={"reasoning_effort": "low"},
-        ),
-        runner=Runner(max_turns=6),
-    )
-    result = await agent.run("Can I keep taking metformin if it upsets my stomach?")
-    print(result.final_output)
-
-
-asyncio.run(main())
-```
-
-The markdown agent and this one share the same `DefaultAgent` contract — markdown
-is the fast path, the descriptor is the full surface.
-
-### 4. A multi-agent team on a distributed runtime
-
-Attach specialists with `subagents=` and run the team on a distributed runtime.
-`DefaultAgent` wires each sub-agent in for you — no manual `as_tool()`. The
-coordinator owns the model loop; each specialist runs as an addressed agent the
-runtime can place on its own worker:
+**Claude Agent SDK coworker.** Give a Claude identity an address on the runtime.
+A native AgentLane agent sends it a task the usual way and uses the reply in
+its own run.
 
 ```python
-med_safety = AgentDescriptor(
-    name="med-safety",
-    model=model,
-    tools=None,
-    instructions="Flag medication interactions or safety concerns in one sentence.",
+from agentlane_claude_agent_sdk import ClaudeAgent
+from agentlane.messaging import AgentId
+
+claude = AgentId.from_values("claude-sdk", "analyst")
+ClaudeAgent.bind(runtime, claude)
+
+outcome = await runtime.send_message(
+    "Summarize the interaction risks for lisinopril.",
+    sender=lead_id,
+    recipient=claude,
 )
-guidelines = AgentDescriptor(
-    name="guidelines",
-    model=model,
-    tools=None,
-    instructions="Cite the relevant care guideline for the symptom in one sentence.",
-)
-
-
-async def main() -> None:
-    async with distributed_runtime() as runtime:
-        triage = DefaultAgent(
-            descriptor=AgentDescriptor(
-                name="triage-lead",
-                model=model,
-                instructions="Send medication questions to `med_safety` and symptom questions to `guidelines`, then give one next step.",
-            ),
-            subagents=[med_safety, guidelines],
-            runtime=runtime,
-        )
-        result = await triage.run(
-            "New chest tightness after a dose increase of my heart medication. What should I do?"
-        )
-        print(result.final_output)
-
-
-asyncio.run(main())
 ```
 
-`subagents=` is the one way to attach sub-agents — markdown paths via
-`from_markdown` (step 2) or descriptors here — and `tools=[child.as_tool()]`
-stays as a manual escape hatch. The same runtime concepts scale on to background
-specialists, pub/sub fan-out, and multi-process workers — see
-[Harness Distributed Agents](docs/harness/distributed-agents.md).
+Every addressed task starts a fresh SDK session. See
+[Harness Tasks](docs/harness/tasks.md) and the
+[coworker example](examples/harness/claude_agent_sdk_coworker/).
 
-## Repository examples
+**TypeScript app shells.** `@agentlanejs/process-bridge` starts a local Python
+AgentLane backend as a child process and streams typed session events over
+stdio. See [Process Bridge](docs/process-bridge/README.md).
 
-If you are running from a repository checkout, run one runtime example:
+## Layers
 
-```bash
-uv run python examples/runtime/multi_agent_workflow/main.py
-```
+Use them together or pick the one you need.
 
-Run one high-level harness example with a real model:
+| Layer | What it does | Start here |
+| --- | --- | --- |
+| [Runtime](src/agentlane/runtime/) | agent identity, execution, scheduling, local and distributed workers | [Engine and Execution](docs/runtime/engine-and-execution.md) · [Distributed Runtime](docs/runtime/distributed-runtime-usage.md) |
+| [Messaging](src/agentlane/messaging/) | addressed sends, pub/sub, delivery outcomes, per-recipient ordering | [Routing and Delivery](docs/messaging/routing-and-delivery.md) |
+| [Models](src/agentlane/models/) | prompt templates, schemas, structured output, native tools, provider clients | [Overview](docs/models/overview.md) · [Prompt Templating](docs/models/prompt-templating.md) |
+| [Harness](src/agentlane/harness/) | `DefaultAgent`, markdown definitions, resumable and persistent state, handoffs, sub-agents, shims, skills, compaction | [Default Agents](docs/harness/default-agents.md) · [Architecture](docs/harness/architecture.md) |
+| [Transport](src/agentlane/transport/) | wire-safe serialization across process boundaries | [Serialization](docs/transport/serialization.md) |
+| [Tracing](src/agentlane/tracing/) | spans and metrics across runtime, model, and harness | [Tracing Overview](docs/tracing/overview.md) |
 
-```bash
-OPENAI_API_KEY=sk-... uv run python examples/harness/default_agent_quickstart/main.py
-```
-
-Run the distributed harness agent smoke test:
-
-```bash
-uv run python examples/harness/distributed_clinical_inbox_copilot/main.py \
-  --multiprocess \
-  --smoke-review
-```
-
-The runtime example shows explicit message passing. The distributed harness
-example shows a top-level agent coordinating worker runtimes through
-publish-based fan-out and fan-in.
-
-## Choose the layer you need
-
-### Runtime
-
-Use the runtime when agent identity, message routing, pub/sub, scheduling, or distributed execution are part of your application design.
-
-Start here:
-
-1. [Runtime: Engine and Execution](docs/runtime/engine-and-execution.md)
-2. [Runtime: Distributed Runtime Usage](docs/runtime/distributed-runtime-usage.md)
-3. [Messaging: Routing and Delivery](docs/messaging/routing-and-delivery.md)
-
-### Models
-
-Use the models layer when you want reusable prompt templates, schemas, structured outputs, tools, or provider clients without adopting the full agent harness.
-
-Start here:
-
-1. [Overview](docs/models/overview.md)
-2. [Prompt Templating](docs/models/prompt-templating.md)
-
-### Harness
-
-Use the harness when you want high-level agents, reusable loops, tool execution, handoffs, or agent-as-tool patterns on top of the lower-level primitives.
-
-Start here:
-
-1. [Default Agents](docs/harness/default-agents.md)
-2. [Markdown Agent Definitions](docs/harness/agent-definitions.md)
-3. [Architecture](docs/harness/architecture.md)
-4. [Tools](docs/harness/tools.md)
-5. [Shims](docs/harness/shims.md)
-6. [Compaction](docs/harness/compaction.md)
-7. [Skills](docs/harness/skills.md)
-8. [Distributed Agents](docs/harness/distributed-agents.md)
-
-## Documentation
-
-Use the documentation index for the full docs tree:
-
-1. [Documentation Index](docs/README.md)
-2. [Examples Index](examples/README.md)
-3. [Runtime: Distributed Runtime Usage](docs/runtime/distributed-runtime-usage.md)
-4. [Harness Distributed Agents](docs/harness/distributed-agents.md)
-5. [Tracing Overview](docs/tracing/overview.md)
-6. [Changelog](CHANGELOG.md)
-
-## Origins
-
-AgentLane was initially inspired by Microsoft AutoGen, but takes a runtime-first approach focused on addressed messaging, explicit orchestration, and local-to-distributed execution.
+Provider and integration packages live under [`packages/`](packages/):
+`agentlane-openai`, `agentlane-litellm`, `agentlane-claude-agent-sdk`,
+`agentlane-braintrust`, `agentlane-process-bridge`, and
+`@agentlanejs/process-bridge`.
 
 ## Development
-
-Format, lint, and test:
 
 ```bash
 /usr/bin/make format
@@ -359,7 +295,7 @@ Format, lint, and test:
 /usr/bin/make tests
 ```
 
-Run one test with:
+Run a single test:
 
 ```bash
 uv run pytest -s -k <test_name>
@@ -369,5 +305,9 @@ uv run pytest -s -k <test_name>
 
 1. Keep changes small and focused.
 2. Add or update tests when behavior changes.
-3. Update public docs and examples when the developer-facing surface changes.
-4. Ensure formatting, linting, and tests pass before opening a PR.
+3. Update the public docs and examples when the developer-facing surface changes.
+4. Make sure formatting, linting, and tests pass before you open a PR.
+
+## License
+
+[MIT](LICENSE)
