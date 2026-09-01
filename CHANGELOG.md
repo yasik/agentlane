@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-01
+
+AgentLane `0.13.0` adds the first persistent-agent workflow and the first cross-harness coworker integration: applications can now preserve a harness agent across process restarts and address a Claude Agent SDK participant through the normal AgentLane runtime.
+
+### Added
+
+- Added versioned `AgentSnapshot` values so applications can export committed `DefaultAgent` state as portable JSON and restore it at the same logical `AgentId` ([`60a0824`](https://github.com/yasik/agentlane/commit/60a0824), [`4fc8211`](https://github.com/yasik/agentlane/commit/4fc8211), [`d004bf9`](https://github.com/yasik/agentlane/commit/d004bf9))
+- Added `state_path=`, `StateStore`, and `JsonFileStateStore` so default agents can restore conversation and harness state after a process restart, save successful primary runs atomically, and reject stale revisions ([`9426935`](https://github.com/yasik/agentlane/commit/9426935))
+- Added the optional `agentlane[claude-agent-sdk]` integration and a runnable coworker example so native AgentLane agents can send addressed tasks to a fresh Claude Agent SDK session and use its result in the original run ([`ba197e9`](https://github.com/yasik/agentlane/commit/ba197e9), [`d078f03`](https://github.com/yasik/agentlane/commit/d078f03), [`a7e0949`](https://github.com/yasik/agentlane/commit/a7e0949))
+
+### Changed
+
+- Unified terminal, streaming, event-streaming, and handoff execution around shared runner paths so lifecycle fixes remain consistent across public run modes while their intentional retry behavior remains unchanged ([`14f7a19`](https://github.com/yasik/agentlane/commit/14f7a19))
+- Expanded the harness documentation and examples with persistent-agent and external-coworker setup, storage boundaries, worker requirements, credential guidance, and current interoperability limits ([`9426935`](https://github.com/yasik/agentlane/commit/9426935), [`a7e0949`](https://github.com/yasik/agentlane/commit/a7e0949), [`3da5822`](https://github.com/yasik/agentlane/commit/3da5822))
+
+### Fixed
+
+- Made npm publishing recoverable by installing the required Python tooling, supporting exact-tag manual runs, and skipping `@agentlanejs/process-bridge` versions that are already published ([`65698a5`](https://github.com/yasik/agentlane/commit/65698a5), [`0b7c402`](https://github.com/yasik/agentlane/commit/0b7c402))
+- Rejected typed and raw Claude SDK session-continuation options so each addressed task honors the documented fresh-session boundary ([`5d67cff`](https://github.com/yasik/agentlane/commit/5d67cff))
+
 ## [0.12.0] - 2026-07-07
 
 AgentLane `0.12.0` expands the harness into a fuller app platform: markdown agent definitions, resilient context compaction, and Python/TypeScript process-bridge APIs now give host applications a typed path for configuring, observing, and controlling local AgentLane sessions.
@@ -235,6 +255,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/yasik/agentlane/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/yasik/agentlane/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/yasik/agentlane/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/yasik/agentlane/compare/v0.9.0...v0.10.0
