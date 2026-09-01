@@ -10,7 +10,7 @@
 ║                                                                                    ║
 ║                the open runtime for persistent, addressable agents                 ║
 ║                                                                                    ║
-║          identity • inbox • state • delivery • local → distributed                  ║
+║          identity • inbox • state • delivery • local → distributed                 ║
 ║                                                                                    ║
 ╚════════════════════════════════════════════════════════════════════════════════════╝
 ```
