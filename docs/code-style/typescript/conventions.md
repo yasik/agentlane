@@ -58,8 +58,10 @@ Use these rules for TypeScript across repository packages.
 
 - Avoid `else`. Prefer early returns.
 - Structure a function so its body reads as the happy path.
-- Separate distinct guard branches or state transitions with blank lines when
-  the spacing makes the decisions easier to scan.
+- Follow the shared [logical block and comment rules](../README.md#logical-blocks-and-comments).
+  Separate input checks, conversion, state changes, and side effects with blank
+  lines. Put a blank line after a completed guard block before the next step,
+  and between a completed loop and its final return.
 
 ## Helper Placement
 

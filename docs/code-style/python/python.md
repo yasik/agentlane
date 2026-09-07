@@ -14,10 +14,10 @@ These rules apply to Python code across the repository.
   extension clarity. A simplification should remove real duplication or make an
   invariant more explicit; it should not flatten a useful abstraction into a
   looser one.
-- Separate logical control-flow blocks with blank lines when an early return,
-  guard branch, or state transition finishes one idea and the next branch starts
-  another. Do not pack adjacent `if`/`return` blocks together when spacing would
-  make the flow easier to scan.
+- Follow the shared [logical block and comment rules](../README.md#logical-blocks-and-comments).
+  Separate input checks, conversion, metadata handling, and output construction
+  with blank lines. Put a blank line after a completed guard block before the
+  next step, and between a completed loop and its final return.
 - Catch exceptions at the highest practical boundary for the operation, such as
   request, command-loop, run, worker, or I/O boundaries. Avoid catching broad
   exceptions inside low-level helpers unless the helper is itself that boundary;
