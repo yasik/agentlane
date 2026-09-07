@@ -215,6 +215,11 @@ func ParseConfig(path string) (*Config, error) {
 - Explain why something is done, or which external constraint it satisfies (spec requirement, bug workaround, performance trade-off).  
 - Document tricky invariants, assumptions about inputs, or non-obvious algorithm steps.  
 - Do not narrate each line or describe obvious control flow.
+- Follow the shared [logical block and comment rules](../README.md#logical-blocks-and-comments).
+  Put a blank line before a block comment that introduces a new logical step.
+  Keep the comment next to the statements it explains. Add context for protocol
+  conversions, metadata preservation, and ordering constraints inside helpers;
+  a function docstring alone does not explain each of these decisions.
 
 ### Python inline comment examples
 

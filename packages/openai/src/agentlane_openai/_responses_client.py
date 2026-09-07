@@ -667,16 +667,17 @@ class ResponsesClient(Model[TResponseType]):
             role = role_value if isinstance(role_value, str) else "user"
             content = msg.get("content", "")
 
-            if role == "system":
-                # System messages become instructions in Responses API
-                # We'll handle this separately in the API call
+            if role in {"system", "developer"}:
+                # Keep the existing system-to-developer mapping. Explicit
+                # developer instructions must reach the same input path.
                 result.append(
                     {
                         "type": "message",
-                        "role": "developer",  # developer role for system messages
+                        "role": "developer",
                         "content": self._convert_content(content),
                     }
                 )
+
             elif role == "user":
                 result.append(
                     {
@@ -685,29 +686,46 @@ class ResponsesClient(Model[TResponseType]):
                         "content": self._convert_content(content),
                     }
                 )
+
             elif role == "assistant":
-                assistant_content: list[ResponseContentPart] = []
+                assistant_content = self._convert_assistant_content(content)
+
+                # Chat Completions can store a refusal outside the content list.
+                # Replay it as content so a refusal-only turn is not lost.
+                refusal = msg.get("refusal")
+                if isinstance(refusal, str) and refusal:
+                    assistant_content.append({"type": "refusal", "refusal": refusal})
+
+                # Converted Chat Completions history is complete by default.
+                # Retain an explicit provider status or ID when supplied; never
+                # manufacture an ID for a message from another API.
                 assistant_item: ResponseInputItem = {
                     "type": "message",
                     "role": "assistant",
                     "content": assistant_content,
+                    "status": msg.get("status", "completed"),
                 }
-                if isinstance(content, str) and content:
-                    assistant_content.append(
-                        {
-                            "type": "output_text",
-                            "text": content,
-                        }
-                    )
-                # Append assistant message first (before function calls)
+
+                if "id" in msg:
+                    assistant_item["id"] = msg["id"]
+
+                # Preserve the distinction between commentary and a final answer
+                # when the caller supplies a phase for the prior assistant turn.
+                if "phase" in msg:
+                    assistant_item["phase"] = msg["phase"]
+
+                # A tool-only turn needs function calls, not an empty message.
                 if assistant_item["content"]:
                     result.append(assistant_item)
-                # Handle tool calls in assistant messages (after message)
+
+                # Responses uses separate function-call items. Place them after
+                # the assistant text to preserve the original conversation order.
                 tool_calls_raw = msg.get("tool_calls", [])
                 if isinstance(tool_calls_raw, list):
                     for tc in cast(list[object], tool_calls_raw):
                         if not isinstance(tc, dict):
                             continue
+
                         tc_dict = cast(dict[str, Any], tc)
                         function_payload = tc_dict.get("function", {})
                         function_dict = (
@@ -715,6 +733,7 @@ class ResponsesClient(Model[TResponseType]):
                             if isinstance(function_payload, dict)
                             else cast(dict[str, Any], {})
                         )
+
                         result.append(
                             {
                                 "type": "function_call",
@@ -723,8 +742,9 @@ class ResponsesClient(Model[TResponseType]):
                                 "arguments": function_dict.get("arguments", "{}"),
                             }
                         )
+
             elif role == "tool":
-                # Tool results
+                # The call ID connects this result to its earlier function call.
                 result.append(
                     {
                         "type": "function_call_output",
@@ -732,6 +752,53 @@ class ResponsesClient(Model[TResponseType]):
                         "output": msg.get("content", ""),
                     }
                 )
+
+        return result
+
+    def _convert_assistant_content(self, content: object) -> list[ResponseContentPart]:
+        """Convert assistant text and refusal parts without changing their order."""
+        if isinstance(content, str):
+            return (
+                [{"type": "output_text", "text": content, "annotations": []}]
+                if content
+                else []
+            )
+
+        if not isinstance(content, list):
+            return []
+
+        # Keep part boundaries and order when replaying a prior assistant turn.
+        result: list[ResponseContentPart] = []
+        for part in cast(list[object], content):
+            if not isinstance(part, dict):
+                continue
+
+            part_dict = cast(dict[str, Any], part)
+            part_type = part_dict.get("type")
+            text = part_dict.get("text", "")
+
+            # Empty text parts carry no assistant text. Treat them like an empty
+            # string so a tool-only turn does not gain a blank message item.
+            if part_type in {"text", "input_text", "output_text"} and not text:
+                continue
+
+            if part_type in {"text", "input_text"}:
+                # Converted text has no citation metadata; Responses output text
+                # still needs an annotations list.
+                result.append(
+                    {
+                        "type": "output_text",
+                        "text": text,
+                        "annotations": [],
+                    }
+                )
+
+            elif part_type == "output_text":
+                # Retain existing annotations and other output-text metadata.
+                result.append({"annotations": [], **part_dict})
+
+            elif part_type == "refusal":
+                result.append(dict(part_dict))
 
         return result
 

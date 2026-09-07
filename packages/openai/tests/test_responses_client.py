@@ -1,9 +1,11 @@
 """Tests for the imported OpenAI Responses client."""
 
 import asyncio
+from copy import deepcopy
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from agentlane_openai import ResponsesClient, ResponsesFactory
 from openai.types.responses import Response as OpenAIResponse
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
@@ -220,6 +222,251 @@ def test_responses_client_get_response_converts_and_forwards_configuration() -> 
     assert await_kwargs["text"]["format"]["schema"]["properties"] == {
         "message": {"title": "Message", "type": "string"}
     }
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure"])
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("text_type", ["text", "input_text", "output_text"])
+@pytest.mark.asyncio
+async def test_responses_client_full_history_preserves_request_content(
+    provider: str, streaming: bool, text_type: str
+) -> None:
+    """Both request modes must retain instructions, assistant text, and tool order."""
+    client = ResponsesClient(
+        Config(
+            api_key="test-key",
+            model="azure/gpt-4o" if provider == "azure" else "gpt-4o",
+            base_url=(
+                "https://example.openai.azure.com/" if provider == "azure" else None
+            ),
+            tracing=ModelTracing.DISABLED,
+        )
+    )
+
+    # A complete tool round-trip exposes lost instructions and shifted history.
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "Be helpful."},
+        {"role": "developer", "content": "Use the supplied history."},
+        {
+            "role": "developer",
+            "content": [
+                {"type": "text", "text": "Keep instructions. "},
+                {"type": "text", "text": "Keep prior answers."},
+            ],
+        },
+        {"role": "user", "content": "Remember code 123."},
+        {"role": "assistant", "content": "I remember code 123."},
+        {"role": "user", "content": "Check the code."},
+        {
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [
+                {"type": text_type, "text": "I will "},
+                {"type": text_type, "text": ""},
+                {"type": text_type, "text": "check code 123."},
+            ],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": '{"code":123}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "Code 123 is valid."},
+        {"role": "user", "content": "What did you find?"},
+    ]
+    original_messages = deepcopy(messages)
+
+    # Inspect the SDK request without sending a live request to either provider.
+    response = _make_response("Code 123 is valid.")
+    stream = _FakeAsyncStream([MagicMock(type="response.completed", response=response)])
+    create_mock = AsyncMock(return_value=stream if streaming else response)
+    openai_client = cast(Any, client)._openai_client
+    openai_client.responses.create = create_mock
+
+    if streaming:
+        events = [event async for event in client.stream_response(messages)]
+        assert events[-1].kind == ModelStreamEventKind.COMPLETED
+        assert stream.closed
+    else:
+        await client.get_response(messages)
+
+    # Assert the full ordered payload, not just the presence of selected text.
+    create_mock.assert_awaited_once()
+    payload = cast(dict[str, Any], cast(Any, create_mock.await_args).kwargs)
+    assert payload["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Be helpful."}],
+        },
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": "Use the supplied history."}],
+        },
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Keep instructions. "},
+                {"type": "input_text", "text": "Keep prior answers."},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Remember code 123."}],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "I remember code 123.",
+                    "annotations": [],
+                }
+            ],
+            "status": "completed",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Check the code."}],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "phase": "commentary",
+            "status": "completed",
+            "content": [
+                {"type": "output_text", "text": "I will ", "annotations": []},
+                {"type": "output_text", "text": "check code 123.", "annotations": []},
+            ],
+        },
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": '{"code":123}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "Code 123 is valid.",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "What did you find?"}],
+        },
+    ]
+
+    assert messages == original_messages
+    assert "previous_response_id" not in payload
+
+    await openai_client.close()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "",
+        [],
+        [{"type": "text", "text": ""}],
+        [{"type": "input_text", "text": ""}],
+        [{"type": "output_text", "text": "", "annotations": []}],
+        [{"type": "text"}],
+        [{"type": "text", "text": None}],
+    ],
+)
+def test_responses_client_empty_assistant_content_preserves_tool_calls(
+    content: object,
+) -> None:
+    """Tool-only assistant turns must not create empty message items."""
+    client = ResponsesClient(Config(api_key="test-key", model="gpt-4o"))
+
+    result = cast(Any, client)._messages_to_input(
+        [
+            {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": "{}"},
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert result == [
+        {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": "{}",
+        }
+    ]
+
+
+def test_responses_client_assistant_parts_preserve_refusals_and_annotations() -> None:
+    """Assistant history must retain refusal parts and existing text metadata."""
+    client = ResponsesClient(Config(api_key="test-key", model="gpt-4o"))
+
+    # Mix converted and native parts to detect metadata loss during replay.
+    annotation = {
+        "type": "url_citation",
+        "start_index": 0,
+        "end_index": 6,
+        "title": "Source",
+        "url": "https://example.com",
+    }
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "assistant",
+            "phase": "final_answer",
+            "id": "msg_prior",
+            "status": "incomplete",
+            "content": [
+                {"type": "text", "text": "Allowed text."},
+                {"type": "refusal", "refusal": "I cannot provide that."},
+                {"type": "output_text", "text": "Source", "annotations": [annotation]},
+            ],
+        },
+        {"role": "assistant", "content": None, "refusal": "I cannot help with that."},
+    ]
+    original_messages = deepcopy(messages)
+
+    result = cast(Any, client)._messages_to_input(messages)
+
+    assert result == [
+        {
+            "type": "message",
+            "role": "assistant",
+            "phase": "final_answer",
+            "id": "msg_prior",
+            "status": "incomplete",
+            "content": [
+                {"type": "output_text", "text": "Allowed text.", "annotations": []},
+                {"type": "refusal", "refusal": "I cannot provide that."},
+                {"type": "output_text", "text": "Source", "annotations": [annotation]},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "refusal", "refusal": "I cannot help with that."}],
+            "status": "completed",
+        },
+    ]
+
+    assert messages == original_messages
 
 
 def test_responses_factory_forwards_default_model_args() -> None:
