@@ -1,3 +1,5 @@
+import type { EventEmitter } from "node:events";
+
 import type { BridgeChildLike } from "./channel.ts";
 
 /**
@@ -22,7 +24,10 @@ export class SessionExitHook {
   remove(): void {
     if (this.cleanup === null) return;
 
-    process.removeListener("exit", this.cleanup);
+    // Bun's Process overload hides inherited listener removal events.
+    // Use the EventEmitter contract that process implements for removal.
+    const emitter: EventEmitter = process;
+    emitter.removeListener("exit", this.cleanup);
     this.cleanup = null;
   }
 }

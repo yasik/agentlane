@@ -154,13 +154,16 @@ class BraintrustProcessor(TracingProcessor):
         )
 
         if current_context != NOOP_SPAN:
-            # If there's an existing Braintrust context, nest under it
-            self._spans[trace.trace_id] = current_context.start_span(
-                name=trace.name,
-                span_attributes={"type": "task", "name": trace.name},
-                propagated_event=propagated,
-                metadata=trace.metadata,
-                **env_tags,
+            # Nest under the active context. The SDK's unused `parent` parameter
+            # has a bare dict annotation; keep the exception local to that member.
+            self._spans[trace.trace_id] = (
+                current_context.start_span(  # pyright: ignore[reportUnknownMemberType]
+                    name=trace.name,
+                    span_attributes={"type": "task", "name": trace.name},
+                    propagated_event=propagated,
+                    metadata=trace.metadata,
+                    **env_tags,
+                )
             )
         else:
             self._spans[trace.trace_id] = self._logger.start_span(  # type: ignore[union-attr]
@@ -366,8 +369,9 @@ class BraintrustProcessor(TracingProcessor):
             LOGGER.warning(f"No parent found for span {span.span_id}")
             return
 
-        # Create nested span
-        created_span = parent.start_span(
+        # The SDK's unused `parent` parameter has a bare dict annotation.
+        # Suppress only that incomplete member type; still check call arguments.
+        created_span = parent.start_span(  # pyright: ignore[reportUnknownMemberType]
             id=span.span_id,
             name=_span_name(span),
             type=_span_type(span),
