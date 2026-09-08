@@ -30,3 +30,10 @@ yourself. The client does not automatically chain response IDs. See OpenAI's
 [conversation state guide](https://developers.openai.com/api/docs/guides/conversation-state).
 The message converter does not accept a complete native Responses output
 array as a replacement for Chat Completions messages.
+
+Responses results retain structured reasoning as a typed `ResponseReasoningItem`
+in the canonical response's `reasoning_content` field, including summary and
+encrypted content. The adapter initializes the SDK reasoning schema so JSON
+serialization and payload tracing work on first use. Applications do not need
+to initialize this schema themselves. This applies to OpenAI and Azure, with
+and without streaming.

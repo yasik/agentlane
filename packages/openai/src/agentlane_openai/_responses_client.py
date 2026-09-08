@@ -252,6 +252,9 @@ def response_to_model_response(response: OpenAIResponse) -> ModelResponse:
 
     # Store reasoning item as an extension field if present (raw ResponseReasoningItem)
     if reasoning_item:
+        # SDK parsing can leave this schema deferred. Build it before an outer
+        # serializer encounters the typed extra; later calls reuse the schema.
+        ResponseReasoningItem.model_rebuild()
         cast(Any, model_response).reasoning_content = reasoning_item
 
     return model_response

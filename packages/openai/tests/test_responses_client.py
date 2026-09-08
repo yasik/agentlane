@@ -1,13 +1,18 @@
 """Tests for the imported OpenAI Responses client."""
 
 import asyncio
+import json
+import subprocess
+import sys
 from copy import deepcopy
+from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agentlane_openai import ResponsesClient, ResponsesFactory
 from openai.types.responses import Response as OpenAIResponse
+from openai.types.responses import ResponseReasoningItem
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_output_text import ResponseOutputText
@@ -16,7 +21,7 @@ from openai.types.responses.response_usage import (
     OutputTokensDetails,
     ResponseUsage,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from agentlane.models import (
     Config,
@@ -622,3 +627,140 @@ def test_responses_client_stream_response_traces_serialized_events() -> None:
     assert generation_spans[0].span_data.events is not None
     assert generation_spans[0].span_data.events[0]["kind"] == "text_delta"
     assert generation_spans[0].span_data.events[-1]["kind"] == "completed"
+
+
+def _assert_cold_reasoning_serialization(
+    mode: str, provider_name: str, tracing_name: str
+) -> None:
+    """Check first-use serialization without warming the SDK schema in pytest."""
+    assert not ResponseReasoningItem.__pydantic_complete__
+    tracing_mode = ModelTracing[tracing_name]
+    client = ResponsesClient(
+        Config(
+            api_key="test-key",
+            model=f"{provider_name}/gpt-4o",
+            base_url=(
+                "https://example.openai.azure.com/"
+                if provider_name == "azure"
+                else None
+            ),
+            tracing=tracing_mode,
+        )
+    )
+    original_provider = get_trace_provider()
+    provider = DefaultTraceProvider()
+    processor = _CollectingTracingProcessor()
+    provider.register_processor(processor)
+    set_trace_provider(provider)
+
+    try:
+        # Parse as the SDK does. Direct model validation would hide the defect.
+        # Later iterations also check empty summaries and reuse of the built schema.
+        for index, summary in enumerate(
+            [[{"type": "summary_text", "text": "Check the synthetic input."}], [], []]
+        ):
+            payload = {
+                "id": "rs_test",
+                "type": "reasoning",
+                "summary": summary,
+                "content": [{"type": "reasoning_text", "text": "Synthetic reasoning."}],
+                "encrypted_content": "synthetic-encrypted-content",
+                "status": "completed",
+            }
+            reasoning = TypeAdapter(ResponseReasoningItem).validate_python(payload)
+            if index == 0:
+                assert not ResponseReasoningItem.__pydantic_complete__
+
+            tool_response = _make_tool_call_response()
+            response = OpenAIResponse.model_construct(
+                id="resp_reasoning",
+                created_at=1234567890.0,
+                model="gpt-4o",
+                object="response",
+                status="completed",
+                output=[reasoning, *tool_response.output],
+                usage=tool_response.usage,
+            )
+            stream = _FakeAsyncStream(
+                [MagicMock(type="response.completed", response=response)]
+            )
+            cast(Any, client)._openai_client.responses.create = AsyncMock(
+                return_value=stream if mode == "stream" else response
+            )
+
+            with trace("cold-reasoning-test"):
+                if mode == "stream":
+                    events = asyncio.run(_collect_stream_events(client))
+                    assert [event.kind for event in events] == [
+                        ModelStreamEventKind.COMPLETED
+                    ]
+                    assert stream.closed
+                    result = events[0].response
+                    assert result is not None
+                else:
+                    result = asyncio.run(
+                        client.get_response(
+                            messages=[{"role": "user", "content": "Run the tool."}]
+                        )
+                    )
+
+            assert isinstance(
+                cast(Any, result).reasoning_content, ResponseReasoningItem
+            )
+            assert cast(Any, result).reasoning_content is reasoning
+            assert result.choices[0].message.content is None
+            assert result.choices[0].finish_reason == "tool_calls"
+            assert result.model_dump(mode="json")["reasoning_content"] == payload
+            assert json.loads(result.model_dump_json())["reasoning_content"] == payload
+
+            event = ModelStreamEvent(
+                kind=ModelStreamEventKind.COMPLETED, response=result
+            )
+            assert event.to_trace_dict()["response"]["reasoning_content"] == payload
+
+            if tracing_mode == ModelTracing.ENABLED:
+                spans = [
+                    span
+                    for span in processor.spans
+                    if span.span_data.type == "generation"
+                ]
+                assert len(spans) == index + 1
+                assert spans[-1].span_data.output[0]["output"][0] == payload
+                if mode == "stream":
+                    assert spans[-1].span_data.events == [
+                        {
+                            "kind": "completed",
+                            "provider_event_type": "response.completed",
+                            "response": result.model_dump(mode="json"),
+                        }
+                    ]
+    finally:
+        set_trace_provider(original_provider)
+
+
+@pytest.mark.parametrize("mode", ["response", "stream"])
+@pytest.mark.parametrize("provider_name", ["openai", "azure"])
+@pytest.mark.parametrize("tracing_name", ["ENABLED", "DISABLED"])
+def test_responses_reasoning_serializes_in_fresh_process(
+    mode: str, provider_name: str, tracing_name: str
+) -> None:
+    """A cold SDK reasoning item must survive conversion and payload tracing."""
+    # A separate interpreter prevents unrelated tests from initializing SDK models.
+    result = subprocess.run(  # noqa: S603 - fixed interpreter and local test inputs
+        [
+            sys.executable,
+            "-c",
+            "import runpy, sys; "
+            "runpy.run_path(sys.argv[1])[sys.argv[2]](*sys.argv[3:])",
+            str(Path(__file__).resolve()),
+            _assert_cold_reasoning_serialization.__name__,
+            mode,
+            provider_name,
+            tracing_name,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
