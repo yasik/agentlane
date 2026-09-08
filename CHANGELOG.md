@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-09-07
+
+AgentLane `0.13.1` fixes conversation-history conversion for OpenAI and Azure Responses clients and improves setup documentation.
+
+### Fixed
+
+- Preserved developer instructions, assistant text parts, refusals, and supplied message metadata when replaying conversation history, with consistent ordering for assistant content, function calls, and tool results in streaming and non-streaming requests ([`d908fd5`](https://github.com/yasik/agentlane/commit/d908fd5)).
+- Fixed type-check compatibility with upstream Braintrust and Bun definitions for nested tracing spans and process exit listener removal ([`69a1653`](https://github.com/yasik/agentlane/commit/69a1653)).
+
+### Changed
+
+- Updated the README around persistent, addressable agents and documented Responses conversation-history inputs and limits ([`0ffba04`](https://github.com/yasik/agentlane/commit/0ffba04), [`d908fd5`](https://github.com/yasik/agentlane/commit/d908fd5)).
+
 ## [0.13.0] - 2026-09-01
 
 AgentLane `0.13.0` adds the first persistent-agent workflow and the first cross-harness coworker integration: applications can now preserve a harness agent across process restarts and address a Claude Agent SDK participant through the normal AgentLane runtime.
@@ -255,7 +268,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
-[Unreleased]: https://github.com/yasik/agentlane/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/yasik/agentlane/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/yasik/agentlane/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/yasik/agentlane/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/yasik/agentlane/compare/v0.10.0...v0.11.0
