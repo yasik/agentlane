@@ -4,10 +4,10 @@ import { configEventSchema } from "./protocol-config.ts";
 export type { ConfigErrorCode, ConfigErrorPayload } from "./protocol-config.ts";
 
 /** Current bridge protocol version emitted on app-to-backend commands. */
-export const PROTOCOL_VERSION = "1.0";
+export const PROTOCOL_VERSION = "2.0";
 
 /** Major version accepted by this TypeScript package for backend events. */
-export const PROTOCOL_MAJOR = 1;
+export const PROTOCOL_MAJOR = 2;
 
 // Commands are app-to-backend only. Events are backend-to-app only; keeping the
 // unions separate prevents accidental reuse of event payloads as control input.
@@ -201,7 +201,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
   }),
   run_complete: bridgeEventSchema({
     type: z.literal("run_complete"),
-    final_output: z.string(),
+    final_output: z.unknown(),
     turn_count: z.number(),
     response_count: z.number(),
     shim_state: recordSchema,
@@ -247,7 +247,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     type: z.literal("agent_end"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
-    final_preview: nullableStringSchema,
+    final_output: z.unknown(),
   }),
   llm_start: bridgeEventSchema({
     type: z.literal("llm_start"),
@@ -259,7 +259,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     type: z.literal("llm_end"),
     ...lineageFieldsSchema.shape,
     agent: z.string(),
-    output_preview: nullableStringSchema,
+    output: nullableStringSchema,
     // null when the provider omits usage on this response; treat as missing
     // data rather than zero.
     usage: tokenUsageSchema.nullable(),
@@ -332,7 +332,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
     target: z.string(),
     tool: z.string(),
     tool_call_id: z.string(),
-    final_preview: nullableStringSchema,
+    final_output: z.unknown(),
   }),
   reset: bridgeEventSchema({
     type: z.literal("reset"),
@@ -401,7 +401,7 @@ export type ProviderEvent = EventOf<"provider_event">;
 /** Agent task start event with task lineage. */
 export type AgentStartEvent = EventOf<"agent_start">;
 
-/** Agent task completion event with a final-output preview. */
+/** Agent task completion event with the complete final output. */
 export type AgentEndEvent = EventOf<"agent_end">;
 
 /** Model request start event for an agent turn. */

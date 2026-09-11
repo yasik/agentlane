@@ -44,7 +44,7 @@ def test_protocol_fixtures_are_versioned_and_cover_unique_event_types() -> None:
         expected_name="Python bridge event types",
         actual_name="protocol fixtures",
     )
-    assert all(event["protocol_version"] == "1.0" for event in fixtures)
+    assert all(event["protocol_version"] == "2.0" for event in fixtures)
     assert all(isinstance(event["ts"], int | float) for event in fixtures)
 
 
@@ -102,17 +102,17 @@ def _command_fixture(command_type: str) -> str:
     match command_type:
         case "approve":
             return (
-                '{"protocol_version":"1.0","type":"approve",'
+                '{"protocol_version":"2.0","type":"approve",'
                 '"id":"request-1","allowed":true}\n'
             )
         case "cancel" | "reset" | "shutdown":
-            return f'{{"protocol_version":"1.0","type":"{command_type}"}}\n'
+            return f'{{"protocol_version":"2.0","type":"{command_type}"}}\n'
         case "configure":
             return (
-                '{"protocol_version":"1.0","type":"configure",'
+                '{"protocol_version":"2.0","type":"configure",'
                 '"patch":{"model":"openai/gpt-5.5"}}\n'
             )
         case "prompt":
-            return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
+            return '{"protocol_version":"2.0","type":"prompt","text":"go"}\n'
         case _:
             raise AssertionError(f"Missing command fixture for {command_type}.")

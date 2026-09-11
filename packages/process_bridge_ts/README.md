@@ -8,6 +8,12 @@ settles run, configure, cancel, reset, and close operations.
 The package is UI-framework agnostic. Apps own rendering, conversation state,
 audit panels, and domain-specific reducers.
 
+Protocol `2.0` delivers complete content and structured JSON results. Apps own
+previews and display limits. Upgrade this package and the Python
+`agentlane-process-bridge` backend together; see
+[Protocol 1 migration](../../docs/process-bridge/protocol.md#upgrade-from-protocol-1)
+for renamed fields and consumer changes.
+
 The package is published to npm with the same version as the Python `agentlane`
 package.
 
@@ -147,6 +153,15 @@ Session callbacks provide balanced semantic events:
    startup.
 7. `onEvent` is the raw strict `BridgeEvent` tap for apps that need protocol
    details such as LLM spans, handoffs, provider events, or state snapshots.
+
+`RunResult.finalOutput` and `AgentActivity.finalOutput` in the `end` phase have
+type `unknown` because final outputs can be any JSON value. Tool end results
+also preserve their JSON structure. Validate these values against your app's
+schema before use.
+
+Text callbacks complete or correct streamed text when the final output is a
+string. Structured final outputs are delivered through the run result and
+agent activity callbacks. Apps decide how to display them.
 
 ## Low-Level Building Blocks
 

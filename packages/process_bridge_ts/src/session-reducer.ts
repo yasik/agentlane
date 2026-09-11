@@ -275,7 +275,7 @@ export class SessionReducer {
     this.emitAgent({
       phase: "end",
       info,
-      finalPreview: event.final_preview,
+      finalOutput: event.final_output,
     });
   }
 
@@ -375,10 +375,15 @@ export class SessionReducer {
     );
   }
 
-  private completeRun(finalOutput: string): void {
+  private completeRun(finalOutput: unknown): void {
+    // Structured results belong to the run callback. Only text can reconcile
+    // an assistant text segment without imposing a rendering format.
+    this.text.complete(
+      typeof finalOutput === "string" ? finalOutput : undefined,
+    );
+
     // A completed run should end open tools/agents as cancelled rather than
     // pretending Python sent successful end events it did not send.
-    this.text.complete(finalOutput);
     this.cancelOpenTools();
     this.cancelOpenAgents();
     this.abortApprovals();

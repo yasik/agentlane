@@ -46,7 +46,7 @@ describe("bridge channel", () => {
 
     expect(channel.send({ type: "prompt", text: "hello" })).toBe(true);
     expect(JSON.parse(child.writes[0] ?? "{}")).toMatchObject({
-      protocol_version: "1.0",
+      protocol_version: "2.0",
       type: "prompt",
       text: "hello",
     });

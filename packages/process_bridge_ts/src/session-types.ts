@@ -32,8 +32,9 @@ export type TextChunk = {
    * True on the segment's final chunk, exactly once per opened segment.
    *
    * On the run's last assistant segment, `text` is reconciled against the
-   * authoritative `run_complete.final_output`. If `final_output` is non-empty
-   * with no open assistant segment, the session synthesizes a one-chunk segment.
+   * authoritative `run_complete.final_output` when it is a string. A non-empty
+   * string with no open assistant segment produces a one-chunk segment.
+   * Structured final outputs are delivered through `RunResult` without rendering.
    */
   done: boolean;
 };
@@ -80,6 +81,7 @@ export type ToolActivity =
       phase: "end";
       call: ToolCallInfo;
       ok: boolean;
+      /** Complete tool result; consumers choose how to render it. */
       result: unknown;
       error: ToolErrorPayload | null;
     }
@@ -96,7 +98,7 @@ export type AgentInfo = {
 /** Agent task lifecycle. Balanced like `ToolActivity`. */
 export type AgentActivity =
   | { phase: "start"; info: AgentInfo }
-  | { phase: "end"; info: AgentInfo; finalPreview: string | null }
+  | { phase: "end"; info: AgentInfo; finalOutput: unknown }
   | { phase: "cancelled"; info: AgentInfo };
 
 /** Normalized plan-step status; `PlanUpdate.rawStatus` preserves the wire string. */
@@ -212,7 +214,8 @@ export type ReadyInfo = {
 export type RunResult =
   | {
       status: "completed";
-      finalOutput: string;
+      /** Complete final output, preserving JSON structure. */
+      finalOutput: unknown;
       turnCount: number;
       responseCount: number;
     }

@@ -226,7 +226,7 @@ def test_encoder_maps_llm_and_handoff_lifecycle_events() -> None:
     assert llm_start is not None and llm_start.type == BridgeEventType.LLM_START
     assert llm_start.payload["message_count"] == 1
     assert llm_end is not None and llm_end.type == BridgeEventType.LLM_END
-    assert llm_end.payload["output_preview"] == "done"
+    assert llm_end.payload["output"] == "done"
     # A response without provider usage encodes usage as None (missing data),
     # never a synthesized zero.
     assert llm_end.payload["usage"] is None
@@ -236,7 +236,7 @@ def test_encoder_maps_llm_and_handoff_lifecycle_events() -> None:
     )
     assert handoff_start.payload["target"] == "Child"
     assert handoff_end is not None and handoff_end.type == BridgeEventType.HANDOFF_END
-    assert handoff_end.payload["final_preview"] == "child done"
+    assert handoff_end.payload["final_output"] == "child done"
 
 
 def test_encoder_maps_plan_approval_snapshot_and_diagnostic_run_events() -> None:
@@ -323,7 +323,7 @@ def test_encoder_maps_plan_approval_snapshot_and_diagnostic_run_events() -> None
     assert approval_resolved.payload["allowed"] is True
     assert snapshot is not None and snapshot.type == BridgeEventType.STATE_SNAPSHOT
     assert snapshot.payload["turn_count"] == 2
-    assert agent_end is not None and agent_end.payload["final_preview"] == "done"
+    assert agent_end is not None and agent_end.payload["final_output"] == "done"
     assert unknown is not None and unknown.type == BridgeEventType.RUN_EVENT
     assert unknown.payload["run_event_type"] == "object"
 

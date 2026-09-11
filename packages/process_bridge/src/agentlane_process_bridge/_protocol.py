@@ -7,30 +7,18 @@ import time
 from abc import ABC, abstractmethod
 from contextlib import suppress
 from dataclasses import dataclass, field
-from itertools import islice
 from typing import Literal, TextIO, cast
 
+from pydantic import BaseModel
 from strenum import LowercaseStrEnum
 
 from agentlane.harness import HarnessEventType, RunEventKind
 
-PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION = "2.0"
 """Current process-bridge protocol version written on every outbound event."""
 
-PROTOCOL_MAJOR = 1
+PROTOCOL_MAJOR = 2
 """Major protocol version accepted from inbound commands."""
-
-MAX_EVENT_TEXT_CHARS = 5000
-"""Maximum string length preserved in one outbound event payload field."""
-
-MAX_EVENT_ITEMS = 50
-"""Maximum list or mapping items preserved in one outbound event payload field."""
-
-MAX_TOOL_RESULT_PREVIEW_CHARS = 1800
-"""Maximum tool-result characters sent in compact run-event previews."""
-
-MAX_CONTRACT_PAYLOAD_BYTES = 32_768
-"""Maximum serialized size for one authoritative protocol payload field."""
 
 RESERVED_EVENT_FIELDS = frozenset({"protocol_version", "type", "ts"})
 """Event envelope keys payloads must not overwrite."""
@@ -559,7 +547,7 @@ def build_event(
         "protocol_version": PROTOCOL_VERSION,
         "type": event_type.value,
         "ts": round(ts, 3),
-        **_truncate_payload(payload),
+        **{key: _json_value(value) for key, value in payload.items()},
         **verbatim_fields,
     }
 
@@ -655,10 +643,6 @@ def _supports_protocol_version(value: object) -> bool:
     return major == PROTOCOL_MAJOR
 
 
-def _truncate_payload(payload: dict[str, object]) -> dict[str, object]:
-    return {key: _truncate_value(value) for key, value in payload.items()}
-
-
 def _validated_verbatim_payload(
     payload: dict[str, object] | None,
 ) -> dict[str, object]:
@@ -673,7 +657,7 @@ def _validated_verbatim_payload(
 
 def _validate_contract_payload_field(key: str, value: object) -> None:
     try:
-        serialized = json.dumps(
+        json.dumps(
             value,
             ensure_ascii=False,
             allow_nan=False,
@@ -684,17 +668,10 @@ def _validate_contract_payload_field(key: str, value: object) -> None:
             f"Contract payload field {key!r} is not JSON-serializable.",
         ) from exc
 
-    byte_count = len(serialized.encode())
-    if byte_count > MAX_CONTRACT_PAYLOAD_BYTES:
-        raise ContractPayloadError(
-            f"Contract payload field {key!r} exceeds "
-            f"{MAX_CONTRACT_PAYLOAD_BYTES} bytes.",
-        )
 
-
-def _truncate_value(value: object) -> object:
-    """Bound payload sizes while leaving explicit truncation markers."""
-    if value is None or isinstance(value, (int, bool)):
+def _json_value(value: object, *, ancestors: frozenset[int] = frozenset()) -> object:
+    """Convert Python values to JSON shapes without applying display limits."""
+    if value is None or isinstance(value, (str, int, bool)):
         return value
 
     # JSON forbids NaN and Infinity when allow_nan=False, so preserve them as
@@ -702,41 +679,27 @@ def _truncate_value(value: object) -> object:
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
 
-    if isinstance(value, str) and len(value) > MAX_EVENT_TEXT_CHARS:
-        omitted = len(value) - MAX_EVENT_TEXT_CHARS
-        return (
-            value[:MAX_EVENT_TEXT_CHARS].rstrip()
-            + f"\n[truncated, +{omitted} more chars]"
-        )
+    # JSON cannot represent cycles. Track only this branch so repeated values
+    # in independent branches still retain their structure.
+    if id(value) in ancestors:
+        return str(value)
 
-    if isinstance(value, str):
-        return value
+    ancestors = ancestors | {id(value)}
 
-    if isinstance(value, list):
-        items = cast(list[object], value)
-        truncated_items = [_truncate_value(item) for item in items[:MAX_EVENT_ITEMS]]
-
-        if len(items) > MAX_EVENT_ITEMS:
-            truncated_items.append(f"... (+{len(items) - MAX_EVENT_ITEMS} more)")
-
-        return truncated_items
-
-    if isinstance(value, tuple):
-        # Tuples are not a JSON shape; normalize them through the list branch so
-        # the same item limits and recursive truncation apply.
-        return _truncate_value(list(cast(tuple[object, ...], value)))
+    if isinstance(value, (list, tuple)):
+        items = cast(list[object] | tuple[object, ...], value)
+        return [_json_value(item, ancestors=ancestors) for item in items]
 
     if isinstance(value, dict):
         mapping = cast(dict[object, object], value)
-        truncated_mapping = {
-            str(key): _truncate_value(item)
-            for key, item in islice(mapping.items(), MAX_EVENT_ITEMS)
+        return {
+            str(key): _json_value(item, ancestors=ancestors)
+            for key, item in mapping.items()
         }
 
-        if len(mapping) > MAX_EVENT_ITEMS:
-            truncated_mapping["..."] = f"+{len(mapping) - MAX_EVENT_ITEMS} more"
+    if isinstance(value, BaseModel):
+        return _json_value(value.model_dump(mode="python"), ancestors=ancestors)
 
-        return truncated_mapping
-
-    # Last-resort values still need to be protocol-safe and bounded.
-    return _truncate_value(str(value))
+    # Unsupported Python objects keep the existing text fallback. JSON values
+    # and result models above retain their structure and complete content.
+    return str(value)

@@ -37,7 +37,7 @@ describe("event decoding", () => {
   test("decodes known event payloads", () => {
     const decoded = decodeBridgeEventLine(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "error",
         ts: 1,
         message: "bad",
@@ -46,7 +46,7 @@ describe("event decoding", () => {
     );
 
     expect(decoded).toMatchObject({
-      protocol_version: "1.0",
+      protocol_version: "2.0",
       type: "error",
       ts: 1,
       message: "bad",
@@ -56,7 +56,7 @@ describe("event decoding", () => {
 
   test("decodes llm_end token usage and tolerates null usage", () => {
     const base = {
-      protocol_version: "1.0",
+      protocol_version: "2.0",
       type: "llm_end",
       ts: 1,
       task_id: "task",
@@ -64,7 +64,7 @@ describe("event decoding", () => {
       is_root: true,
       is_subagent: false,
       agent: "Root",
-      output_preview: "done",
+      output: "done",
     };
 
     const withUsage = decodeBridgeEventLine(
@@ -94,7 +94,7 @@ describe("event decoding", () => {
 
   test("rejects missing typed fields", () => {
     const error = decodeErrorFor(
-      JSON.stringify({ protocol_version: "1.0", type: "run_start", ts: 1 }),
+      JSON.stringify({ protocol_version: "2.0", type: "run_start", ts: 1 }),
     );
 
     expect(error.fields).toEqual(["prompt"]);
@@ -103,7 +103,7 @@ describe("event decoding", () => {
   test("rejects missing raw fields", () => {
     const toolStartError = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "tool_start",
         ts: 1,
         task_id: "task",
@@ -119,7 +119,7 @@ describe("event decoding", () => {
     );
     const planUpdateError = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "plan_updated",
         ts: 1,
         task_id: "task",
@@ -140,7 +140,7 @@ describe("event decoding", () => {
   test("rejects approval request payload drift with nested field paths", () => {
     const error = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "approval_request",
         ts: 1,
         id: "approval-1",
@@ -156,7 +156,7 @@ describe("event decoding", () => {
   test("rejects extra fields on known event payloads", () => {
     const error = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "run_start",
         ts: 1,
         prompt: "go",
@@ -170,7 +170,7 @@ describe("event decoding", () => {
   test("rejects extra fields on nested protocol payloads", () => {
     const error = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "llm_end",
         ts: 1,
         task_id: "task",
@@ -178,7 +178,7 @@ describe("event decoding", () => {
         is_root: true,
         is_subagent: false,
         agent: "Root",
-        output_preview: "done",
+        output: "done",
         usage: {
           prompt_tokens: 1200,
           completion_tokens: 340,
@@ -194,7 +194,7 @@ describe("event decoding", () => {
   test("decodes ready, reset, and config documents", () => {
     const ready = decodeBridgeEventLine(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "ready",
         ts: 1,
         version: "0.1.0",
@@ -204,7 +204,7 @@ describe("event decoding", () => {
     );
     const config = decodeBridgeEventLine(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "config",
         ts: 2,
         ok: true,
@@ -214,7 +214,7 @@ describe("event decoding", () => {
     );
     const reset = decodeBridgeEventLine(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "reset",
         ts: 3,
         config: { model: "anthropic/claude-opus-4-8" },
@@ -236,7 +236,7 @@ describe("event decoding", () => {
     for (const code of ["invalid", "unsupported", "rejected", "internal"]) {
       const decoded = decodeBridgeEventLine(
         JSON.stringify({
-          protocol_version: "1.0",
+          protocol_version: "2.0",
           type: "config",
           ts: 1,
           ok: false,
@@ -256,7 +256,7 @@ describe("event decoding", () => {
   test("rejects invalid config settlement invariants", () => {
     const successWithoutConfig = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "config",
         ts: 1,
         ok: true,
@@ -266,7 +266,7 @@ describe("event decoding", () => {
     );
     const failureWithoutError = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "config",
         ts: 1,
         ok: false,
@@ -282,7 +282,7 @@ describe("event decoding", () => {
   test("rejects unknown events", () => {
     const error = decodeErrorFor(
       JSON.stringify({
-        protocol_version: "1.0",
+        protocol_version: "2.0",
         type: "new_event",
         ts: 1,
         value: true,
@@ -296,7 +296,7 @@ describe("event decoding", () => {
   test("rejects unsupported protocol major versions", () => {
     expect(
       tryDecodeBridgeEventLine(
-        JSON.stringify({ protocol_version: "2.0", type: "ready", ts: 1 }),
+        JSON.stringify({ protocol_version: "1.0", type: "ready", ts: 1 }),
       ),
     ).toBeNull();
   });

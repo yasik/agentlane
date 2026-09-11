@@ -14,6 +14,10 @@ Every protocol object carries:
 Events also carry `ts`, a Unix timestamp rounded to milliseconds. Event fields
 stay flat for app consumption.
 
+The current protocol version is `2.0`. Both packages accept major version 2
+and reject major version 1. Upgrade the Python backend and TypeScript host
+together.
+
 Commands:
 
 1. `prompt` with `text`
@@ -81,6 +85,58 @@ Unhandled AgentLane run-event classes encode as the explicit `run_event`
 diagnostic event. Unknown bridge protocol event names and invalid payloads fail
 strict TypeScript decoding and are reported as `BridgeDecodeError` values
 instead of being delivered to app reducers.
+
+## Payload Values
+
+The bridge sends complete content. It does not shorten strings, limit list or
+object entries, or create result previews. Apps choose their own display
+limits, folding, and pagination.
+
+The event writer preserves JSON-compatible values and nested structure. Python
+tuples become JSON arrays, dictionary keys become strings, and Pydantic models
+become JSON objects. Non-finite floats and other unsupported Python objects use
+their complete `str(value)` representation. Return JSON-compatible values or
+Pydantic models when consumers need structured results.
+
+Circular references have no JSON representation. A circular entry uses its
+text representation while other entries retain their structure. If result
+serialization fails, the backend reports a run error instead of leaving the
+run without a terminal event.
+
+The result fields are:
+
+| Event | Field | Value |
+| --- | --- | --- |
+| `tool_end` | `result` | Complete JSON value, including objects and arrays |
+| `agent_end`, `handoff_end` | `final_output` | Complete JSON value or `null` |
+| `llm_end` | `output` | Complete text or `null` |
+| `run_complete` | `final_output` | Complete JSON value or `null` |
+
+The `EventWriter` argument `verbatim_payload` requires JSON-serializable values
+and rejects invalid values. It has no payload size cap. Queue backpressure and write
+timeouts still apply; they do not change event content.
+
+## Upgrade from Protocol 1
+
+Upgrade `agentlane-process-bridge` and `@agentlanejs/process-bridge` together.
+Custom Python command producers must send `protocol_version: "2.0"`. The
+TypeScript command encoder supplies the version automatically.
+
+Update consumers as follows:
+
+1. Replace `agent_end.final_preview` and `handoff_end.final_preview` with
+   `final_output`.
+2. Replace `llm_end.output_preview` with `output`.
+3. Replace TypeScript `AgentActivity.finalPreview` with `finalOutput`.
+4. Validate TypeScript `RunResult.finalOutput`, agent `finalOutput`, and tool
+   results before use. These values can contain structured data; do not assume
+   that they are strings.
+5. Apply any display limits in app code. The bridge supplies complete values.
+
+The old field names have no aliases. TypeScript text callbacks use string
+final outputs to complete or correct streamed text. Structured final outputs
+are available through run results and agent activity callbacks; the bridge
+does not convert them to display text.
 
 ## Low-Level TypeScript Primitives
 

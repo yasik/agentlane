@@ -10,12 +10,13 @@ from agentlane_process_bridge import (
     ContractPayloadError,
     EventWriter,
 )
+from pydantic import BaseModel
 
 LONG_TEXT_CHARS = 5004
 LONG_ITEM_COUNT = 52
 
 
-def test_event_writer_emits_versioned_bounded_json_line() -> None:
+def test_event_writer_preserves_complete_nested_json_values() -> None:
     async def scenario() -> None:
         output = StringIO()
         writer = EventWriter(output)
@@ -23,23 +24,33 @@ def test_event_writer_emits_versioned_bounded_json_line() -> None:
             BridgeEventType.READY,
             text="x" * LONG_TEXT_CHARS,
             items=list(range(LONG_ITEM_COUNT)),
+            mapping={
+                str(index): {"text": "x" * LONG_TEXT_CHARS}
+                for index in range(LONG_ITEM_COUNT)
+            },
+            nested=({"items": list(range(LONG_ITEM_COUNT))},),
             custom=object(),
         )
 
         line = output.getvalue().strip()
         event = json.loads(line)
-        assert event["protocol_version"] == "1.0"
+        assert event["protocol_version"] == "2.0"
         assert event["type"] == "ready"
         assert isinstance(event["ts"], float)
-        assert event["text"].endswith("[truncated, +4 more chars]")
-        assert event["items"][-1] == "... (+2 more)"
+        assert event["text"] == "x" * LONG_TEXT_CHARS
+        assert event["items"] == list(range(LONG_ITEM_COUNT))
+        assert event["mapping"] == {
+            str(index): {"text": "x" * LONG_TEXT_CHARS}
+            for index in range(LONG_ITEM_COUNT)
+        }
+        assert event["nested"] == [{"items": list(range(LONG_ITEM_COUNT))}]
         assert event["custom"].startswith("<object object at ")
         await writer.aclose()
 
     asyncio.run(scenario())
 
 
-def test_event_writer_truncates_custom_object_strings() -> None:
+def test_event_writer_preserves_complete_custom_object_strings() -> None:
     class LongText:
         def __str__(self) -> str:
             return "x" * LONG_TEXT_CHARS
@@ -50,7 +61,7 @@ def test_event_writer_truncates_custom_object_strings() -> None:
         await writer.emit(BridgeEventType.READY, custom=LongText())
 
         [event] = [json.loads(line) for line in output.getvalue().splitlines()]
-        assert event["custom"].endswith("[truncated, +4 more chars]")
+        assert event["custom"] == "x" * LONG_TEXT_CHARS
         await writer.aclose()
 
     asyncio.run(scenario())
@@ -69,7 +80,7 @@ def test_event_writer_preserves_verbatim_contract_payload() -> None:
         )
 
         [event] = [json.loads(line) for line in output.getvalue().splitlines()]
-        assert event["items"][-1] == "... (+2 more)"
+        assert event["items"] == list(range(LONG_ITEM_COUNT))
         assert event["config"] == config
         await writer.aclose()
 
@@ -135,18 +146,36 @@ def test_event_writer_rejects_reserved_envelope_payload_fields() -> None:
     asyncio.run(scenario())
 
 
-def test_event_writer_rejects_oversize_contract_payload() -> None:
+def test_event_writer_preserves_large_contract_payload() -> None:
     async def scenario() -> None:
         output = StringIO()
         writer = EventWriter(output)
 
-        with pytest.raises(ContractPayloadError):
-            await writer.emit(
-                BridgeEventType.READY,
-                verbatim_payload={"config": {"text": "x" * 40_000}},
-            )
+        config = {"text": "界🧪" * 40_000}
+        await writer.emit(
+            BridgeEventType.READY,
+            verbatim_payload={"config": config},
+        )
 
-        assert output.getvalue() == ""
+        [event] = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert event["config"] == config
+        await writer.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_event_writer_preserves_structured_result_models() -> None:
+    class Result(BaseModel):
+        items: list[dict[str, object]]
+
+    async def scenario() -> None:
+        output = StringIO()
+        writer = EventWriter(output)
+        result = Result(items=[{"text": "界🧪" * 5001, "ok": True, "value": None}] * 51)
+        await writer.emit(BridgeEventType.TOOL_END, result=result)
+
+        [event] = [json.loads(line) for line in output.getvalue().splitlines()]
+        assert event["result"] == result.model_dump()
         await writer.aclose()
 
     asyncio.run(scenario())

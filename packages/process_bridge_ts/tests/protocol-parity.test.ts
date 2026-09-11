@@ -36,7 +36,7 @@ describe("protocol fixtures", () => {
     expect(() =>
       decodeBridgeEventLine(
         JSON.stringify({
-          protocol_version: "1.0",
+          protocol_version: "2.0",
           type: "tool_end",
           ts: 1,
         }),
