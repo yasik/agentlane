@@ -339,6 +339,16 @@ class BridgeBackend:
             # it here so failures are reported at the run boundary, not leaked
             # as unobserved task exceptions.
             result = await stream.result()
+
+            # Final output serialization is part of the run. Report failures
+            # through the same terminal error path as streamed event failures.
+            await self.events.emit(
+                BridgeEventType.RUN_COMPLETE,
+                final_output=result.final_output,
+                turn_count=result.turn_count,
+                response_count=len(result.responses),
+                shim_state=_run_shim_state(result.run_state or self.agent.run_state),
+            )
         except asyncio.CancelledError:
             token.cancel()
             await self._handle_cancelled_run(stream)
@@ -347,14 +357,6 @@ class BridgeBackend:
             _logger.exception("bridge_run_failed")
             await self._handle_failed_run(stream, exc)
             return
-        else:
-            await self.events.emit(
-                BridgeEventType.RUN_COMPLETE,
-                final_output=str(result.final_output),
-                turn_count=result.turn_count,
-                response_count=len(result.responses),
-                shim_state=_run_shim_state(result.run_state or self.agent.run_state),
-            )
         finally:
             # A stale run task can finish after a new run has started. Only the
             # task that still owns the active slot may clear it.

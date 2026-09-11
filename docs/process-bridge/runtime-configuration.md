@@ -29,8 +29,9 @@ state at runtime.
    value to change through `session.configure(...)`, it belongs in the config
    document, not only in metadata.
 4. Both payloads are app-defined JSON objects. The bridge validates the envelope
-   and size, but the app owns their inner schemas. Use `decodeConfig` for config
-   documents; validate metadata in app code if you depend on specific keys.
+   and JSON serialization, but the app owns their inner schemas. Use
+   `decodeConfig` for config documents; validate metadata in app code if you
+   depend on specific keys.
 
 For example, model display data can live in metadata, while the selected model
 lives in config:
@@ -125,9 +126,9 @@ current document inside the reset event so the UI stays synchronized. Top-level
 patch values must not be `undefined`; reset or disabled semantics should be
 explicit app-defined values.
 
-Config documents are opaque to the bridge but contract-critical: they are not
-truncated. Documents that are not JSON-serializable or exceed the contract cap
-fail loudly instead of being delivered as partial truth.
+The bridge sends complete config documents without a size cap. Documents that
+are not JSON-serializable fail with an explicit error. The app owns validation
+and any limits on its config schema.
 
 ## Model Settings Propagation
 

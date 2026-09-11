@@ -27,6 +27,13 @@ The backend accepts one active prompt at a time, streams AgentLane
 active streams with AgentLane's `aclose()` then `result()` drain pattern during
 cancel, reset, shutdown, and EOF teardown.
 
+The bridge sends complete content and preserves JSON-compatible result
+structure. It does not create previews or apply string, collection, or config
+size caps. Apps own display limits. Python tuples become JSON arrays, Pydantic
+models become objects, and unsupported values use their complete text form.
+See [Payload Values](../../docs/process-bridge/protocol.md#payload-values) for
+result fields and serialization behavior.
+
 App-facing TypeScript consumers should usually launch the backend through:
 
 ```bash

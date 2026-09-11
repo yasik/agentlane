@@ -64,7 +64,7 @@ describe("event decoding", () => {
       is_root: true,
       is_subagent: false,
       agent: "Root",
-      output_preview: "done",
+      output: "done",
     };
 
     const withUsage = decodeBridgeEventLine(
@@ -178,7 +178,7 @@ describe("event decoding", () => {
         is_root: true,
         is_subagent: false,
         agent: "Root",
-        output_preview: "done",
+        output: "done",
         usage: {
           prompt_tokens: 1200,
           completion_tokens: 340,

@@ -46,9 +46,9 @@ the emitted `BridgeEventType` values, and its encoder implementation.
 
 ## Add Runtime Config Handling
 
-1. Define the app-owned config document shape in Python and TypeScript. Keep it
-   small; every announced document must be JSON-serializable and fit under the
-   bridge contract payload cap.
+1. Define the app-owned config document shape in Python and TypeScript. Every
+   announced document must be JSON-serializable. The app owns schema validation;
+   the bridge sends the complete document without a size cap.
 2. Validate raw patches into a named app patch type at the Python boundary. Do
    not thread generic dict lookups through the store's application logic.
 3. Implement `RuntimeConfigStore.snapshot()` to return the full current

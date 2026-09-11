@@ -2,7 +2,6 @@ import asyncio
 from io import StringIO
 from pathlib import Path
 
-import pytest
 from agentlane_process_bridge import (
     BRIDGE_COMMAND_HANDLERS,
     ApproveCommand,
@@ -13,7 +12,6 @@ from agentlane_process_bridge import (
     CancelCommand,
     ConfigRejectedError,
     ConfigureCommand,
-    ContractPayloadError,
     EventWriter,
     PromptCommand,
     ResetCommand,
@@ -283,7 +281,7 @@ def test_configure_reports_internal_error_with_truth_snapshot() -> None:
     asyncio.run(scenario())
 
 
-def test_configure_oversize_document_fails_loudly() -> None:
+def test_configure_preserves_large_document() -> None:
     async def scenario() -> None:
         output = StringIO()
         store = _ConfigStore({"model": "openai/gpt-5.5"})
@@ -293,12 +291,12 @@ def test_configure_oversize_document_fails_loudly() -> None:
             config=store,
         )
 
-        with pytest.raises(ContractPayloadError):
-            await backend.handle_command(
-                ConfigureCommand(patch={"catalog": "x" * 40_000})
-            )
+        await backend.handle_command(ConfigureCommand(patch={"catalog": "x" * 40_000}))
 
-        assert emitted_events(output) == []
+        [event] = emitted_events(output)
+        assert event["ok"] is True
+        assert event["config"] == store.snapshot()
+        assert event["config"]["catalog"] == "x" * 40_000
         await backend.close()
 
     asyncio.run(scenario())

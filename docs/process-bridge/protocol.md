@@ -82,6 +82,42 @@ diagnostic event. Unknown bridge protocol event names and invalid payloads fail
 strict TypeScript decoding and are reported as `BridgeDecodeError` values
 instead of being delivered to app reducers.
 
+## Payload Values
+
+The bridge sends complete content. It does not shorten strings, limit list or
+object entries, or create result previews. Apps choose their own display
+limits, folding, and pagination.
+
+The event writer preserves JSON-compatible values and nested structure. Python
+tuples become JSON arrays, dictionary keys become strings, and Pydantic models
+become JSON objects. Non-finite floats and other unsupported Python objects use
+their complete `str(value)` representation. Return JSON-compatible values or
+Pydantic models when consumers need structured results.
+
+Circular references have no JSON representation. A circular entry uses its
+text representation while other entries retain their structure. If result
+serialization fails, the backend reports a run error instead of leaving the
+run without a terminal event.
+
+The result fields are:
+
+| Event | Field | Value |
+| --- | --- | --- |
+| `tool_end` | `result` | Complete JSON value, including objects and arrays |
+| `agent_end`, `handoff_end` | `final_output` | Complete JSON value or `null` |
+| `llm_end` | `output` | Complete text or `null` |
+| `run_complete` | `final_output` | Complete JSON value or `null` |
+
+The `EventWriter` argument `verbatim_payload` requires JSON-serializable values
+and rejects invalid values. It has no payload size cap. Queue backpressure and
+write timeouts still apply; they do not change event content.
+
+Validate TypeScript `RunResult.finalOutput`, agent `finalOutput`, and tool
+results against the app schema before use. These values can contain structured
+data. TypeScript text callbacks use string final outputs to complete or correct
+streamed text. Structured final outputs are available through run results and
+agent activity callbacks. Apps decide how to display them.
+
 ## Low-Level TypeScript Primitives
 
 The TypeScript package also exports protocol, process, and channel helpers:

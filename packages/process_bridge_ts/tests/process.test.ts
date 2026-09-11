@@ -145,6 +145,7 @@ describe("process wiring", () => {
 
   test("drives the Python stdio backend through the channel API", async () => {
     const repoRoot = resolve(import.meta.dir, "../../..");
+    const prompt = `${"界🧪".repeat(4000)} tail`;
     const events: BridgeEvent[] = [];
     const invalid: string[] = [];
     const stderr: string[] = [];
@@ -185,7 +186,7 @@ describe("process wiring", () => {
         if (!readySeen || promptSent || channel === null) return;
 
         promptSent = true;
-        if (!channel.send({ type: "prompt", text: "hello" })) {
+        if (!channel.send({ type: "prompt", text: prompt })) {
           fail(new Error("failed to send prompt to Python bridge"));
         }
       };
@@ -226,6 +227,15 @@ describe("process wiring", () => {
               expect(signal).toBeNull();
               expect(invalid).toEqual([]);
               expect(stderr).toEqual([]);
+              expect(
+                events.find((event) => event.type === "assistant_delta"),
+              ).toMatchObject({ text: `Echo: ${prompt}` });
+              expect(
+                events.find((event) => event.type === "agent_end"),
+              ).toMatchObject({ final_output: `Echo: ${prompt}` });
+              expect(
+                events.find((event) => event.type === "run_complete"),
+              ).toMatchObject({ final_output: `Echo: ${prompt}` });
               expect(events.map((event) => event.type)).toEqual([
                 "ready",
                 "run_start",

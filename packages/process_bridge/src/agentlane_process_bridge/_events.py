@@ -41,7 +41,7 @@ from agentlane.models import (
     get_usage_totals,
 )
 
-from ._protocol import ERROR_SCOPE_RUN, MAX_TOOL_RESULT_PREVIEW_CHARS, BridgeEventType
+from ._protocol import ERROR_SCOPE_RUN, BridgeEventType
 
 _logger = structlog.get_logger(__name__)
 
@@ -305,7 +305,7 @@ class AgentEndRunEventHandler(RunEventBridgeHandler):
             {
                 **_lineage_payload(run_event),
                 "agent": run_event.task_name,
-                "final_preview": _result_preview(run_event.result),
+                "final_output": _final_output(run_event.result),
             },
         )
 
@@ -353,7 +353,7 @@ class LLMEndRunEventHandler(RunEventBridgeHandler):
             {
                 **_lineage_payload(run_event),
                 "agent": run_event.task_name,
-                "output_preview": _response_preview(run_event.response),
+                "output": get_content_or_none(run_event.response),
                 "usage": _usage_payload(run_event.response),
             },
         )
@@ -415,10 +415,7 @@ class ToolEndRunEventHandler(RunEventBridgeHandler):
                 "is_plan": tool_name == PLAN_TOOL_NAME,
                 "is_delegation": run_event.is_delegation,
                 "ok": run_event.ok,
-                "result": _preview_text(
-                    str(run_event.result),
-                    limit=MAX_TOOL_RESULT_PREVIEW_CHARS,
-                ),
+                "result": run_event.result,
                 "error": (
                     None
                     if run_event.error is None
@@ -590,7 +587,7 @@ class HandoffEndRunEventHandler(RunEventBridgeHandler):
                 "target": run_event.target_name,
                 "tool": _tool_name(run_event.tool_call),
                 "tool_call_id": run_event.tool_call.id,
-                "final_preview": _result_preview(run_event.result),
+                "final_output": _final_output(run_event.result),
             },
         )
 
@@ -645,14 +642,11 @@ def _format_tool_arguments(arguments: str) -> object:
         return arguments
 
 
-def _result_preview(result: RunResult | None) -> str | None:
+def _final_output(result: RunResult | None) -> object:
     if result is None:
         return None
-    return _preview_text(str(result.final_output))
 
-
-def _response_preview(response: ModelResponse) -> str | None:
-    return _preview_text(get_content_or_none(response))
+    return result.final_output
 
 
 def _usage_payload(response: ModelResponse) -> dict[str, int] | None:
@@ -670,17 +664,6 @@ def _usage_payload(response: ModelResponse) -> dict[str, int] | None:
         "completion_tokens": totals.completion_tokens,
         "total_tokens": totals.total_tokens,
     }
-
-
-def _preview_text(text: str | None, *, limit: int = 500) -> str | None:
-    if text is None:
-        return None
-
-    if len(text) <= limit:
-        return text
-
-    omitted = len(text) - limit
-    return text[:limit].rstrip() + f"\n[truncated, +{omitted} more chars]"
 
 
 def _approval_request_payload(request: ToolPermissionRequest) -> ApprovalRequestPayload:

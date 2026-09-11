@@ -85,7 +85,7 @@
     "parent_task_id": null,
     "is_root": true,
     "is_subagent": false,
-    "final_preview": "Done"
+    "final_output": "Done"
   },
   {
     "protocol_version": "1.0",
@@ -107,7 +107,7 @@
     "parent_task_id": null,
     "is_root": true,
     "is_subagent": false,
-    "output_preview": "Done",
+    "output": "Done",
     "usage": {
       "prompt_tokens": 1200,
       "completion_tokens": 340,
@@ -251,7 +251,7 @@
     "target": "Reviewer",
     "tool": "handoff",
     "tool_call_id": "call_handoff",
-    "final_preview": "Reviewed"
+    "final_output": "Reviewed"
   },
   {
     "protocol_version": "1.0",

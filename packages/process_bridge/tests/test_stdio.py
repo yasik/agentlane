@@ -44,14 +44,14 @@ class _PrintingAgent(FakeAgent):
         )
 
 
-class _HugeConfigStore:
+class _InvalidConfigStore:
     def snapshot(self) -> dict[str, object]:
         return {"model": "openai/gpt-5.5"}
 
     def apply(self, patch: dict[str, object]) -> dict[str, object]:
         del patch
 
-        return {"catalog": "x" * 40_000}
+        return {"catalog": object()}
 
 
 class _FailingSnapshotStore:
@@ -270,7 +270,7 @@ def test_serve_stdio_reraises_contract_payload_errors() -> None:
         backend = BridgeBackend(
             agent=FakeAgent(),
             events=EventWriter(output),
-            config=_HugeConfigStore(),
+            config=_InvalidConfigStore(),
         )
 
         with pytest.raises(ContractPayloadError):
