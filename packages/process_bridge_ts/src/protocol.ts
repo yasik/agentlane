@@ -4,10 +4,10 @@ import { configEventSchema } from "./protocol-config.ts";
 export type { ConfigErrorCode, ConfigErrorPayload } from "./protocol-config.ts";
 
 /** Current bridge protocol version emitted on app-to-backend commands. */
-export const PROTOCOL_VERSION = "2.0";
+export const PROTOCOL_VERSION = "1.0";
 
 /** Major version accepted by this TypeScript package for backend events. */
-export const PROTOCOL_MAJOR = 2;
+export const PROTOCOL_MAJOR = 1;
 
 // Commands are app-to-backend only. Events are backend-to-app only; keeping the
 // unions separate prevents accidental reuse of event payloads as control input.

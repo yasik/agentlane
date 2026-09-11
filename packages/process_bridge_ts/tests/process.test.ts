@@ -35,7 +35,7 @@ describe("process wiring", () => {
 
     stdout.write(
       `${JSON.stringify({
-        protocol_version: "2.0",
+        protocol_version: "1.0",
         type: "run_start",
         ts: 1,
         prompt: "go",
@@ -61,7 +61,7 @@ describe("process wiring", () => {
     wiring.dispose();
     stdout.write(
       `${JSON.stringify({
-        protocol_version: "2.0",
+        protocol_version: "1.0",
         type: "run_start",
         ts: 3,
         prompt: "ignored",
@@ -95,7 +95,7 @@ describe("process wiring", () => {
     expect(() => {
       stdout.write(
         `${JSON.stringify({
-          protocol_version: "2.0",
+          protocol_version: "1.0",
           type: "run_start",
           ts: 1,
           prompt: "go",
@@ -121,7 +121,7 @@ describe("process wiring", () => {
           command: process.execPath,
           args: [
             "-e",
-            "process.stdout.write(JSON.stringify({protocol_version:'2.0',type:'shutdown',ts:1}) + '\\n');",
+            "process.stdout.write(JSON.stringify({protocol_version:'1.0',type:'shutdown',ts:1}) + '\\n');",
           ],
         },
         {

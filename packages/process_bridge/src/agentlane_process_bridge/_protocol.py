@@ -14,10 +14,10 @@ from strenum import LowercaseStrEnum
 
 from agentlane.harness import HarnessEventType, RunEventKind
 
-PROTOCOL_VERSION = "2.0"
+PROTOCOL_VERSION = "1.0"
 """Current process-bridge protocol version written on every outbound event."""
 
-PROTOCOL_MAJOR = 2
+PROTOCOL_MAJOR = 1
 """Major protocol version accepted from inbound commands."""
 
 RESERVED_EVENT_FIELDS = frozenset({"protocol_version", "type", "ts"})

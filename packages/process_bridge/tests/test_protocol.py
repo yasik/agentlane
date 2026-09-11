@@ -34,7 +34,7 @@ def test_event_writer_preserves_complete_nested_json_values() -> None:
 
         line = output.getvalue().strip()
         event = json.loads(line)
-        assert event["protocol_version"] == "2.0"
+        assert event["protocol_version"] == "1.0"
         assert event["type"] == "ready"
         assert isinstance(event["ts"], float)
         assert event["text"] == "x" * LONG_TEXT_CHARS

@@ -27,13 +27,12 @@ The backend accepts one active prompt at a time, streams AgentLane
 active streams with AgentLane's `aclose()` then `result()` drain pattern during
 cancel, reset, shutdown, and EOF teardown.
 
-Protocol `2.0` sends complete content and preserves JSON-compatible result
+The bridge sends complete content and preserves JSON-compatible result
 structure. It does not create previews or apply string, collection, or config
 size caps. Apps own display limits. Python tuples become JSON arrays, Pydantic
 models become objects, and unsupported values use their complete text form.
-Upgrade the Python backend and TypeScript host together; see
-[Protocol 1 migration](../../docs/process-bridge/protocol.md#upgrade-from-protocol-1)
-for renamed fields and structured result handling.
+See [Payload Values](../../docs/process-bridge/protocol.md#payload-values) for
+result fields and serialization behavior.
 
 App-facing TypeScript consumers should usually launch the backend through:
 

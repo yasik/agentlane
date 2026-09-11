@@ -8,11 +8,10 @@ settles run, configure, cancel, reset, and close operations.
 The package is UI-framework agnostic. Apps own rendering, conversation state,
 audit panels, and domain-specific reducers.
 
-Protocol `2.0` delivers complete content and structured JSON results. Apps own
-previews and display limits. Upgrade this package and the Python
-`agentlane-process-bridge` backend together; see
-[Protocol 1 migration](../../docs/process-bridge/protocol.md#upgrade-from-protocol-1)
-for renamed fields and consumer changes.
+The bridge delivers complete content and structured JSON results. Apps own
+previews and display limits. See
+[Payload Values](../../docs/process-bridge/protocol.md#payload-values) for
+result fields and serialization behavior.
 
 The package is published to npm with the same version as the Python `agentlane`
 package.

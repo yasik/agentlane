@@ -119,7 +119,7 @@ def test_backend_start_emits_ready_with_metadata() -> None:
 
         [event] = emitted_events(output)
         assert event["type"] == "ready"
-        assert event["protocol_version"] == "2.0"
+        assert event["protocol_version"] == "1.0"
         assert event["package"] == "agentlane-process-bridge"
         assert event["metadata"] == {"app": "demo"}
         assert "config" not in event

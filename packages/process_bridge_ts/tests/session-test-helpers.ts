@@ -82,7 +82,7 @@ export class FakeChild implements BridgeChildLike {
 
   emitEvent(event: Record<string, unknown>): void {
     this.stdout.write(
-      `${JSON.stringify({ protocol_version: "2.0", ...event })}\n`,
+      `${JSON.stringify({ protocol_version: "1.0", ...event })}\n`,
     );
   }
 

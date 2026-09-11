@@ -77,7 +77,7 @@ def test_serve_stdio_reports_bad_command_and_survives() -> None:
         await serve_stdio(
             backend,
             readline=_read_lines(
-                ["not-json\n", '{"protocol_version":"2.0","type":"shutdown"}\n']
+                ["not-json\n", '{"protocol_version":"1.0","type":"shutdown"}\n']
             ),
         )
 
@@ -125,7 +125,7 @@ def create_backend():
         monkeypatch.setattr(
             sys,
             "stdin",
-            StringIO('{"protocol_version":"2.0","type":"shutdown"}\n'),
+            StringIO('{"protocol_version":"1.0","type":"shutdown"}\n'),
         )
 
         try:
@@ -154,7 +154,7 @@ def test_run_stdio_ready_metadata_stdout_is_not_protocol_output() -> None:
         with redirect_stdout(protocol_output), redirect_stderr(stderr):
             await run_stdio(
                 agent=FakeAgent(),
-                stdin=StringIO('{"protocol_version":"2.0","type":"shutdown"}\n'),
+                stdin=StringIO('{"protocol_version":"1.0","type":"shutdown"}\n'),
                 ready_metadata=ready_metadata,
             )
 
@@ -179,10 +179,10 @@ def test_serve_stdio_rejects_invalid_command_shapes() -> None:
                     "{}\n",
                     '{"type":"prompt","text":"missing version"}\n',
                     (
-                        '{"protocol_version":"1.0","type":"prompt",'
+                        '{"protocol_version":"2.0","type":"prompt",'
                         '"text":"bad version"}\n'
                     ),
-                    '{"protocol_version":"2.0","type":"shutdown"}\n',
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
                 ]
             ),
         )
@@ -227,10 +227,10 @@ def test_serve_stdio_denies_non_boolean_approval_values() -> None:
             readline=_read_lines(
                 [
                     (
-                        '{"protocol_version":"2.0","type":"approve",'
+                        '{"protocol_version":"1.0","type":"approve",'
                         f'"id":"{pending[0].request_id}","allowed":"true"}}\n'
                     ),
-                    '{"protocol_version":"2.0","type":"shutdown"}\n',
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
                 ]
             ),
         )
@@ -250,8 +250,8 @@ def test_serve_stdio_reports_unknown_command_and_survives() -> None:
             backend,
             readline=_read_lines(
                 [
-                    '{"protocol_version":"2.0","type":"future_command"}\n',
-                    '{"protocol_version":"2.0","type":"shutdown"}\n',
+                    '{"protocol_version":"1.0","type":"future_command"}\n',
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
                 ]
             ),
         )
@@ -277,7 +277,7 @@ def test_serve_stdio_reraises_contract_payload_errors() -> None:
             await serve_stdio(
                 backend,
                 readline=_read_lines(
-                    ['{"protocol_version":"2.0","type":"configure","patch":{}}\n']
+                    ['{"protocol_version":"1.0","type":"configure","patch":{}}\n']
                 ),
             )
 
@@ -299,7 +299,7 @@ def test_serve_stdio_reraises_config_snapshot_errors_after_reset() -> None:
         with pytest.raises(ContractPayloadError):
             await serve_stdio(
                 backend,
-                readline=_read_lines(['{"protocol_version":"2.0","type":"reset"}\n']),
+                readline=_read_lines(['{"protocol_version":"1.0","type":"reset"}\n']),
             )
 
         assert agent.reset_calls == 1
@@ -317,10 +317,10 @@ def test_serve_stdio_rejects_oversized_command_line() -> None:
             backend,
             readline=_read_lines(
                 [
-                    '{"protocol_version":"2.0","type":"prompt","text":"'
+                    '{"protocol_version":"1.0","type":"prompt","text":"'
                     + ("x" * 64)
                     + '"}\n',
-                    '{"protocol_version":"2.0","type":"shutdown"}\n',
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
                 ]
             ),
             max_command_line_chars=48,
@@ -344,7 +344,7 @@ def test_serve_stdio_discards_oversized_unterminated_command_line() -> None:
                 [
                     "x" * 96,
                     "tail\n",
-                    '{"protocol_version":"2.0","type":"shutdown"}\n',
+                    '{"protocol_version":"1.0","type":"shutdown"}\n',
                 ]
             ),
             max_command_line_chars=48,
@@ -385,7 +385,7 @@ def test_serve_stdio_eof_closes_active_run_without_shutdown_event() -> None:
             nonlocal sent_prompt
             if not sent_prompt:
                 sent_prompt = True
-                return '{"protocol_version":"2.0","type":"prompt","text":"go"}\n'
+                return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
             for _ in range(100):
                 if agent.streams:
                     return ""
@@ -414,7 +414,7 @@ def test_serve_stdio_read_error_closes_active_run() -> None:
             nonlocal sent_prompt
             if not sent_prompt:
                 sent_prompt = True
-                return '{"protocol_version":"2.0","type":"prompt","text":"go"}\n'
+                return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
             for _ in range(100):
                 if agent.streams:
                     raise OSError("stdin closed")
@@ -448,7 +448,7 @@ def test_run_stdio_routes_python_prints_to_stderr(
             def readline(self, _limit: int) -> str:
                 if not self.sent_prompt:
                     self.sent_prompt = True
-                    return '{"protocol_version":"2.0","type":"prompt","text":"go"}\n'
+                    return '{"protocol_version":"1.0","type":"prompt","text":"go"}\n'
                 for _ in range(100):
                     if agent.streams:
                         return ""

@@ -1,6 +1,6 @@
 [
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "ready",
     "ts": 1,
     "version": "0.11.0",
@@ -16,7 +16,7 @@
     }
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "config",
     "ts": 2,
     "ok": true,
@@ -29,19 +29,19 @@
     "error": null
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "run_start",
     "ts": 3,
     "prompt": "Summarize the chart."
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "assistant_delta",
     "ts": 4,
     "text": "The chart shows"
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "reasoning_delta",
     "ts": 5,
     "text": "Need compare trend.",
@@ -49,7 +49,7 @@
     "reasoning_signature": null
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "tool_arguments_delta",
     "ts": 6,
     "tool_call_id": "call_1",
@@ -57,7 +57,7 @@
     "delta": "{\"path\""
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "provider_event",
     "ts": 7,
     "provider_event_type": "response.output_item.added",
@@ -66,7 +66,7 @@
     "phase": null
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "agent_start",
     "ts": 8,
     "agent": "Researcher",
@@ -77,7 +77,7 @@
     "next_turn": 1
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "agent_end",
     "ts": 9,
     "agent": "Researcher",
@@ -88,7 +88,7 @@
     "final_output": "Done"
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "llm_start",
     "ts": 10,
     "agent": "Researcher",
@@ -99,7 +99,7 @@
     "message_count": 2
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "llm_end",
     "ts": 11,
     "agent": "Researcher",
@@ -115,7 +115,7 @@
     }
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "tool_start",
     "ts": 12,
     "agent": "Researcher",
@@ -132,7 +132,7 @@
     "is_delegation": false
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "tool_end",
     "ts": 13,
     "agent": "Researcher",
@@ -152,7 +152,7 @@
     "is_delegation": false
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "plan_updated",
     "ts": 14,
     "agent": "Researcher",
@@ -172,7 +172,7 @@
     "raw": null
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "approval_request",
     "ts": 15,
     "id": "tool-approval-1",
@@ -192,7 +192,7 @@
     "reason": "Create a file."
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "approval_resolved",
     "ts": 16,
     "id": "tool-approval-1",
@@ -213,7 +213,7 @@
     "reason": "Denied."
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "state_snapshot",
     "ts": 17,
     "boundary": "turn_prepared",
@@ -227,7 +227,7 @@
     }
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "handoff_start",
     "ts": 18,
     "agent": "Researcher",
@@ -240,7 +240,7 @@
     "tool_call_id": "call_handoff"
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "handoff_end",
     "ts": 19,
     "agent": "Researcher",
@@ -254,7 +254,7 @@
     "final_output": "Reviewed"
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "run_complete",
     "ts": 20,
     "final_output": "Done",
@@ -263,19 +263,19 @@
     "shim_state": {}
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "run_cancelled",
     "ts": 21
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "error",
     "ts": 22,
     "message": "A run is already active.",
     "scope": "command"
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "reset",
     "ts": 23,
     "config": {
@@ -286,23 +286,23 @@
     }
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "cancel_requested",
     "ts": 24
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "cancel_ignored",
     "ts": 25,
     "reason": "no active run"
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "shutdown",
     "ts": 26
   },
   {
-    "protocol_version": "2.0",
+    "protocol_version": "1.0",
     "type": "run_event",
     "ts": 27,
     "run_event_type": "FutureRunEvent"
