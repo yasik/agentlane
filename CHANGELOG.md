@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-11
+
+AgentLane `0.14.0` adds native run-event serialization, preserves complete process-bridge results, and fixes structured reasoning serialization for OpenAI and Azure Responses clients.
+
+### Added
+
+- Added `to_dict()` and `dumps()` to concrete harness run events, with the public `RunEventRecord` type. These methods retain source event kinds, complete nested payloads, and structured tool results without requiring the process bridge ([`3267c1f`](https://github.com/yasik/agentlane/commit/3267c1f)).
+- Added a run-event serialization guide covering value conversion, model request messages, error handling, and host responsibilities ([`3267c1f`](https://github.com/yasik/agentlane/commit/3267c1f)).
+
+### Changed
+
+- Process-bridge events now preserve complete strings, collections, tool results, and structured final outputs. Event fields use `final_output` and `output` in place of `final_preview` and `output_preview`; TypeScript agent callbacks use `finalOutput`, and run results accept structured values. The bridge protocol version remains `1.0` ([`f32f67d`](https://github.com/yasik/agentlane/commit/f32f67d), [`74541c2`](https://github.com/yasik/agentlane/commit/74541c2)).
+
+### Fixed
+
+- Fixed first-use JSON serialization and payload tracing of structured reasoning for OpenAI and Azure Responses clients, with and without streaming, while retaining reasoning summaries and encrypted content ([`66f88e3`](https://github.com/yasik/agentlane/commit/66f88e3)).
+
 ## [0.13.1] - 2026-09-07
 
 AgentLane `0.13.1` fixes conversation-history conversion for OpenAI and Azure Responses clients and improves setup documentation.
@@ -268,7 +285,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
-[Unreleased]: https://github.com/yasik/agentlane/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/yasik/agentlane/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/yasik/agentlane/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/yasik/agentlane/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/yasik/agentlane/compare/v0.11.0...v0.12.0
