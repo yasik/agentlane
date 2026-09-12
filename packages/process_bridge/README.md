@@ -14,23 +14,23 @@ The main public entrypoints are:
 1. `AgentBackend`
 2. `BridgeBackend`
 3. `EventWriter`
-4. `RunEventEncoder`
-5. `BridgeCommandHandler`
-6. `RunEventBridgeHandler`
-7. `RuntimeConfigStore`
-8. `ConfigRejectedError`
-9. `serve_stdio`
-10. `run_stdio`
+4. `BridgeCommandHandler`
+5. `RuntimeConfigStore`
+6. `ConfigRejectedError`
+7. `serve_stdio`
+8. `run_stdio`
 
 The backend accepts one active prompt at a time, streams AgentLane
-`RunEvent` values as bridge events, routes diagnostics to stderr, and closes
-active streams with AgentLane's `aclose()` then `result()` drain pattern during
-cancel, reset, shutdown, and EOF teardown.
+`RunEvent.to_dict()` records inside `run_event.event`, routes diagnostics to
+stderr, and closes active streams with AgentLane's `aclose()` then `result()`
+drain pattern during cancel, reset, shutdown, and EOF teardown.
 
 The bridge sends complete content and preserves JSON-compatible result
-structure. It does not create previews or apply string, collection, or config
-size caps. Apps own display limits. Python tuples become JSON arrays, Pydantic
-models become objects, and unsupported values use their complete text form.
+structure. Apps own display limits. Native events and complete final results
+use strict harness conversion. Unsupported values, cycles, nonfinite numbers,
+and prompt rendering failures cause a controlled run error. Ordinary
+bridge-owned metadata retains its existing fallback; ready metadata and runtime
+config remain strict JSON.
 See [Payload Values](../../docs/process-bridge/protocol.md#payload-values) for
 result fields and serialization behavior.
 
@@ -63,18 +63,23 @@ differs from runtime config and how a store applies selections onto
 `AgentDescriptor.model` / `model_args`, see
 [Process Bridge: Runtime Configuration](../../docs/process-bridge/runtime-configuration.md).
 
-`BridgeEventType` is the bridge wire vocabulary. Bridge-only lifecycle values
-live in this package; values that correspond to AgentLane run events derive
-from upstream `RunEventKind` or `HarnessEventType` values so downstream code
-does not duplicate framework event literals.
+`BridgeEventType` contains bridge controls and the native `run_event` envelope.
+The complete native record retains its source kind, nesting, and lineage.
+Model completion and errors remain native model records; only the authoritative
+stream result determines run success.
 
-Command handling and run-event encoding are both registry-based.
+Command handling is registry-based.
 `BridgeBackend` accepts an explicit command-handler tuple and defaults to
 `BRIDGE_COMMAND_HANDLERS`; each command handler declares the command class it
-handles and owns that command's side effects. `RunEventEncoder` accepts an
-explicit run-event-handler tuple and defaults to `RUN_EVENT_BRIDGE_HANDLERS`;
-each run-event handler declares the upstream `RunEventKind`, the event class,
-the emitted `BridgeEventType` values, and its encoder implementation.
+handles and owns that command's side effects. Native delivery uses no per-event
+encoder or handler registry.
+
+The host app receives full instructions, history, tool results, prompt values,
+and provider data over its child process pipe. The bridge does not redact these
+fields. The host must authorize any forwarding or storage.
+
+Use Python and TypeScript packages with the same native-event contract. Protocol
+version `1.0` is unchanged, but the previous flat event contract is incompatible.
 
 ## Developer Workflow
 

@@ -1,6 +1,6 @@
 # Native Run Events Over the Process Bridge
 
-Status: B1 approved on 2026-09-12. B2-B4 implementation is in progress.
+Status: B1-B4 complete and verified on 2026-09-12.
 
 ## Goal
 
@@ -20,7 +20,7 @@ maintaining a second Python projection of every run-event type.
   Confirm consumer/release status before implementation; report any new constraint.
 - Brain API adoption, persistence, and UI application changes are separate work.
 
-## Current Behavior
+## Baseline Behavior Before B2
 
 `packages/process_bridge/src/agentlane_process_bridge/_events.py` has 12 handlers.
 They rename fields, select UI-facing data, derive flags, track turn counts, and
@@ -29,7 +29,7 @@ suppress some model events. `RunEvent.to_dict()` instead preserves native struct
 The existing `run_event` is a diagnostic fallback with a flat `run_event_type`
 field, as defined in `_events.py` and
 `packages/process_bridge_ts/src/protocol.ts`. It does not carry a native record.
-The nested `run_event` envelope proposed below is not implemented.
+The nested `run_event` envelope below was not present in the baseline.
 
 `_protocol.py` also has a permissive `_json_value()` converter: unsupported values,
 cycles, and nonfinite numbers become text. Native serialization raises instead.
@@ -124,23 +124,23 @@ text-stream tracking, approval handling, and affected public exports.
 
 ### B4: Verify and Document
 
-- [ ] Generate Python-to-TypeScript fixtures from native records for every run-event
+- [x] Generate Python-to-TypeScript fixtures from native records for every run-event
   class, all model kinds, and both approval statuses. Assert exact field retention.
-- [ ] Test Unicode/newlines, nulls, SDK extras, reasoning signatures, structured tool
+- [x] Test Unicode/newlines, nulls, SDK extras, reasoning signatures, structured tool
   results, full histories, prompt-backed state, and payloads beyond old preview sizes.
-- [ ] Test the approved unsupported-value/cycle/nonfinite policy for native events,
+- [x] Test the approved unsupported-value/cycle/nonfinite policy for native events,
   final results, and control metadata separately.
-- [ ] Exercise prompt -> tool -> approval -> resolution -> continuation -> completion
+- [x] Exercise prompt -> tool -> approval -> resolution -> continuation -> completion
   across the real subprocess boundary, plus cancellation, reset, and shutdown.
-- [ ] Cover error-after-agent-end, result failure, disconnect, slow pipe, queue
+- [x] Cover error-after-agent-end, result failure, disconnect, slow pipe, queue
   timeout, and serialization failure without deadlocks or false success.
-- [ ] Test empty deltas and provider completions remain delivered but need not render.
-- [ ] Confirm transformed model requests remain distinct from stored prompt views.
-- [ ] Measure representative full-state payload sizes and serialization/write time
+- [x] Test empty deltas and provider completions remain delivered but need not render.
+- [x] Confirm transformed model requests remain distinct from stored prompt views.
+- [x] Measure representative full-state payload sizes and serialization/write time
   using synthetic data. Do not add arbitrary truncation to hide increased costs.
-- [ ] Update bridge protocol docs, TypeScript client docs, examples, and native
+- [x] Update bridge protocol docs, TypeScript client docs, examples, and native
   event-serialization docs to describe the unified contract accurately.
-- [ ] Run `make format`, `make lint`, `make typecheck`, and `make tests`.
+- [x] Run `make format`, `make lint`, `make typecheck`, and `make tests`.
 
 ## Acceptance
 
@@ -155,7 +155,7 @@ text-stream tracking, approval handling, and affected public exports.
 
 No Brain endpoint changes, persistence implementation, provider routing changes,
 new agent orchestration, UI redesign, new event bus, dual-protocol support, release,
-or merge authorization. This document is a plan, not an implementation approval.
+or merge authorization. B1 records the approval for this scoped implementation.
 
 ## B1 Contract Review — 2026-09-12
 
@@ -275,7 +275,7 @@ version change is authorized by this work.
   update focused Python tests and commit the passing unit.
 - [x] B3: Implement TypeScript decoding and presentation; update focused client
   tests and commit the passing unit.
-- [ ] B4: Add cross-language fixtures, subprocess lifecycle checks, synthetic
+- [x] B4: Add cross-language fixtures, subprocess lifecycle checks, synthetic
   measurements, and docs; run the complete required verification stack and commit.
 
 This review changes documentation only. Verification is source inspection and
@@ -305,3 +305,52 @@ Verification: `make check-ts` passed lint, type checking, all 84 tests with 284
 assertions, and build. This includes eight B4 real subprocess tests, which are
 committed with B4. The simplification review removed one unused private field
 and corrected one stale comment; it found no required reuse or efficiency change.
+
+## B4 Verification Review — 2026-09-12
+
+The native fixture corpus is generated from Python objects and checked for exact
+TypeScript equality. Eight real subprocess tests cover approval, continuation,
+completion, failure, cancellation, reset, shutdown, and disconnect. Existing
+harness tests retain the distinction between transformed requests and stored
+prompt views. The example runs against both packages from this checkout.
+
+The synthetic measurement records 391 bytes for a text delta and about 384 KB
+for an agent-end record with 1,000 history entries. The latter measured 0.874 ms
+median conversion and 2.951 ms median conversion plus in-memory writer delivery
+over 30 repetitions. See `docs/process-bridge/development.md` for all workloads,
+commands, and measurement limits. No payload truncation was added.
+
+Required verification passed through
+`bash .agents/skills/code-change-verification/scripts/run.sh`:
+
+- `make format` and `make lint` passed. Optional Markdown lint was skipped by the
+  Makefile because `markdownlint` is not installed; YAML lint passed.
+- `make typecheck` passed Mypy, Pyright, and TypeScript checks.
+- `make tests` passed 1,013 Python tests and 84 TypeScript tests (284 assertions).
+- `make check-ts` also passed the TypeScript build.
+- The local stdio example completed successfully without provider credentials.
+
+The first full check found missing optional Python dependencies.
+`uv sync --all-extras --frozen` installed the locked dependencies, and the complete
+verification stack then passed. No dependency manifest or root lockfile changed.
+
+### Final Code Review
+
+`ce-code-review` completed with no unresolved findings. Review run:
+`20260912-native-bridge-review`. Local artifact:
+`/tmp/compound-engineering-501/ce-code-review/20260912-native-bridge-review/review.json`.
+
+Nine local review passes covered correctness, standards, tests, maintainability,
+security, performance, API contracts, reliability, and adversarial failures.
+These sequential passes are not independent. The external review timed out
+without a usable result after a ten-minute task budget; the local adversarial
+fallback completed. No independent external confirmation is claimed.
+
+One standards finding was fixed: Python batching now uses the public
+`RunEventKind` and `ModelStreamEventKind` enums. The full required verification
+stack passed again after that correction, with 1,013 Python and 84 TypeScript
+tests. No justified finding or required work remains open.
+
+Commits follow B1, B2, B3, and B4. B2 is `b7cfd6f`; B3 is `daf2258`. B4 contains
+the subprocess coverage, measurements, docs, example, and final review fix.
+The branch remains local; this work does not publish or release either package.

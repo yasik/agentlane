@@ -17,16 +17,6 @@ text = event.dumps()
 - `payload: dict[str, JsonValue]`: the complete converted event fields with
   their original nesting.
 
-The internal record construction is:
-
-```python
-{"type": event.kind.value, "payload": _serialize_event_payload(event)}
-```
-
-`_serialize_event_payload(event: RunEvent)` is a private implementation helper
-at the end of `src/agentlane/harness/_events.py`, not a public API. Its recursive
-helpers, `_serialize_value` and `_serialize_compound`, accept `object` values.
-
 `dumps()` returns the same record as compact JSON text. It preserves Unicode,
 escapes embedded newlines, and rejects nonfinite numbers. It adds no line
 terminator, SSE framing, or host metadata. Both methods use the same private
@@ -34,6 +24,22 @@ conversion code. There is no public standalone serializer function.
 
 Use `to_dict()` when a host adds its own envelope; no JSON decode step is needed.
 Use `dumps()` when the complete record can be written directly to a transport.
+
+## Final Results
+
+`RunResult.to_dict()` returns a new `RunResultRecord` with the complete converted
+`final_output`, `responses`, `turn_count`, and `run_state` fields. It uses the
+same internal conversion code as events. It adds no event kind or transport
+envelope. Import both public result types from `agentlane.harness`.
+
+```python
+result = await stream.result()
+record = result.to_dict()
+```
+
+The method converts every field before returning. An unsupported response or
+state fails conversion even when the caller only needs `final_output`. The
+record is an inspection representation, separate from snapshot restoration.
 
 ## Native Event Structure
 
@@ -56,7 +62,7 @@ approval status at `payload.event.record.status`. Neither `pending` nor
 
 The serializer adds no synthetic `scope` or `run_event_kind` fields. Source
 fields with these names, when present in supported values, remain unchanged.
-Transport-specific names and flattened payloads belong in a separate adapter.
+Transport envelopes belong to the host.
 
 The methods do not create `run_start`, `run_complete`, or `run_cancelled`
 notifications. They do not read the source stream or determine its outcome.
@@ -112,9 +118,6 @@ Serialized run events are **not restorable agent snapshots**. The serializer
 does not persist executable template code. Keep snapshot storage and restoration
 separate from event serialization.
 
-These distinctions describe the current, unchanged serialization behavior. They
-do not remove fields, add models, or change the wire format.
-
 ## Failures and Access
 
 Unsupported values, non-string object keys, bare prompt templates, ancestor
@@ -142,11 +145,11 @@ and retrieve its result, handling failure or cancellation. See
   raw payloads, and can use text fallbacks.
 - `agentlane.transport` codecs serialize registered message types. They do not
   define the native harness event structure or prompt representation above.
-- `agentlane_process_bridge.encode_run_event()` selects fields for the existing
-  bridge protocol. It retains complete tool and final results after the payload
-  fixes. The bridge writer performs JSON conversion and the circular-value text
-  fallback. Adding the event methods changes neither that protocol nor its
-  fallback behavior.
+- The process bridge places `RunEvent.to_dict()` unchanged at `run_event.event`.
+  It uses `RunResult.to_dict()` after `stream.result()` for completion. Native
+  event and result conversion failures cause controlled run errors; the bridge's
+  ordinary control-value text fallback never applies to them. See
+  [Protocol and Lifecycle](../process-bridge/protocol.md).
 
-New transports can use this complete serializer without copying those projection
-rules. The existing bridge remains a separate protocol, not an alias of this API.
+New transports can use these methods for complete native inspection records and
+add their own framing and failure policy.

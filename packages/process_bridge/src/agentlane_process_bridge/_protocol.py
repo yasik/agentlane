@@ -13,7 +13,8 @@ from typing import Literal, cast
 from pydantic import BaseModel
 from strenum import LowercaseStrEnum
 
-from agentlane.harness import HarnessEventType
+from agentlane.harness import HarnessEventType, RunEventKind
+from agentlane.models import ModelStreamEventKind
 
 from ._io import TextOutput, call_stream
 
@@ -94,7 +95,7 @@ class BridgeEventType(LowercaseStrEnum):
     RESET = "reset"
     # The bridge is shutting down.
     SHUTDOWN = "shutdown"
-    # A command, run, or model error occurred.
+    # A command or run error occurred.
     ERROR = HarnessEventType.ERROR.value
 
     # Complete native run-event record, with its original fields and nesting.
@@ -105,7 +106,12 @@ BRIDGE_EVENT_TYPES: frozenset[BridgeEventType] = frozenset(BridgeEventType)
 """Complete set of bridge event names this package may emit."""
 
 _STREAMING_MODEL_KINDS = frozenset(
-    {"text_delta", "reasoning", "tool_call_arguments_delta", "provider"}
+    {
+        ModelStreamEventKind.TEXT_DELTA.value,
+        ModelStreamEventKind.REASONING.value,
+        ModelStreamEventKind.TOOL_CALL_ARGUMENTS_DELTA.value,
+        ModelStreamEventKind.PROVIDER.value,
+    }
 )
 """Native model kinds that can batch without an immediate drain."""
 
@@ -505,7 +511,7 @@ def _is_streaming_event(event: dict[str, object]) -> bool:
     if not isinstance(record, dict):
         return False
     native_record = cast(dict[str, object], record)
-    if native_record.get("type") != "model_stream":
+    if native_record.get("type") != RunEventKind.MODEL_STREAM.value:
         return False
     payload = native_record.get("payload")
     if not isinstance(payload, dict):

@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@agentlanejs/process-bridge": "0.14.0"
+    "@agentlanejs/process-bridge": "file:../../../packages/process_bridge_ts"
   }
 }

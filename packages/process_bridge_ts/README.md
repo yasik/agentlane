@@ -14,7 +14,8 @@ previews and display limits. See
 result fields and serialization behavior.
 
 The package is published to npm with the same version as the Python `agentlane`
-package.
+package. Python and TypeScript must use the same native-event contract. Protocol
+version `1.0` is unchanged, but the previous flat event contract is incompatible.
 
 ## Install
 
@@ -161,6 +162,44 @@ schema before use.
 Text callbacks complete or correct streamed text when the final output is a
 string. Structured final outputs are delivered through the run result and
 agent activity callbacks. Apps decide how to display them.
+
+## Native Events
+
+`onEvent` receives each complete source record inside `run_event.event`. Fields
+and extras retain their native nesting. Use the exported `isNativeEvent` helper
+to narrow known payloads without rebuilding them:
+
+```ts
+import { isNativeEvent } from "@agentlanejs/process-bridge";
+
+function inspect(event: import("@agentlanejs/process-bridge").BridgeEvent) {
+  if (event.type === "run_event" && isNativeEvent(event.event, "llm_start")) {
+    console.log(event.event.payload.messages);
+  }
+}
+```
+
+`NativeRunEvent`, `NativePayload`, and `NativeModelEvent` describe native values.
+Known records validate required fields and retain all extras. Unknown native
+kinds reach `onEvent` and have no presentation effect. Unknown outer event names
+and malformed known records fail decoding.
+
+Model events stay at `event.payload.event`. Empty deltas and provider completion
+records remain visible in `onEvent`, even when they produce no text callback.
+Model completion and errors do not settle runs or unrelated commands. Approval
+records stay at `event.payload.event.record`; policies run independently of
+display callbacks. Presentation uses source lineage. Consumers can read turn
+counts from state snapshots or the final run result; the bridge predicts none.
+
+Use `llm_start` messages to inspect requests after harness transformations.
+Stored prompt values contain a rendered template view that can differ from the
+actual request. Full native records can include instructions, history, tool
+results, prompt values, exception messages, and provider data. The local host
+must authorize any forwarding or storage; the bridge does not redact fields.
+
+Native events and complete final results use strict Python conversion.
+Unsupported values, cycles, nonfinite numbers, and prompt rendering failures
+produce a run error. A disconnected backend is settled through process exit.
 
 ## Low-Level Building Blocks
 
