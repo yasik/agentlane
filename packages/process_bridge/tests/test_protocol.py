@@ -172,7 +172,7 @@ def test_event_writer_preserves_structured_result_models() -> None:
         output = StringIO()
         writer = EventWriter(output)
         result = Result(items=[{"text": "界🧪" * 5001, "ok": True, "value": None}] * 51)
-        await writer.emit(BridgeEventType.TOOL_END, result=result)
+        await writer.emit(BridgeEventType.READY, result=result)
 
         [event] = [json.loads(line) for line in output.getvalue().splitlines()]
         assert event["result"] == result.model_dump()
@@ -259,7 +259,18 @@ def test_event_writer_batches_streaming_events_until_terminal_drain() -> None:
         output = CountingStream()
         writer = EventWriter(output)
         for index in range(100):
-            await writer.emit(BridgeEventType.ASSISTANT_DELTA, text=str(index))
+            await writer.emit(
+                BridgeEventType.RUN_EVENT,
+                verbatim_payload={
+                    "event": {
+                        "type": "model_stream",
+                        "payload": {
+                            "kind": "model_stream",
+                            "event": {"kind": "text_delta", "text": str(index)},
+                        },
+                    }
+                },
+            )
         await writer.emit(
             BridgeEventType.RUN_COMPLETE,
             final_output="done",

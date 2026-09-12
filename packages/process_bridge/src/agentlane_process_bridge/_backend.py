@@ -10,6 +10,7 @@ import asyncio
 import inspect
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Awaitable
+from contextlib import suppress
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Literal, Protocol, cast, runtime_checkable
@@ -24,7 +25,6 @@ from agentlane.harness.tools import (
 )
 from agentlane.runtime import CancellationToken
 
-from ._events import RunEventEncoder
 from ._protocol import (
     ERROR_SCOPE_COMMAND,
     ERROR_SCOPE_RUN,
@@ -199,10 +199,6 @@ class BridgeCommandBackend(Protocol):
         """
         ...
 
-    def reset_encoder_turns(self) -> None:
-        """Clear per-turn run-event encoder state after an agent reset."""
-        ...
-
     async def cancel_active_run(self, *, emit_terminal: bool) -> None:
         """Cancel the active run and wait until its teardown has completed.
 
@@ -258,7 +254,6 @@ class BridgeBackend:
         # instance. Otherwise tool calls wait on one broker while client
         # decisions resolve against another one.
         self.approvals = ToolApprovalBroker() if approvals is None else approvals
-        self._encoder = RunEventEncoder()
         self._command_handlers = (
             BRIDGE_COMMAND_HANDLERS if command_handlers is None else command_handlers
         )
@@ -267,6 +262,7 @@ class BridgeBackend:
         # terminal event has a chance to flush before the next prompt starts.
         self._active_run: asyncio.Task[None] | None = None
         self._cancel_terminal_event = True
+        self._run_tearing_down = False
 
     async def start(self) -> None:
         """Emit the initial ready event."""
@@ -340,22 +336,41 @@ class BridgeBackend:
             # as unobserved task exceptions.
             result = await stream.result()
 
-            # Final output serialization is part of the run. Report failures
-            # through the same terminal error path as streamed event failures.
-            await self.events.emit(
+            record = result.to_dict()
+            state = record["run_state"]
+            completion: dict[str, object] = {
+                "final_output": record["final_output"],
+                "turn_count": record["turn_count"],
+                "response_count": len(record["responses"]),
+            }
+            fallback: dict[str, object] = {}
+            if state is None:
+                fallback["shim_state"] = _run_shim_state(self.agent.run_state)
+            else:
+                completion["shim_state"] = state["shim_state"]
+
+            self._run_tearing_down = True
+            await self.events.emit_payload(
                 BridgeEventType.RUN_COMPLETE,
-                final_output=result.final_output,
-                turn_count=result.turn_count,
-                response_count=len(result.responses),
-                shim_state=_run_shim_state(result.run_state or self.agent.run_state),
+                fallback,
+                verbatim_payload=completion,
             )
         except asyncio.CancelledError:
+            self._run_tearing_down = True
             token.cancel()
-            await self._handle_cancelled_run(stream)
+            try:
+                await self._handle_cancelled_run(stream)
+            except (BrokenPipeError, OSError, TimeoutError):
+                _logger.exception("bridge_cancel_terminal_emit_failed")
             return
         except Exception as exc:
+            self._run_tearing_down = True
+            token.cancel()
             _logger.exception("bridge_run_failed")
-            await self._handle_failed_run(stream, exc)
+            try:
+                await self._handle_failed_run(stream, exc)
+            except (BrokenPipeError, OSError, TimeoutError):
+                _logger.exception("bridge_error_terminal_emit_failed")
             return
         finally:
             # A stale run task can finish after a new run has started. Only the
@@ -364,6 +379,7 @@ class BridgeBackend:
                 self._active_run = None
 
             self._cancel_terminal_event = True
+            self._run_tearing_down = False
 
     def clear_completed_run(self) -> None:
         """Forget a completed run task before accepting the next command."""
@@ -403,11 +419,8 @@ class BridgeBackend:
             return
 
         self._cancel_terminal_event = emit_terminal
-        self._active_run.cancel()
-
-    def reset_encoder_turns(self) -> None:
-        """Reset encoder state for the next conversation."""
-        self._encoder.reset_turns()
+        if not self._run_tearing_down:
+            self._active_run.cancel()
 
     async def cancel_active_run(self, *, emit_terminal: bool) -> None:
         """Cancel an active run and wait for its teardown.
@@ -433,13 +446,12 @@ class BridgeBackend:
             self._active_run = None
 
     async def _handle_cancelled_run(self, stream: RunEventStreamLike | None) -> None:
+        await self.deny_pending_approvals("Run cancelled.")
         try:
             await _close_run_stream(stream)
         except Exception as exc:
             _logger.exception("run_stream_close_failed")
-            await self.deny_pending_approvals("Run cancelled.")
-
-            if self._cancel_terminal_event:
+            if self._cancel_terminal_event and self.events.is_writable:
                 await self.events.emit(
                     BridgeEventType.ERROR,
                     message=f"Run cancellation cleanup failed: {exc}",
@@ -447,11 +459,7 @@ class BridgeBackend:
                 )
             return
 
-        # Approval waiters must be released even when the model/tool run exits
-        # through cooperative cancellation rather than a normal result.
-        await self.deny_pending_approvals("Run cancelled.")
-
-        if self._cancel_terminal_event:
+        if self._cancel_terminal_event and self.events.is_writable:
             await self.events.emit(BridgeEventType.RUN_CANCELLED)
 
     async def _handle_failed_run(
@@ -460,6 +468,7 @@ class BridgeBackend:
         error: Exception,
     ) -> None:
         cleanup_error: Exception | None = None
+        await self.deny_pending_approvals("Run failed.")
 
         try:
             await _close_run_stream(stream)
@@ -469,12 +478,12 @@ class BridgeBackend:
 
         # Keep the original run failure as the primary user-facing error. If
         # cleanup also failed, append it instead of replacing the root cause.
-        await self.deny_pending_approvals("Run failed.")
-        await self.events.emit(
-            BridgeEventType.ERROR,
-            message=_run_error_message(error, cleanup_error),
-            scope=ERROR_SCOPE_RUN,
-        )
+        if self._cancel_terminal_event and self.events.is_writable:
+            await self.events.emit(
+                BridgeEventType.ERROR,
+                message=_run_error_message(error, cleanup_error),
+                scope=ERROR_SCOPE_RUN,
+            )
 
     async def deny_pending_approvals(self, reason: str) -> None:
         """Resolve currently pending approvals as denied.
@@ -496,11 +505,10 @@ class BridgeBackend:
         return {"config": _snapshot_config(self.config)}
 
     async def _emit_run_event(self, event: RunEvent) -> None:
-        encoded = self._encoder.encode(event)
-        if encoded is None:
-            return
-
-        await self.events.emit_payload(encoded.type, encoded.payload)
+        await self.events.emit(
+            BridgeEventType.RUN_EVENT,
+            verbatim_payload={"event": event.to_dict()},
+        )
 
     async def _resolve_ready_metadata(self) -> dict[str, object]:
         if self.ready_metadata is None:
@@ -679,7 +687,6 @@ class ResetCommandHandler(BridgeCommandHandler):
         await backend.cancel_active_run(emit_terminal=True)
         await backend.deny_pending_approvals("Run reset.")
         backend.agent.reset()
-        backend.reset_encoder_turns()
         await backend.events.emit(
             BridgeEventType.RESET,
             verbatim_payload=backend.config_snapshot_payload(),
@@ -738,8 +745,24 @@ async def _close_run_stream(stream: RunEventStreamLike | None) -> None:
     if stream is None or not isinstance(stream, _ClosableStream):
         return
 
-    await stream.aclose()
+    try:
+        await stream.aclose()
+    except Exception:
+        # A failed close need not settle result(). Retrieve an available result,
+        # but do not let an unresolved result hide the primary delivery failure.
+        drain = asyncio.create_task(_drain_run_result(stream))
+        await asyncio.sleep(0)
+        if not drain.done():
+            drain.cancel()
+        with suppress(asyncio.CancelledError):
+            await drain
+        raise
+    else:
+        await _drain_run_result(stream)
 
+
+async def _drain_run_result(stream: RunEventStreamLike) -> None:
+    """Retrieve a closed stream outcome without replacing the delivery failure."""
     try:
         await stream.result()
     except asyncio.CancelledError:

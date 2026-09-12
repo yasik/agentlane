@@ -7,13 +7,15 @@ lifecycle and the runner.
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 from agentlane.messaging import AgentId
 from agentlane.models import MessageDict, ModelResponse, PromptSpec, RunStateView
 from agentlane.models.run import DefaultRunContext
+
+from ._serialization import serialize_value
 
 ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX = ":active-skill-names"
 """Documented `shim_state` key suffix that holds active skill names.
@@ -124,6 +126,15 @@ a `PromptSpec` mixed with prior `ModelResponse` objects). A
 """
 
 
+class RunResultRecord(TypedDict):
+    """Complete JSON-ready result inspection record, without an envelope."""
+
+    final_output: JsonValue
+    responses: list[JsonValue]
+    turn_count: int
+    run_state: dict[str, JsonValue] | None
+
+
 @dataclass(slots=True)
 class RunResult:
     """Minimal final result returned by the default harness agent."""
@@ -143,6 +154,16 @@ class RunResult:
 
     run_state: RunState | None = None
     """Final resumable run state for this completed run when available."""
+
+    def to_dict(self) -> RunResultRecord:
+        """Return all result fields with strict native inspection conversion.
+
+        Preserve full responses and state, including rendered stored prompts.
+        This is not a snapshot codec. Unsupported values and non-string keys
+        raise TypeError; cycles and nonfinite numbers raise ValueError. Prompt
+        rendering errors propagate unchanged, even in fields a host does not show.
+        """
+        return cast(RunResultRecord, serialize_value(self))
 
 
 def copy_run_state(run_state: RunState | None) -> RunState | None:

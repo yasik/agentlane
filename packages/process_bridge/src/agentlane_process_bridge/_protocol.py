@@ -7,12 +7,15 @@ import time
 from abc import ABC, abstractmethod
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Literal, TextIO, cast
+from functools import partial
+from typing import Literal, cast
 
 from pydantic import BaseModel
 from strenum import LowercaseStrEnum
 
-from agentlane.harness import HarnessEventType, RunEventKind
+from agentlane.harness import HarnessEventType
+
+from ._io import TextOutput, call_stream
 
 PROTOCOL_VERSION = "1.0"
 """Current process-bridge protocol version written on every outbound event."""
@@ -94,55 +97,18 @@ class BridgeEventType(LowercaseStrEnum):
     # A command, run, or model error occurred.
     ERROR = HarnessEventType.ERROR.value
 
-    # An agent task started.
-    AGENT_START = RunEventKind.AGENT_START.value
-    # An agent task ended.
-    AGENT_END = RunEventKind.AGENT_END.value
-    # A model request started.
-    LLM_START = RunEventKind.LLM_START.value
-    # A model request ended.
-    LLM_END = RunEventKind.LLM_END.value
-    # A tool call started.
-    TOOL_START = RunEventKind.TOOL_START.value
-    # A tool call ended.
-    TOOL_END = RunEventKind.TOOL_END.value
-    # A handoff transfer started.
-    HANDOFF_START = RunEventKind.HANDOFF_START.value
-    # A handoff transfer ended.
-    HANDOFF_END = RunEventKind.HANDOFF_END.value
-    # A compact run state snapshot was emitted.
-    STATE_SNAPSHOT = RunEventKind.STATE_SNAPSHOT.value
-    # A structured plan update was emitted.
-    PLAN_UPDATED = RunEventKind.PLAN_UPDATED.value
-
-    # Assistant-visible text streamed from the model.
-    ASSISTANT_DELTA = HarnessEventType.ASSISTANT_DELTA.value
-    # Reasoning text or metadata streamed from the model.
-    REASONING_DELTA = HarnessEventType.REASONING_DELTA.value
-    # Tool-call arguments streamed from the model.
-    TOOL_ARGUMENTS_DELTA = HarnessEventType.TOOL_ARGUMENTS_DELTA.value
-    # Provider-native stream metadata was observed.
-    PROVIDER_EVENT = HarnessEventType.PROVIDER_EVENT.value
-    # A tool approval request is waiting for a decision.
-    APPROVAL_REQUEST = HarnessEventType.APPROVAL_REQUEST.value
-    # A tool approval request was resolved.
-    APPROVAL_RESOLVED = HarnessEventType.APPROVAL_RESOLVED.value
-    # Fallback wrapper for an unknown future run event.
+    # Complete native run-event record, with its original fields and nesting.
     RUN_EVENT = HarnessEventType.RUN_EVENT.value
 
 
 BRIDGE_EVENT_TYPES: frozenset[BridgeEventType] = frozenset(BridgeEventType)
 """Complete set of bridge event names this package may emit."""
 
-_STREAMING_EVENT_TYPES: frozenset[BridgeEventType] = frozenset(
-    {
-        BridgeEventType.ASSISTANT_DELTA,
-        BridgeEventType.PROVIDER_EVENT,
-        BridgeEventType.REASONING_DELTA,
-        BridgeEventType.TOOL_ARGUMENTS_DELTA,
-    }
+_STREAMING_MODEL_KINDS = frozenset(
+    {"text_delta", "reasoning", "tool_call_arguments_delta", "provider"}
 )
-"""High-volume events that can be batched without forcing an immediate drain."""
+"""Native model kinds that can batch without an immediate drain."""
+
 
 _WRITE_BATCH_SIZE = 64
 """Maximum number of queued NDJSON lines written by one worker batch."""
@@ -342,13 +308,28 @@ class EventWriter:
     behind them without blocking the event loop on a slow local client pipe.
     """
 
-    stream: TextIO
+    stream: TextOutput
     write_timeout_seconds: float | None = 30.0
     max_queue_size: int = 1024
     _queue: asyncio.Queue[str] | None = field(default=None, init=False)
     _worker: asyncio.Task[None] | None = field(default=None, init=False)
     _failed: BaseException | None = field(default=None, init=False)
     _closed: bool = field(default=False, init=False)
+    _failure: asyncio.Event = field(default_factory=asyncio.Event, init=False)
+
+    @property
+    def is_writable(self) -> bool:
+        """Return whether terminal delivery can still be attempted."""
+        return not self._closed and self._failed is None
+
+    async def wait_failed(self) -> None:
+        """Wait until output failure requires the host command loop to stop."""
+        await self._failure.wait()
+
+    def _mark_failed(self, error: BaseException) -> None:
+        if self._failed is None:
+            self._failed = error
+        self._failure.set()
 
     async def emit(
         self,
@@ -386,7 +367,7 @@ class EventWriter:
         # Lifecycle and control events should be observable before the caller
         # continues. Streaming deltas may batch to avoid blocking the event loop
         # on every token from a slow local pipe.
-        if event_type not in _STREAMING_EVENT_TYPES:
+        if not _is_streaming_event(event):
             await self.drain()
 
     async def drain(self) -> None:
@@ -406,7 +387,7 @@ class EventWriter:
         except TimeoutError:
             # Once the writer times out, every later emit should fail fast with
             # the same broken-pipe semantics as a closed client.
-            self._failed = BrokenPipeError("Bridge event writer timed out.")
+            self._mark_failed(BrokenPipeError("Bridge event writer timed out."))
             raise
 
         self._raise_if_failed()
@@ -443,7 +424,7 @@ class EventWriter:
         except TimeoutError:
             # Backpressure past the configured timeout means the downstream
             # process is no longer draining bridge output reliably.
-            self._failed = BrokenPipeError("Bridge event writer queue is full.")
+            self._mark_failed(BrokenPipeError("Bridge event writer queue is full."))
             raise
 
     def _ensure_queue(self) -> asyncio.Queue[str]:
@@ -473,10 +454,11 @@ class EventWriter:
             try:
                 await self._write_batch(batch)
             except TimeoutError as exc:
-                self._failed = BrokenPipeError("Bridge event writer timed out.")
-                self._failed.__cause__ = exc
-            except (BrokenPipeError, OSError) as exc:
-                self._failed = exc
+                self._mark_failed(BrokenPipeError("Bridge event writer timed out."))
+                if self._failed is not None:
+                    self._failed.__cause__ = exc
+            except Exception as exc:
+                self._mark_failed(exc)
             finally:
                 for _ in batch:
                     queue.task_done()
@@ -485,25 +467,22 @@ class EventWriter:
                 # Join waiters must be released after a write failure; later
                 # calls observe the stored exception through _raise_if_failed().
                 self._discard_queued_lines(queue)
+                return
 
     async def _write_batch(self, lines: list[str]) -> None:
-        write = asyncio.ensure_future(asyncio.to_thread(self._write_lines, lines))
-        try:
-            if self.write_timeout_seconds is None:
-                await asyncio.shield(write)
-            else:
-                await asyncio.wait_for(
-                    asyncio.shield(write),
-                    timeout=self.write_timeout_seconds,
-                )
-        except asyncio.CancelledError:
+        write = call_stream(partial(self._write_lines, lines))
+        if self.write_timeout_seconds is None:
             await write
-            raise
+        else:
+            await asyncio.wait_for(write, timeout=self.write_timeout_seconds)
 
     def _write_lines(self, lines: list[str]) -> None:
         for line in lines:
+            if self._failed is not None:
+                return
             self.stream.write(line + "\n")
-        self.stream.flush()
+        if self._failed is None:
+            self.stream.flush()
 
     def _discard_queued_lines(self, queue: asyncio.Queue[str]) -> None:
         while True:
@@ -517,6 +496,25 @@ class EventWriter:
     def _raise_if_failed(self) -> None:
         if self._failed is not None:
             raise self._failed
+
+
+def _is_streaming_event(event: dict[str, object]) -> bool:
+    if event["type"] != BridgeEventType.RUN_EVENT.value:
+        return False
+    record = event.get("event")
+    if not isinstance(record, dict):
+        return False
+    native_record = cast(dict[str, object], record)
+    if native_record.get("type") != "model_stream":
+        return False
+    payload = native_record.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    model_event = cast(dict[str, object], payload).get("event")
+    if not isinstance(model_event, dict):
+        return False
+    kind = cast(dict[str, object], model_event).get("kind")
+    return isinstance(kind, str) and kind in _STREAMING_MODEL_KINDS
 
 
 def build_event(

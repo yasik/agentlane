@@ -1,18 +1,27 @@
 import json
 from pathlib import Path
+from typing import get_args
 
 from agentlane_process_bridge import (
     BRIDGE_EVENT_TYPES,
     COMMAND_TYPES,
-    RUN_EVENT_BRIDGE_HANDLERS,
-    RUN_EVENT_KIND_BRIDGE_EVENT_TYPES,
     BridgeEventType,
     ProtocolError,
     UnknownCommand,
     parse_command_line,
 )
 
-from agentlane.harness import HarnessEventType, RunEventKind
+from agentlane.harness import (
+    HarnessEventType,
+    RunEvent,
+    RunEventKind,
+    RunModelStreamEvent,
+    RunToolApprovalEvent,
+)
+from agentlane.harness.tools import ToolApprovalStatus
+from agentlane.models import ModelStreamEventKind
+
+from .native_fixtures import native_events
 
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "protocol" / "events.json"
 
@@ -37,7 +46,6 @@ def test_protocol_fixtures_are_versioned_and_cover_unique_event_types() -> None:
     fixtures = json.loads(FIXTURE_PATH.read_text())
     event_types = [event["type"] for event in fixtures]
 
-    assert len(event_types) == len(set(event_types))
     _assert_same_strings(
         expected={event_type.value for event_type in BRIDGE_EVENT_TYPES},
         actual=set(event_types),
@@ -49,17 +57,6 @@ def test_protocol_fixtures_are_versioned_and_cover_unique_event_types() -> None:
 
 
 def test_bridge_event_type_uses_upstream_harness_run_event_values() -> None:
-    assert BridgeEventType.AGENT_START.value == RunEventKind.AGENT_START.value
-    assert BridgeEventType.AGENT_END.value == RunEventKind.AGENT_END.value
-    assert BridgeEventType.LLM_START.value == RunEventKind.LLM_START.value
-    assert BridgeEventType.LLM_END.value == RunEventKind.LLM_END.value
-    assert BridgeEventType.TOOL_START.value == RunEventKind.TOOL_START.value
-    assert BridgeEventType.TOOL_END.value == RunEventKind.TOOL_END.value
-    assert BridgeEventType.HANDOFF_START.value == RunEventKind.HANDOFF_START.value
-    assert BridgeEventType.HANDOFF_END.value == RunEventKind.HANDOFF_END.value
-    assert BridgeEventType.STATE_SNAPSHOT.value == RunEventKind.STATE_SNAPSHOT.value
-    assert BridgeEventType.PLAN_UPDATED.value == RunEventKind.PLAN_UPDATED.value
-
     assert BridgeEventType.RUN_START.value == HarnessEventType.RUN_START.value
     assert BridgeEventType.RUN_COMPLETE.value == HarnessEventType.RUN_COMPLETE.value
     assert BridgeEventType.RUN_CANCELLED.value == HarnessEventType.RUN_CANCELLED.value
@@ -68,18 +65,24 @@ def test_bridge_event_type_uses_upstream_harness_run_event_values() -> None:
     assert not hasattr(BridgeEventType, "TOOL_APPROVAL")
 
 
-def test_every_run_event_kind_has_bridge_coverage() -> None:
-    handler_kinds = [handler.kind for handler in RUN_EVENT_BRIDGE_HANDLERS]
-
-    assert len(handler_kinds) == len(set(handler_kinds))
-    assert set(RUN_EVENT_KIND_BRIDGE_EVENT_TYPES) == set(RunEventKind)
-
-    mapped_event_types: set[BridgeEventType] = set()
-    for event_types in RUN_EVENT_KIND_BRIDGE_EVENT_TYPES.values():
-        assert event_types
-        mapped_event_types.update(event_types)
-
-    assert mapped_event_types <= BRIDGE_EVENT_TYPES
+def test_every_native_kind_has_exact_generated_fixture() -> None:
+    sources = native_events()
+    fixtures = json.loads(FIXTURE_PATH.read_text())
+    assert [event["event"] for event in fixtures if event["type"] == "run_event"] == [
+        source.to_dict() for source in sources
+    ]
+    assert {type(source) for source in sources} == set(get_args(RunEvent.__value__))
+    assert {source.kind for source in sources} == set(RunEventKind)
+    assert {
+        source.event.kind
+        for source in sources
+        if isinstance(source, RunModelStreamEvent)
+    } == set(ModelStreamEventKind)
+    assert {
+        source.event.record.status
+        for source in sources
+        if isinstance(source, RunToolApprovalEvent)
+    } == set(ToolApprovalStatus)
 
 
 def _assert_same_strings(

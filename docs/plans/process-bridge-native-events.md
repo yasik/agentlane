@@ -1,6 +1,6 @@
 # Native Run Events Over the Process Bridge
 
-Status: B1 review prepared on 2026-09-12. B2-B4 await the contract review below.
+Status: B1 approved on 2026-09-12. B2-B4 implementation is in progress.
 
 ## Goal
 
@@ -74,33 +74,33 @@ reasoning to strings, or drop empty deltas/provider completion records.
 
 ### B1: Settle the Wire and Failure Contracts
 
-- [ ] Confirm the envelope above and how unknown native event kinds reach clients.
-- [ ] Choose strict native-event serialization: a conversion failure must become
+- [x] Confirm the envelope above and how unknown native event kinds reach clients.
+- [x] Choose strict native-event serialization: a conversion failure must become
   a controlled bridge run error, cancel/close the active stream, settle pending
   approvals, and never report successful completion for the failed delivery.
-- [ ] Specify final-result encoding for `run_complete`, which uses `stream.result()`
+- [x] Specify final-result encoding for `run_complete`, which uses `stream.result()`
   and cannot depend on seeing a root `agent_end`. Reuse existing public conversion
   if available; otherwise propose one narrowly scoped shared result API for review.
   Do not import private helpers or wrap arbitrary results in synthetic run events.
-- [ ] Decide which bridge-owned metadata/control values keep the current text
+- [x] Decide which bridge-owned metadata/control values keep the current text
   fallback. Document any deliberate difference from strict native-event values.
-- [ ] Review current consumers and full-state payload exposure. Confirm access and
+- [x] Review current consumers and full-state payload exposure. Confirm access and
   local-process trust boundaries before forwarding instructions/history/provider data.
 
 Stop for contract review before implementation. No configurable serialization modes.
 
 ### B2: Forward Native Events in Python
 
-- [ ] Replace `RunEventEncoder` and its per-event handler registry with direct native
+- [x] Replace `RunEventEncoder` and its per-event handler registry with direct native
   record delivery in `_backend.py`. Remove obsolete public exports and registries.
-- [ ] Preserve command handling, session reset/configuration, approval resolution,
+- [x] Preserve command handling, session reset/configuration, approval resolution,
   cancellation, authoritative completion, queue draining, and broken-pipe cleanup.
-- [ ] Keep the writer's bounded queue and backpressure. Update batching classification
+- [x] Keep the writer's bounded queue and backpressure. Update batching classification
   to inspect nested model-event kinds, since the top-level type is now `run_event`.
   Lifecycle/control events must retain their flush behavior.
-- [ ] Apply the approved error/final-result policy from B1. Remove only conversion
+- [x] Apply the approved error/final-result policy from B1. Remove only conversion
   code that has no remaining control-event or metadata callers.
-- [ ] Do not serialize a full event and then reconstruct the old selected payload.
+- [x] Do not serialize a full event and then reconstruct the old selected payload.
 
 Primary files: `packages/process_bridge/src/agentlane_process_bridge/_events.py`,
 `_backend.py`, `_protocol.py`, and `__init__.py`.
@@ -159,9 +159,10 @@ or merge authorization. This document is a plan, not an implementation approval.
 
 ## B1 Contract Review — 2026-09-12
 
-The current request authorizes implementation and incremental commits. B1 also
-requires a contract review before implementation. The following proposal resolves
-the open design choices for that review. No runtime or test files have changed.
+The request authorizes implementation and incremental commits. B1 required a
+contract review before implementation. The user approved both decisions on
+2026-09-12: the public result API and the coordinated protocol 1.0 change.
+The following contract governs B2-B4.
 
 ### Source and Dependency Checks
 
@@ -269,8 +270,8 @@ version change is authorized by this work.
 - [x] Inspect the serializer, result type, bridge writer, lifecycle cleanup,
   TypeScript decoder/reducer, local callers, base commit, and release metadata.
 - [x] Record concrete wire, result API, failure, metadata, and trust proposals.
-- [ ] Complete the required B1 contract review with the user.
-- [ ] B2: Implement Python delivery and the approved public result method;
+- [x] Complete the required B1 contract review with the user.
+- [x] B2: Implement Python delivery and the approved public result method;
   update focused Python tests and commit the passing unit.
 - [ ] B3: Implement TypeScript decoding and presentation; update focused client
   tests and commit the passing unit.
@@ -280,3 +281,14 @@ version change is authorized by this work.
 This review changes documentation only. Verification is source inspection and
 `git diff --check`; runtime tests do not prove a proposed contract. The B4
 verification requirements remain in force for implementation.
+
+## B2 Implementation Review — 2026-09-12
+
+Native events now pass directly through the strict writer. `RunResult.to_dict()`
+shares native conversion and drives authoritative completion. Transport cleanup
+wakes blocked input on writer failure and permits process exit with blocked
+stdout. Regression tests cover completion/cancel races, approval cleanup, failed
+close, and delayed writes after a timeout.
+
+Verification: `uv run pytest packages/process_bridge/tests tests/harness/serialization -q`
+passed all 146 tests. Targeted formatting, Ruff, Pyright, and Mypy passed.
