@@ -22,10 +22,16 @@ Lineage and scope semantics (see the "Run Events" section of
   emits ``RunStateSnapshotEvent`` into the parent stream.
 """
 
-from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+import json
+import math
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
+from pathlib import PurePath
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
+from uuid import UUID
 
+from pydantic import BaseModel, JsonValue, RootModel
 from strenum import LowercaseStrEnum
 
 from agentlane.models import (
@@ -33,6 +39,8 @@ from agentlane.models import (
     ModelResponse,
     ModelStreamEvent,
     PlanStepStatus,
+    PromptSpec,
+    PromptTemplateBase,
     ToolCall,
     ToolError,
 )
@@ -155,8 +163,59 @@ class RunStateSnapshot:
     shim_state: dict[str, object]
 
 
+class RunEventRecord(TypedDict):
+    """JSON-ready native run event, without host transport metadata."""
+
+    type: str
+    """Source event name from RunEventKind."""
+
+    payload: dict[str, JsonValue]
+    """Complete converted source fields with their original nesting."""
+
+
+class _SerializableRunEvent:
+    """Shared serialization interface for all concrete run-event dataclasses."""
+
+    __slots__ = ()
+
+    def to_dict(self) -> RunEventRecord:
+        """Return a complete JSON-ready record with type and payload fields.
+
+        Preserve supported source fields, nesting, nulls, metadata, and results.
+        Render PromptSpec through its public methods; this is not a snapshot codec.
+
+        Returns:
+            A new record with the source event kind and converted payload.
+
+        Raises:
+            TypeError: A value or mapping key has no supported representation.
+            ValueError: A value contains a cycle or nonfinite number.
+
+        Template rendering errors propagate unchanged. Hosts own authorization,
+        stream selection, completion, cleanup, and transport framing.
+        """
+        event = cast(RunEvent, self)
+        return {
+            "type": event.kind.value,
+            "payload": _serialize_event_payload(event),
+        }
+
+    def dumps(self) -> str:
+        """Return the complete record as compact Unicode JSON text.
+
+        Uses the same conversion and errors as to_dict(). Does not add SSE
+        framing, line terminators, or host session/run identifiers.
+        """
+        return json.dumps(
+            self.to_dict(),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+
+
 @dataclass(frozen=True, slots=True)
-class RunModelStreamEvent:
+class RunModelStreamEvent(_SerializableRunEvent):
     """Run event wrapping one existing model stream event."""
 
     event: ModelStreamEvent
@@ -167,7 +226,7 @@ class RunModelStreamEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunAgentStartEvent:
+class RunAgentStartEvent(_SerializableRunEvent):
     """Run event emitted when one agent run starts."""
 
     task_name: str
@@ -183,7 +242,7 @@ class RunAgentStartEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunAgentEndEvent:
+class RunAgentEndEvent(_SerializableRunEvent):
     """Run event emitted when one agent run ends.
 
     Fires for child tasks too (with that child's ``result``) when run hooks are
@@ -205,7 +264,7 @@ class RunAgentEndEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunLLMStartEvent:
+class RunLLMStartEvent(_SerializableRunEvent):
     """Run event emitted before one model request starts."""
 
     task_name: str
@@ -222,7 +281,7 @@ class RunLLMStartEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunLLMEndEvent:
+class RunLLMEndEvent(_SerializableRunEvent):
     """Run event emitted after one model request completes."""
 
     task_name: str
@@ -239,7 +298,7 @@ class RunLLMEndEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunToolStartEvent:
+class RunToolStartEvent(_SerializableRunEvent):
     """Run event emitted before one tool call starts."""
 
     task_name: str
@@ -258,7 +317,7 @@ class RunToolStartEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunToolEndEvent:
+class RunToolEndEvent(_SerializableRunEvent):
     """Run event emitted after one tool call ends.
 
     The runner derives ``ok``/``error`` from the raw ``result`` so consumers get
@@ -288,7 +347,7 @@ class RunToolEndEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunToolApprovalEvent:
+class RunToolApprovalEvent(_SerializableRunEvent):
     """Run event wrapping one brokered tool-approval lifecycle event."""
 
     event: "ToolApprovalEvent"
@@ -299,7 +358,7 @@ class RunToolApprovalEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunHandoffStartEvent:
+class RunHandoffStartEvent(_SerializableRunEvent):
     """Run event emitted before first-class handoff control transfer starts.
 
     A handoff is itself a delegation; the lineage fields describe the
@@ -321,7 +380,7 @@ class RunHandoffStartEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunHandoffEndEvent:
+class RunHandoffEndEvent(_SerializableRunEvent):
     """Run event emitted after first-class handoff control transfer ends.
 
     A handoff is itself a delegation; the lineage fields describe the
@@ -344,7 +403,7 @@ class RunHandoffEndEvent:
 
 
 @dataclass(frozen=True, slots=True)
-class RunStateSnapshotEvent:
+class RunStateSnapshotEvent(_SerializableRunEvent):
     """Run event emitted with a compact full state snapshot."""
 
     boundary: RunStateSnapshotBoundary
@@ -367,7 +426,7 @@ class RunPlanItem:
 
 
 @dataclass(frozen=True, slots=True)
-class RunPlanUpdatedEvent:
+class RunPlanUpdatedEvent(_SerializableRunEvent):
     """Run event emitted when the first-party plan tool records a new plan.
 
     Carries the structured plan so consumers render plan UX from typed data
@@ -722,3 +781,98 @@ async def forward_tool_approval_events(
     """Forward brokered approval lifecycle events into a run-event stream."""
     async for event in approval_events:
         event_emitter.tool_approval_event(event)
+
+
+def _serialize_event_payload(event: RunEvent) -> dict[str, JsonValue]:
+    """Convert one run event, preserving its fields and original nesting.
+
+    Prompt specs use their template's public rendering methods. The result is
+    a rendered view, not a restorable template or agent snapshot. Unsupported
+    values fail rather than becoming previews or empty substitutes.
+    """
+    return cast(dict[str, JsonValue], _serialize_value(event, set()))
+
+
+def _serialize_value(value: object, active: set[int]) -> JsonValue:
+    """Convert event fields recursively, tracking ancestors rather than aliases."""
+    if isinstance(value, Enum):
+        return _serialize_value(value.value, active)
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Nonfinite numbers cannot be transported as JSON.")
+
+        return value
+
+    if isinstance(value, (PurePath, UUID)):
+        return str(value)
+
+    if isinstance(value, Exception):
+        return {"type": type(value).__name__, "message": str(value)}
+
+    identity = id(value)
+    if identity in active:
+        raise ValueError("Cyclic values cannot be transported as JSON.")
+
+    active.add(identity)
+
+    try:
+        return _serialize_compound(value, active)
+    finally:
+        active.remove(identity)
+
+
+def _serialize_compound(value: object, active: set[int]) -> JsonValue:
+    """Convert containers and framework objects without arbitrary object introspection."""
+    # Render executable templates through their public interface.
+    # This describes the stored prompt, not necessarily a model request:
+    # use RunLLMStartEvent.messages for messages passed to the model client.
+    if isinstance(value, PromptSpec):
+        prompt = cast(PromptSpec[object], value)
+        return _serialize_value(
+            {
+                "messages": prompt.template.render_messages(prompt.values),
+                "values": prompt.values,
+                "response_format": prompt.template.response_format(),
+            },
+            active,
+        )
+
+    # Template implementations can be fieldless dataclasses; {} loses the prompt.
+    if isinstance(value, PromptTemplateBase):
+        raise TypeError("A prompt template must be paired with values in PromptSpec.")
+
+    if isinstance(value, RootModel):
+        return _serialize_value(cast(RootModel[object], value).root, active)
+
+    if isinstance(value, BaseModel):
+        # Public iteration keeps raw nested values and extras. Recursive model_dump
+        # can erase PromptSpec templates before our explicit conversion sees them.
+        return _serialize_value(dict(value), active)
+
+    # ShimState is also a dataclass; its public mapping excludes runtime locks.
+    if isinstance(value, Mapping):
+        payload: dict[str, JsonValue] = {}
+        for key, item in cast(Mapping[object, object], value).items():
+            if not isinstance(key, str):
+                raise TypeError("JSON object keys must be strings.")
+
+            payload[key] = _serialize_value(item, active)
+
+        return payload
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: _serialize_value(getattr(value, field.name), active)
+            for field in fields(value)
+        }
+
+    if isinstance(value, (list, tuple)):
+        return [
+            _serialize_value(item, active) for item in cast(Sequence[object], value)
+        ]
+
+    raise TypeError(f"Unsupported event value: {type(value).__qualname__}.")

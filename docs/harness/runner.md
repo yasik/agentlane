@@ -176,10 +176,17 @@ stream.
 provided, brokered tool-approval lifecycle events are forwarded into the same
 stream as `RunToolApprovalEvent`.
 
+For complete JSON event payloads in a custom transport, use
+the event's [`to_dict()` or `dumps()` methods](event-serialization.md).
+They preserve the source kind and complete nested payload, including model and
+approval wrappers, without applying display limits or selecting only UI fields.
+The host owns framing, access control, and stream cleanup.
+
 For local TypeScript apps that need these events from a Python backend process,
 use the stdio bridge documented in
-[Process Bridge](../process-bridge/protocol.md). It serializes this same
-`RunEvent` vocabulary instead of defining a second lifecycle model.
+[Process Bridge](../process-bridge/protocol.md). It uses the same source
+`RunEvent` objects with its own event names and selected fields. That protocol
+is unchanged and is not an alias of native `to_dict()` or `dumps()` output.
 
 Each emitted item is a `RunEvent`, a union tagged by `RunEventKind`:
 

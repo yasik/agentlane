@@ -14,6 +14,13 @@ from ._permissions import (
 )
 
 
+class ToolApprovalStatus(StrEnum):
+    """Lifecycle status for one host approval request."""
+
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
 @dataclass(frozen=True, slots=True)
 class _ToolApprovalEventStreamEnd:
     """Sentinel used to close broker event subscribers."""
@@ -21,13 +28,6 @@ class _ToolApprovalEventStreamEnd:
 
 _TOOL_APPROVAL_EVENT_STREAM_END = _ToolApprovalEventStreamEnd()
 type _ToolApprovalEventQueueItem = ToolApprovalEvent | _ToolApprovalEventStreamEnd
-
-
-class ToolApprovalStatus(StrEnum):
-    """Lifecycle status for one host approval request."""
-
-    PENDING = "pending"
-    RESOLVED = "resolved"
 
 
 @dataclass(frozen=True, slots=True)

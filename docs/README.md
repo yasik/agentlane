@@ -141,7 +141,8 @@ mental model:
 8. [Skills](./harness/skills.md)
 9. [Markdown Agent Definitions](./harness/agent-definitions.md)
 10. [Runner](./harness/runner.md)
-11. [Distributed Agents](./harness/distributed-agents.md)
+11. [Run Event Serialization](./harness/event-serialization.md)
+12. [Distributed Agents](./harness/distributed-agents.md)
 
 ### Process Bridge
 

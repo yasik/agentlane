@@ -1,5 +1,9 @@
 # Transport Serialization
 
+For harness run-event payloads in a custom transport, see
+[Run Event Serialization](../harness/event-serialization.md). This page describes
+runtime message codecs instead.
+
 Most AgentLane code does not need to think about serialization at all. If you
 send dataclasses, Pydantic models, protobuf messages, or plain JSON-compatible
 values, the runtime usually has enough information to do the right thing.
