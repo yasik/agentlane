@@ -42,9 +42,8 @@ export type TextChunk = {
 /** Identity of one tool call, stable across its phases. */
 export type ToolCallInfo = {
   /**
-   * Wire `tool_call_id` when it is non-blank; a synthesized stable id only when
-   * the backend sends an empty id. Approval linkage uses the wire id:
-   * `request.tool_call_id === callId` for every non-blank tool call id.
+   * Source `tool_call.id`, unchanged. Empty ids cannot provide reliable
+   * correlation. Approval linkage uses `request.tool_call_id === callId`.
    */
   callId: string;
 
@@ -151,7 +150,7 @@ export type ApprovalPolicy = (
 ) => ApprovalDecision | Promise<ApprovalDecision>;
 
 /**
- * Resolved approval state confirmed by `approval_resolved`.
+ * Resolved approval state confirmed by a native approval record.
  *
  * This is the source of truth. It fires for app decisions and backend-initiated
  * resolutions such as Python policy denials or force denials during shutdown.

@@ -8,6 +8,7 @@ export class FakeChild implements BridgeChildLike {
   signalCode: NodeJS.Signals | null = null;
   killed: Array<NodeJS.Signals | undefined> = [];
   writes: string[] = [];
+  writeError: Error | null = null;
   private closeListeners: Array<
     (code: number | null, signal: NodeJS.Signals | null) => void
   > = [];
@@ -16,6 +17,7 @@ export class FakeChild implements BridgeChildLike {
     destroyed: false,
     writable: true,
     write: (chunk: string): boolean => {
+      if (this.writeError !== null) throw this.writeError;
       this.writes.push(chunk);
       return true;
     },
@@ -60,23 +62,65 @@ export class FakeChild implements BridgeChildLike {
   }
 
   emitApprovalRequest(id: string): void {
-    this.emitEvent({
-      type: "approval_request",
-      ts: 2,
-      id,
-      request: approvalRequestPayload(),
-      reason: "review",
+    this.emitNative("tool_approval", {
+      event: {
+        record: {
+          request_id: id,
+          request: approvalRequestPayload(),
+          status: "pending",
+          approval_required_decision: {
+            outcome: "require_approval",
+            reason: "review",
+          },
+          final_decision: null,
+        },
+      },
     });
   }
 
   emitApprovalResolved(id: string, allowed: boolean): void {
+    this.emitNative("tool_approval", {
+      event: {
+        record: {
+          request_id: id,
+          request: approvalRequestPayload(),
+          status: "resolved",
+          approval_required_decision: {
+            outcome: "require_approval",
+            reason: "review",
+          },
+          final_decision: { outcome: allowed ? "allow" : "deny", reason: null },
+        },
+      },
+    });
+  }
+
+  emitNative(type: string, payload: Record<string, unknown>): void {
     this.emitEvent({
-      type: "approval_resolved",
-      ts: 3,
-      id,
-      allowed,
-      request: approvalRequestPayload(),
-      reason: null,
+      type: "run_event",
+      ts: 2,
+      event: { type, payload: { kind: type, ...payload } },
+    });
+  }
+
+  emitModel(kind: string, fields: Record<string, unknown> = {}): void {
+    this.emitNative("model_stream", {
+      event: {
+        kind,
+        raw: null,
+        provider_event_type: null,
+        item_index: null,
+        item_type: null,
+        text: null,
+        tool_call_id: null,
+        tool_call_index: null,
+        arguments_delta: null,
+        reasoning: null,
+        reasoning_signature: null,
+        response: null,
+        error: null,
+        ...fields,
+      },
     });
   }
 
@@ -84,6 +128,10 @@ export class FakeChild implements BridgeChildLike {
     this.stdout.write(
       `${JSON.stringify({ protocol_version: "1.0", ...event })}\n`,
     );
+  }
+
+  emitLine(line: string): void {
+    this.stdout.write(`${line}\n`);
   }
 
   emitClose(

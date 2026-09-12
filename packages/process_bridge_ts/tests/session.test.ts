@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { PassThrough } from "node:stream";
-import type { BridgeChildLike } from "../src/channel.ts";
 import {
   RunError,
   type SessionClose,
@@ -9,91 +7,8 @@ import {
   type TextChunk,
   type ToolActivity,
 } from "../src/session-types.ts";
+import { FakeChild } from "./session-test-helpers.ts";
 import { attachAgentSession } from "./session-test-support.ts";
-
-class FakeChild implements BridgeChildLike {
-  readonly stdout = new PassThrough();
-  readonly stderr = new PassThrough();
-  exitCode: number | null = null;
-  signalCode: NodeJS.Signals | null = null;
-  killed: Array<NodeJS.Signals | undefined> = [];
-  writes: string[] = [];
-  writeError: Error | null = null;
-  private closeListeners: Array<
-    (code: number | null, signal: NodeJS.Signals | null) => void
-  > = [];
-  private errorListeners: Array<(error: Error) => void> = [];
-  private exitOnce: (() => void) | null = null;
-  stdin = {
-    destroyed: false,
-    writable: true,
-    write: (chunk: string): boolean => {
-      if (this.writeError !== null) {
-        throw this.writeError;
-      }
-
-      this.writes.push(chunk);
-      return true;
-    },
-    on: (_event: "error", _listener: (error: Error) => void): unknown =>
-      undefined,
-  };
-
-  kill(signal?: NodeJS.Signals): boolean {
-    this.killed.push(signal);
-    return true;
-  }
-
-  once(_event: "exit", listener: () => void): unknown {
-    this.exitOnce = listener;
-    return undefined;
-  }
-
-  on(
-    event: "close" | "error",
-    listener:
-      | ((code: number | null, signal: NodeJS.Signals | null) => void)
-      | ((error: Error) => void),
-  ): unknown {
-    if (event === "close") {
-      this.closeListeners.push(
-        listener as (
-          code: number | null,
-          signal: NodeJS.Signals | null,
-        ) => void,
-      );
-    } else {
-      this.errorListeners.push(listener as (error: Error) => void);
-    }
-    return undefined;
-  }
-
-  emitEvent(event: Record<string, unknown>): void {
-    this.stdout.write(
-      `${JSON.stringify({ protocol_version: "1.0", ...event })}\n`,
-    );
-  }
-
-  emitLine(line: string): void {
-    this.stdout.write(`${line}\n`);
-  }
-
-  emitClose(
-    code: number | null = 0,
-    signal: NodeJS.Signals | null = null,
-  ): void {
-    this.exitCode = code;
-    this.signalCode = signal;
-    this.exitOnce?.();
-    for (const listener of this.closeListeners) listener(code, signal);
-  }
-
-  commands(): Array<Record<string, unknown>> {
-    return this.writes.map(
-      (line: string): Record<string, unknown> => JSON.parse(line),
-    );
-  }
-}
 
 describe("agent session", () => {
   test("rejects startup when ready never arrives", async () => {
@@ -152,7 +67,7 @@ describe("agent session", () => {
       text: "hello",
     });
     child.emitEvent({ type: "run_start", ts: 2, prompt: "hello" });
-    child.emitEvent({ type: "assistant_delta", ts: 3, text: "Echo: hello" });
+    child.emitModel("text_delta", { text: "Echo: hello" });
     child.emitEvent({
       type: "run_complete",
       ts: 4,
@@ -214,18 +129,16 @@ describe("agent session", () => {
     const run = session.run("hello");
 
     child.emitEvent({ type: "run_start", ts: 2, prompt: "hello" });
-    child.emitEvent({
-      type: "tool_start",
-      ts: 3,
+    child.emitNative("tool_start", {
       task_id: "task",
       parent_task_id: null,
       is_root: true,
-      is_subagent: false,
-      agent: "Agent",
-      tool: "read",
-      tool_call_id: "call_1",
-      arguments: {},
-      is_plan: false,
+      task_name: "Agent",
+      tool_call: {
+        id: "call_1",
+        type: "function",
+        function: { name: "read", arguments: "{}" },
+      },
       is_delegation: false,
     });
     child.emitEvent({ type: "run_cancelled", ts: 4 });
@@ -284,7 +197,7 @@ describe("agent session", () => {
     const run = session.run("hello");
 
     child.emitEvent({ type: "run_start", ts: 2, prompt: "hello" });
-    child.emitEvent({ type: "assistant_delta", ts: 3, text: "Echo: hello" });
+    child.emitModel("text_delta", { text: "Echo: hello" });
     child.emitEvent({
       type: "run_complete",
       ts: 4,
@@ -346,7 +259,7 @@ describe("agent session", () => {
     const run = session.run("hello");
 
     child.emitLine("not-json");
-    child.emitEvent({ type: "assistant_delta", ts: 3, text: "stale" });
+    child.emitModel("text_delta", { text: "stale" });
 
     await expect(run).rejects.toBeInstanceOf(SessionClosedError);
     expect(closes[0]?.reason).toBe("protocol-error");

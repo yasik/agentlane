@@ -107,16 +107,16 @@ Primary files: `packages/process_bridge/src/agentlane_process_bridge/_events.py`
 
 ### B3: Decode and Present Native Events in TypeScript
 
-- [ ] Add the native-record shape to `src/protocol.ts`, preserving all source fields
+- [x] Add the native-record shape to `src/protocol.ts`, preserving all source fields
   and extras. Validate envelopes and known discriminators without stripping data.
-- [ ] Update session event dispatch, approval handling, usage reads, and text-stream
+- [x] Update session event dispatch, approval handling, usage reads, and text-stream
   tracking to read nested fields. Remove obsolete flat-event schemas and types.
-- [ ] Keep convenience helpers for text/reasoning/tool argument deltas only where
+- [x] Keep convenience helpers for text/reasoning/tool argument deltas only where
   current callers need them. Helpers must not alter protocol event delivery.
-- [ ] Derive display flags and counts from source fields. Remove bridge-owned turn
+- [x] Derive display flags and counts from source fields. Remove bridge-owned turn
   prediction unless an identified client still needs it; otherwise derive locally
   from state snapshots. Do not invent missing lineage/correlation metadata.
-- [ ] Ensure model completion does not finish the run and model errors do not
+- [x] Ensure model completion does not finish the run and model errors do not
   settle unrelated command promises or create duplicate terminal notifications.
 
 Primary files: `packages/process_bridge_ts/src/protocol.ts`, session dispatch,
@@ -273,7 +273,7 @@ version change is authorized by this work.
 - [x] Complete the required B1 contract review with the user.
 - [x] B2: Implement Python delivery and the approved public result method;
   update focused Python tests and commit the passing unit.
-- [ ] B3: Implement TypeScript decoding and presentation; update focused client
+- [x] B3: Implement TypeScript decoding and presentation; update focused client
   tests and commit the passing unit.
 - [ ] B4: Add cross-language fixtures, subprocess lifecycle checks, synthetic
   measurements, and docs; run the complete required verification stack and commit.
@@ -292,3 +292,16 @@ close, and delayed writes after a timeout.
 
 Verification: `uv run pytest packages/process_bridge/tests tests/harness/serialization -q`
 passed all 146 tests. Targeted formatting, Ruff, Pyright, and Mypy passed.
+
+## B3 Implementation Review — 2026-09-12
+
+The TypeScript decoder validates native records and retains the original parsed
+object, including own reserved-name keys that schema parsing can omit. Client
+helpers read native fields and derive presentation data. Nested model completion
+and errors do not settle run or command promises. Approval records remain the
+execution source of truth.
+
+Verification: `make check-ts` passed lint, type checking, all 84 tests with 284
+assertions, and build. This includes eight B4 real subprocess tests, which are
+committed with B4. The simplification review removed one unused private field
+and corrected one stale comment; it found no required reuse or efficiency change.
