@@ -16,6 +16,8 @@ from agentlane_process_bridge import (
     PromptCommand,
     ResetCommand,
 )
+from agentlane_process_bridge._stdio import _close_after_dead_client
+from structlog.testing import capture_logs
 
 from agentlane.harness import RunResult
 
@@ -260,5 +262,27 @@ def test_timed_out_batch_does_not_send_remaining_completion() -> None:
         assert output.flush_count == 0
         with pytest.raises(BrokenPipeError):
             await writer.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_dead_client_close_logs_error_type_without_rendering_payload() -> None:
+    class FailedOutput(StringIO):
+        def write(self, value: str) -> int:
+            raise BrokenPipeError("reader disconnected")
+
+    async def scenario() -> None:
+        backend = BridgeBackend(agent=FakeAgent(), events=EventWriter(FailedOutput()))
+        with pytest.raises(BrokenPipeError):
+            await backend.start()
+        with capture_logs() as logs:
+            await _close_after_dead_client(backend)
+        assert logs == [
+            {
+                "event": "bridge_close_after_dead_client_failed",
+                "log_level": "error",
+                "error_type": "BrokenPipeError",
+            }
+        ]
 
     asyncio.run(scenario())

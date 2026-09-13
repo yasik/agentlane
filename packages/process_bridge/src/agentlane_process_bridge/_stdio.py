@@ -208,12 +208,16 @@ async def _report_command_error(backend: BridgeBackend, message: str) -> bool:
 async def _close_after_dead_client(backend: BridgeBackend) -> None:
     try:
         await backend.close(emit_terminal=False)
-    except Exception:
+    except Exception as exc:
         if backend.events.is_writable:
             raise
         # Dead-client cleanup intentionally avoids terminal run events, but the
         # low-level writer may still observe a closed pipe while flushing.
-        _logger.exception("bridge_close_after_dead_client_failed")
+        # Rendering traceback locals can inspect megabytes of queued payloads
+        # and delay shutdown after the output timeout has already expired.
+        _logger.error(
+            "bridge_close_after_dead_client_failed", error_type=type(exc).__name__
+        )
 
 
 async def _discard_oversized_line_remainder(
