@@ -1,6 +1,6 @@
 """Measure synthetic native record sizes and local bridge write costs.
 
-Run with ``uv run python -m packages.process_bridge.tests.measure_native_events``.
+Run with `uv run python -m packages.process_bridge.tests.measure_native_events`.
 Results describe this machine and an in-memory sink, not provider or pipe latency.
 """
 

@@ -130,9 +130,11 @@ exit path settles the active run.
 Writer failure also wakes a command loop that is waiting for stdin. The backend
 can clean up and exit even when the host keeps stdin open but stops reading
 stdout. The writer defaults to a 30-second timeout and a 1,024-record queue;
-the timeout applies to writes, queue admission, and drain waits. Later writes
-fail immediately after a writer failure. Setting `write_timeout_seconds=None`
-disables this time bound.
+the timeout applies to writes, queue admission, and drain waits. Writer failure
+releases producers blocked on queue admission and discards their queued records.
+No records remain pending after those producers settle. Later writes and
+`drain()` fail immediately with the stored failure. Setting
+`write_timeout_seconds=None` disables the timeout.
 
 Synchronous reads and writes use daemon threads so a blocked borrowed stream
 does not hold the event loop or prevent interpreter shutdown. Cancelling the
@@ -142,6 +144,10 @@ descriptor writes to avoid a blocked Python output-buffer lock during exit.
 The bridge does not close borrowed descriptors. Run cleanup still depends on
 the agent's cooperative stream closure; the I/O timeout is not a total run
 shutdown deadline.
+
+If close fails after output is already unavailable, the backend logs
+`bridge_close_after_dead_client_failed` with `error_type`. This diagnostic
+omits traceback locals so queued payloads do not delay shutdown.
 
 Ready metadata and runtime configuration require strict JSON values. Ordinary
 bridge-owned payloads retain the legacy text fallback for unsupported values,
