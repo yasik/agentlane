@@ -378,6 +378,7 @@ class EventWriter:
 
     async def drain(self) -> None:
         """Wait until all queued lines have been written."""
+        self._raise_if_failed()
         queue = self._queue
         if queue is None:
             return
@@ -432,6 +433,12 @@ class EventWriter:
             # process is no longer draining bridge output reliably.
             self._mark_failed(BrokenPipeError("Bridge event writer queue is full."))
             raise
+
+        # Failure cleanup can wake a blocked producer after the worker exits.
+        # Discard its newly admitted line before reporting the stored failure.
+        if self._failed is not None:
+            self._discard_queued_lines(queue)
+            self._raise_if_failed()
 
     def _ensure_queue(self) -> asyncio.Queue[str]:
         if self._queue is None:

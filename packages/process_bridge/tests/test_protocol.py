@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+from contextlib import suppress
 from io import StringIO
 from typing import TextIO, cast
 
@@ -284,5 +285,66 @@ def test_event_writer_batches_streaming_events_until_terminal_drain() -> None:
         assert events[-1]["type"] == "run_complete"
         assert output.flush_count < 100
         await writer.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("write_timeout", [None, 10.0])
+def test_writer_failure_releases_blocked_emitters(write_timeout: float | None) -> None:
+    class FailingStream:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def write(self, value: str) -> int:
+            self.started.set()
+            self.release.wait(timeout=2)
+            raise BrokenPipeError("reader disconnected")
+
+        def flush(self) -> None:
+            pass
+
+    async def scenario() -> None:
+        stream = FailingStream()
+        writer = EventWriter(
+            cast(TextIO, stream), max_queue_size=1, write_timeout_seconds=write_timeout
+        )
+
+        async def emit() -> None:
+            await writer.emit(
+                BridgeEventType.RUN_EVENT,
+                verbatim_payload={
+                    "event": {
+                        "type": "model_stream",
+                        "payload": {"event": {"kind": "text_delta", "text": "x"}},
+                    }
+                },
+            )
+
+        blocked: list[asyncio.Task[None]] = []
+        try:
+            await emit()
+            assert await asyncio.to_thread(stream.started.wait, 1)
+            await emit()
+            blocked = [asyncio.create_task(emit()) for _ in range(3)]
+            for _ in range(4):
+                await asyncio.sleep(0)
+            assert all(not task.done() for task in blocked)
+            stream.release.set()
+            for task in blocked:
+                with pytest.raises(BrokenPipeError, match="reader disconnected"):
+                    await asyncio.wait_for(task, 0.5)
+            with pytest.raises(BrokenPipeError, match="reader disconnected"):
+                await asyncio.wait_for(writer.aclose(), 0.5)
+            assert writer._queue is not None
+            assert writer._queue.empty()
+            await asyncio.wait_for(writer._queue.join(), 0.5)
+        finally:
+            stream.release.set()
+            for task in blocked:
+                task.cancel()
+            await asyncio.gather(*blocked, return_exceptions=True)
+            with suppress(BrokenPipeError, TimeoutError):
+                await asyncio.wait_for(writer.aclose(), 0.5)
 
     asyncio.run(scenario())
