@@ -15,8 +15,8 @@ from agentlane_process_bridge import (
     EventWriter,
     PromptCommand,
     ResetCommand,
+    serve_stdio,
 )
-from agentlane_process_bridge._stdio import _close_after_dead_client
 from structlog.testing import capture_logs
 
 from agentlane.harness import RunResult
@@ -276,7 +276,7 @@ def test_dead_client_close_logs_error_type_without_rendering_payload() -> None:
         with pytest.raises(BrokenPipeError):
             await backend.start()
         with capture_logs() as logs:
-            await _close_after_dead_client(backend)
+            await serve_stdio(backend, readline=lambda _size: "")
         assert logs == [
             {
                 "event": "bridge_close_after_dead_client_failed",

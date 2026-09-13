@@ -290,7 +290,9 @@ def test_event_writer_batches_streaming_events_until_terminal_drain() -> None:
 
 
 @pytest.mark.parametrize("write_timeout", [None, 10.0])
-def test_writer_failure_releases_blocked_emitters(write_timeout: float | None) -> None:
+def test_writer_failure_releases_blocked_emitters(
+    write_timeout: float | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     class FailingStream:
         def __init__(self) -> None:
             self.started = threading.Event()
@@ -306,6 +308,15 @@ def test_writer_failure_releases_blocked_emitters(write_timeout: float | None) -
 
     async def scenario() -> None:
         stream = FailingStream()
+        queue = asyncio.Queue[str](maxsize=1)
+
+        def create_queue(maxsize: int) -> asyncio.Queue[str]:
+            assert maxsize == 1
+            return queue
+
+        monkeypatch.setattr(
+            "agentlane_process_bridge._protocol.asyncio.Queue", create_queue
+        )
         writer = EventWriter(
             cast(TextIO, stream), max_queue_size=1, write_timeout_seconds=write_timeout
         )
@@ -336,9 +347,8 @@ def test_writer_failure_releases_blocked_emitters(write_timeout: float | None) -
                     await asyncio.wait_for(task, 0.5)
             with pytest.raises(BrokenPipeError, match="reader disconnected"):
                 await asyncio.wait_for(writer.aclose(), 0.5)
-            assert writer._queue is not None
-            assert writer._queue.empty()
-            await asyncio.wait_for(writer._queue.join(), 0.5)
+            assert queue.empty()
+            await asyncio.wait_for(queue.join(), 0.5)
         finally:
             stream.release.set()
             for task in blocked:
