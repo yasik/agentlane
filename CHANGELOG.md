@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-13
+
+AgentLane `0.15.0` forwards complete native run events through the process bridge, adds strict final-result serialization, and fixes shutdown when a client stops reading output. The native event contract replaces the previous flat event shape; update the Python and TypeScript packages together.
+
+### Added
+
+- Added `RunResult.to_dict()` and the public `RunResultRecord` type to inspect complete final outputs, responses, turn counts, and run state with strict JSON conversion ([`b7cfd6f`](https://github.com/yasik/agentlane/commit/b7cfd6f)).
+- Added TypeScript native event types and `isNativeEvent` to inspect known payloads while retaining extra fields and unknown native event kinds ([`daf2258`](https://github.com/yasik/agentlane/commit/daf2258)).
+
+### Changed
+
+- Process-bridge `run_event.event` now carries the complete source record with native kinds and nested payloads, including model and approval records. The previous flat event shape is incompatible; protocol version remains `1.0` ([`b7cfd6f`](https://github.com/yasik/agentlane/commit/b7cfd6f), [`daf2258`](https://github.com/yasik/agentlane/commit/daf2258)).
+- Process-bridge events and final results now use strict conversion that renders stored prompt templates and rejects unsupported values, non-string object keys, cycles, and nonfinite numbers instead of silently losing data. Documentation explains how stored prompt views differ from actual model requests and what complete records expose to hosts ([`b7cfd6f`](https://github.com/yasik/agentlane/commit/b7cfd6f), [`5b1796e`](https://github.com/yasik/agentlane/commit/5b1796e)).
+
+### Fixed
+
+- TypeScript sessions preserve empty model deltas and provider completion records in `onEvent`, keep model completion and errors separate from run settlement, and apply approval policies independently of display callbacks ([`daf2258`](https://github.com/yasik/agentlane/commit/daf2258), [`5b1796e`](https://github.com/yasik/agentlane/commit/5b1796e)).
+- Failed bridge output now releases blocked producers and permits shutdown when a client stops reading. Shutdown diagnostics use bounded waits so blocked output or error streams cannot hold the process open ([`344e370`](https://github.com/yasik/agentlane/commit/344e370), [`cf72d69`](https://github.com/yasik/agentlane/commit/cf72d69)).
+
 ## [0.14.0] - 2026-09-11
 
 AgentLane `0.14.0` adds native run-event serialization, preserves complete process-bridge results, and fixes structured reasoning serialization for OpenAI and Azure Responses clients.
@@ -285,7 +304,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
-[Unreleased]: https://github.com/yasik/agentlane/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/yasik/agentlane/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/yasik/agentlane/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/yasik/agentlane/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/yasik/agentlane/compare/v0.12.0...v0.13.0
