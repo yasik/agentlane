@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { BridgeEvent } from "../src/protocol.ts";
 import type {
   AgentActivity,
   TextChunk,
@@ -48,37 +49,35 @@ describe("session payload fidelity", () => {
       task_id: "root",
       parent_task_id: null,
       is_root: true,
-      is_subagent: false,
-      agent: "Root",
+      task_name: "Root",
     };
-    child.emitEvent({ type: "agent_start", ts: 3, ...lineage, next_turn: 1 });
-    child.emitEvent({
-      type: "tool_start",
-      ts: 4,
+    child.emitNative("agent_start", lineage);
+    const tool_call = {
+      id: "call",
+      type: "function",
+      function: { name: "read", arguments: JSON.stringify({ value }) },
+    };
+    child.emitNative("tool_start", {
       ...lineage,
-      tool: "read",
-      tool_call_id: "call",
-      arguments: { value },
-      is_plan: false,
+      tool_call,
       is_delegation: false,
     });
-    child.emitEvent({
-      type: "tool_end",
-      ts: 5,
+    child.emitNative("tool_end", {
       ...lineage,
-      tool: "read",
-      tool_call_id: "call",
+      tool_call,
       result: value,
       ok: true,
       error: null,
-      is_plan: false,
       is_delegation: false,
     });
-    child.emitEvent({
-      type: "agent_end",
-      ts: 6,
+    child.emitNative("agent_end", {
       ...lineage,
-      final_output: value,
+      result: {
+        final_output: value,
+        responses: [],
+        turn_count: 1,
+        run_state: null,
+      },
     });
     child.emitEvent({
       type: "run_complete",
@@ -122,9 +121,7 @@ describe("session payload fidelity", () => {
     const run = session.run("go");
     child.emitEvent({ type: "run_start", ts: 2, prompt: "go" });
     for (let offset = 0; offset < value.length; offset += chunkSize) {
-      child.emitEvent({
-        type: "assistant_delta",
-        ts: 3,
+      child.emitModel("text_delta", {
         text: value.slice(offset, offset + chunkSize),
       });
     }
@@ -156,7 +153,7 @@ describe("session payload fidelity", () => {
     const session = await sessionPromise;
     const run = session.run("go");
     child.emitEvent({ type: "run_start", ts: 2, prompt: "go" });
-    child.emitEvent({ type: "assistant_delta", ts: 3, text: "existing text" });
+    child.emitModel("text_delta", { text: "existing text" });
     child.emitEvent({
       type: "run_complete",
       ts: 4,
@@ -170,4 +167,163 @@ describe("session payload fidelity", () => {
     expect(chunks.at(-1)).toMatchObject({ text: "existing text", done: true });
     child.emitClose();
   });
+});
+
+test("raw events retain empty deltas, structured reasoning and future kinds without rendering", async () => {
+  const child = new FakeChild();
+  const raw: unknown[] = [];
+  const chunks: TextChunk[] = [];
+  const sessionPromise = attachAgentSession(child, {
+    backend: { command: "fake" },
+    onEvent: (event: BridgeEvent): void => {
+      raw.push(event);
+    },
+    onAssistantText: (chunk: TextChunk): void => {
+      chunks.push(chunk);
+    },
+    onReasoningText: (chunk: TextChunk): void => {
+      chunks.push(chunk);
+    },
+  });
+  child.emitReady();
+  const session = await sessionPromise;
+  const run = session.run("go");
+  child.emitEvent({ type: "run_start", ts: 1, prompt: "go" });
+  child.emitModel("text_delta", { text: "" });
+  child.emitModel("reasoning", {
+    reasoning: { summary: ["界\n"], signature: "sig" },
+  });
+  child.emitModel("future_model", {
+    text: "must not render",
+    provider_extra: { fields: [null, true] },
+  });
+  child.emitNative("future_native", { content: "must not render" });
+  child.emitEvent({
+    type: "run_complete",
+    ts: 3,
+    final_output: null,
+    turn_count: 1,
+    response_count: 0,
+    shim_state: {},
+  });
+  await run;
+  expect(chunks).toEqual([]);
+  expect(raw.slice(2, -1)).toMatchObject([
+    { event: { payload: { event: { kind: "text_delta", text: "" } } } },
+    {
+      event: {
+        payload: {
+          event: { reasoning: { summary: ["界\n"], signature: "sig" } },
+        },
+      },
+    },
+    {
+      event: {
+        payload: {
+          event: {
+            kind: "future_model",
+            provider_extra: { fields: [null, true] },
+          },
+        },
+      },
+    },
+    {
+      event: { type: "future_native", payload: { content: "must not render" } },
+    },
+  ]);
+  child.emitClose();
+});
+
+test("model errors and completions do not settle a run or unrelated configure command", async () => {
+  const child = new FakeChild();
+  const sessionPromise = attachAgentSession(child, {
+    backend: { command: "fake" },
+  });
+  child.emitReady();
+  const session = await sessionPromise;
+  let settled = false;
+  const run = session.run("go").then((value) => {
+    settled = true;
+    return value;
+  });
+  child.emitEvent({ type: "run_start", ts: 1, prompt: "go" });
+  const configure = session.configure({ model: "next" });
+  child.emitModel("error", {
+    error: { type: "ValueError", message: "provider error" },
+  });
+  child.emitModel("completed");
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  child.emitEvent({
+    type: "error",
+    ts: 2,
+    scope: "command",
+    message: "configure failed",
+  });
+  await expect(configure).rejects.toThrow("configure failed");
+  expect(settled).toBe(false);
+  child.emitModel("text_delta", { text: "continued" });
+  child.emitEvent({
+    type: "run_complete",
+    ts: 3,
+    final_output: "continued",
+    turn_count: 1,
+    response_count: 1,
+    shim_state: {},
+  });
+  await expect(run).resolves.toMatchObject({
+    status: "completed",
+    finalOutput: "continued",
+  });
+  child.emitClose();
+});
+
+test("source tool ids and arguments remain intact while display flags are derived", async () => {
+  const child = new FakeChild();
+  const tools: ToolActivity[] = [];
+  const sessionPromise = attachAgentSession(child, {
+    backend: { command: "fake" },
+    onToolActivity: (event: ToolActivity): void => {
+      tools.push(event);
+    },
+  });
+  child.emitReady();
+  await sessionPromise;
+  const source = {
+    task_name: "Child",
+    task_id: "child",
+    parent_task_id: "root",
+    is_root: false,
+    tool_call: {
+      id: "",
+      type: "function",
+      function: { name: "write_plan", arguments: "invalid-json" },
+    },
+    is_delegation: true,
+  };
+  child.emitNative("tool_start", source);
+  child.emitNative("tool_end", {
+    ...source,
+    result: { complete: true },
+    ok: true,
+    error: null,
+  });
+  expect(tools).toMatchObject([
+    {
+      phase: "start",
+      call: {
+        callId: "",
+        taskId: "child",
+        arguments: "invalid-json",
+        isPlan: true,
+        isDelegation: true,
+      },
+    },
+    {
+      phase: "end",
+      call: { callId: "", arguments: "invalid-json" },
+      result: { complete: true },
+    },
+  ]);
+  child.emitClose();
 });

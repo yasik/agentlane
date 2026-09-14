@@ -30,12 +30,7 @@ export type {
 } from "./process.ts";
 export { spawnBridgeProcess, wireBridgeProcess } from "./process.ts";
 export type {
-  AgentEndEvent,
-  AgentStartEvent,
-  ApprovalRequestEvent,
   ApprovalRequestPayload,
-  ApprovalResolvedEvent,
-  AssistantDeltaEvent,
   BridgeCommand,
   BridgeCommandType,
   BridgeEnvelope,
@@ -48,29 +43,16 @@ export type {
   DecodedBridgeEvent,
   ErrorEvent,
   ErrorScope,
-  HandoffEndEvent,
-  HandoffStartEvent,
   KnownBridgeEvent,
-  LineageFields,
-  LlmEndEvent,
-  LlmStartEvent,
-  PlanStep,
-  PlanUpdatedEvent,
-  ProviderEvent,
   ReadyEvent,
-  ReasoningDeltaEvent,
   ResetEvent,
   RunCancelledEvent,
   RunCompleteEvent,
   RunEventEvent,
   RunStartEvent,
   ShutdownEvent,
-  StateSnapshotEvent,
   TokenUsage,
-  ToolArgumentsDeltaEvent,
-  ToolEndEvent,
   ToolErrorPayload,
-  ToolStartEvent,
   VersionedBridgeCommand,
 } from "./protocol.ts";
 export {
@@ -80,6 +62,14 @@ export {
   PROTOCOL_MAJOR,
   PROTOCOL_VERSION,
 } from "./protocol.ts";
+export type {
+  NativeApprovalRecord,
+  NativeEventKind,
+  NativeModelEvent,
+  NativePayload,
+  NativeRunEvent,
+} from "./protocol-native.ts";
+export { isKnownModelEvent, isNativeEvent } from "./protocol-native.ts";
 export type {
   AgentActivity,
   AgentInfo,

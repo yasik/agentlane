@@ -9,7 +9,9 @@ const session = await createAgentSession({
     projectDir: repoRoot,
   },
   onEvent: (event) => {
-    console.log(event.type);
+    console.log(
+      event.type === "run_event" ? `run_event: ${event.event.type}` : event.type,
+    );
   },
   onAssistantText: (chunk) => {
     if (chunk.done) {

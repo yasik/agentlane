@@ -33,6 +33,7 @@ from ._run import (
     RunInput,
     RunInstructions,
     RunResult,
+    RunResultRecord,
     RunState,
     ShimState,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "RunPlanItem",
     "RunPlanUpdatedEvent",
     "RunResult",
+    "RunResultRecord",
     "RunState",
     "RunStateSnapshot",
     "RunStateSnapshotBoundary",

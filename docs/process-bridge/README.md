@@ -65,6 +65,14 @@ Session callbacks are balanced by the package:
 
 Apps that need raw protocol details can subscribe to `onEvent`. That callback
 receives the strict `BridgeEvent` union before semantic processing.
+Native records are nested at `run_event.event` and preserve all source fields.
+Unknown native kinds also reach `onEvent`; presentation helpers ignore them.
+Model completion and model errors do not settle the run.
+
+The local host receives full instructions, history, prompt values, tool results,
+and provider data. It must authorize any later forwarding or storage. Update
+Python and TypeScript consumers together: protocol version `1.0` is unchanged,
+but the previous flat event contract is incompatible.
 
 ## Python Backend Factory
 

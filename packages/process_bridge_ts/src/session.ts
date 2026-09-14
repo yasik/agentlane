@@ -3,6 +3,7 @@ import type { BridgeChildLike } from "./channel.ts";
 import { createBridgeChannel } from "./channel.ts";
 import { BridgeDecodeError } from "./decoders.ts";
 import type { BridgeCommand, BridgeEvent } from "./protocol.ts";
+import { isNativeEvent } from "./protocol-native.ts";
 import { handlePendingCommandError } from "./session-command-errors.ts";
 import { SessionConfigState } from "./session-config.ts";
 import {
@@ -373,7 +374,12 @@ export class AgentSessionController<
     // Each command has one backend acknowledgement event. The queue may contain
     // multiple command types, so remove by kind rather than blindly shifting.
     if (event.type === "run_start") this.settleCommand("prompt");
-    if (event.type === "approval_resolved") this.settleCommand("approve");
+    if (
+      event.type === "run_event" &&
+      isNativeEvent(event.event, "tool_approval") &&
+      event.event.payload.event.record.status === "resolved"
+    )
+      this.settleCommand("approve");
     if (event.type === "cancel_requested" || event.type === "cancel_ignored") {
       this.settleCommand("cancel");
     }

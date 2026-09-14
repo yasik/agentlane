@@ -5,13 +5,11 @@ building a TypeScript shell usually need only the
 [process bridge overview](./README.md) and
 [runtime configuration](./runtime-configuration.md).
 
-Command handling and run-event encoding are registry-based.
+Command handling is registry-based.
 `BridgeBackend` accepts an explicit command-handler tuple and defaults to
 `BRIDGE_COMMAND_HANDLERS`; each command handler declares the command class it
-handles and owns that command's side effects. `RunEventEncoder` accepts an
-explicit run-event-handler tuple and defaults to `RUN_EVENT_BRIDGE_HANDLERS`;
-each run-event handler declares the upstream `RunEventKind`, the event class,
-the emitted `BridgeEventType` values, and its encoder implementation.
+handles and owns that command's side effects. Native events use
+`RunEvent.to_dict()` directly. They need no separate Python encoder registry.
 
 ## Add a Command
 
@@ -71,29 +69,32 @@ the emitted `BridgeEventType` values, and its encoder implementation.
 
 1. Add the upstream run event to `agentlane.harness.RunEventKind` and the
    concrete run-event dataclass in AgentLane core first.
-2. Add any new typed wire event to `BridgeEventType` in
-   `packages/process_bridge/src/agentlane_process_bridge/_protocol.py`. Derive
-   the value from `RunEventKind` or `HarnessEventType`; do not repeat event
-   string literals downstream.
-3. Add one `RunEventBridgeHandler` implementation in
-   `packages/process_bridge/src/agentlane_process_bridge/_events.py`.
-4. In that handler, declare the upstream `RunEventKind`, the upstream event
-   class, every downstream `BridgeEventType` it can emit, and the encoder logic.
-5. Add the handler instance to `RUN_EVENT_BRIDGE_HANDLERS`.
-6. If the TypeScript app should treat the event as known, add the event type and
-   strict schema entry to `BRIDGE_EVENT_SCHEMAS` in
-   `packages/process_bridge_ts/src/protocol.ts`.
-7. Add a representative event object to
-   `packages/process_bridge/fixtures/protocol/events.json`.
-8. Add or update Python encoding/fixture tests and TypeScript decoder/parity
-   tests.
-9. Run:
+2. Verify that `to_dict()` preserves every source field and rejects unsupported
+   values. The bridge delivers the record inside `run_event.event` automatically.
+3. Add typed payload validation to `NATIVE_EVENT_SCHEMAS` in
+   `packages/process_bridge_ts/src/protocol-native.ts`. Retain extra fields at
+   every nested object level. Unknown native kinds already reach `onEvent`.
+4. Add session presentation only when a callback needs it. Keep the raw record
+   intact. Derive display fields from source data and preserve lineage.
+5. Update Python-generated fixtures in
+   `packages/process_bridge/fixtures/protocol/events.json` and TypeScript parity
+   tests. Assert exact field retention across the language boundary.
+6. Add lifecycle tests if the event affects approval or presentation state.
+   Model completion and errors must not settle the run or command promises.
+7. Run:
 
     ```bash
     uv run pytest packages/process_bridge/tests -q
     /usr/bin/make lint-ts
     /usr/bin/make test-ts
     ```
+
+Regenerate the shared protocol fixture from native Python records before the
+parity tests:
+
+```bash
+uv run python -m packages.process_bridge.tests.native_fixtures
+```
 
 ## Add Bridge-Only Event Handling
 
@@ -111,14 +112,36 @@ the emitted `BridgeEventType` values, and its encoder implementation.
 
 ## Developer Experience
 
-The extension path is explicit and code-native. A command has one parser, one
-backend handler, and one TypeScript command shape. A run event has one encoder
-handler, one downstream decoder shape, and one representative fixture.
+A command has one parser, one backend handler, and one TypeScript command shape.
+A native event uses the core serializer, a TypeScript payload schema for known
+fields, and a representative fixture. Unknown native kinds remain available to
+raw consumers before presentation support is added.
 
-The remaining manual work is intentional: Python dataclasses and TypeScript
-types stay hand-authored because they are small and readable. The parity tests
-compare parser registries, event registries, fixtures, and TypeScript schema
-keys so missing command or event updates fail with concrete missing/extra names.
-TypeScript process wiring reports malformed frames as `BridgeDecodeError`
-values without delivering them to app reducers, so schema drift is visible
-instead of silently turning into default state.
+Parity tests compare Python records and TypeScript-decoded values. TypeScript
+process wiring reports malformed frames as `BridgeDecodeError` values without
+delivering them to app reducers. Update both packages and their callers together:
+protocol `1.0` does not distinguish the previous flat contract from native events.
+
+## Synthetic Payload Measurement
+
+Run from the repository root:
+
+```bash
+uv run python -m packages.process_bridge.tests.measure_native_events
+```
+
+One local sample on 2026-09-12 used 30 repetitions per case. Delivery includes
+conversion, `EventWriter`, and queue drain into a `StringIO` sink. This measures
+neither OS pipe throughput nor provider latency. Frame sizes can vary slightly
+with the timestamp.
+
+| Synthetic record | Frame bytes | Median conversion (ms) | Median delivery (ms) |
+| --- | ---: | ---: | ---: |
+| Text delta | 391 | 0.007 | 0.143 |
+| Agent end, 10 history entries | 4,224 | 0.022 | 0.166 |
+| Agent end, 100 history entries | 38,694 | 0.101 | 0.437 |
+| Agent end, 1,000 history entries | 384,294 | 0.874 | 2.951 |
+
+Full history increases payload size and conversion cost. The protocol retains
+all fields; apps control display limits. Measure representative app workloads
+before choosing downstream storage and forwarding policies.

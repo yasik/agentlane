@@ -23,13 +23,21 @@ const session = await createAgentSession({
 });
 ```
 
-Run the client from the repository root:
+Build the checkout's TypeScript package, then run the client. Start from the
+repository root:
 
 ```bash
-cd examples/harness/process_bridge_stdio
-bun install
-bun run client.ts
+/usr/bin/make sync
+bun run --cwd packages/process_bridge_ts build
+bun install --cwd examples/harness/process_bridge_stdio
+bun run examples/harness/process_bridge_stdio/client.ts
 ```
 
-Expected output includes lifecycle events such as `ready`, `run_start`,
-`assistant_delta`, `run_complete`, `shutdown`, and the final assistant text.
+The example uses a local `file:` dependency for TypeScript and the same checkout
+for Python. Rebuild after TypeScript library edits. No package publication is
+needed. Both sides must use this native-event contract; the older flat events
+are incompatible despite the unchanged protocol version `1.0`.
+
+Expected output includes `ready`, `run_start`, `run_event: model_stream`,
+`run_complete`, `shutdown`, and the final assistant text. Each native record is
+available at `event.event` in `onEvent`; text callbacks provide the display view.

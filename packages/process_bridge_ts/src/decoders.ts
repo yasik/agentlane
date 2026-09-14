@@ -95,7 +95,9 @@ export function decodeBridgeEventLine(line: string): BridgeEvent {
     throw decodeError(parsed.error);
   }
 
-  return parsed.data as BridgeEvent;
+  // Validation must not replace source data with a schema projection. Keep even
+  // JSON keys that an object-schema parser omits, such as `__proto__` extras.
+  return raw as BridgeEvent;
 }
 
 /**

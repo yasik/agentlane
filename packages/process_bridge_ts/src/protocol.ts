@@ -47,58 +47,17 @@ export type BridgeEnvelope = {
 /** Error origin used by bridge error events. */
 export type ErrorScope = "command" | "run";
 
-/** Task lineage metadata carried by agent, model, tool, and handoff events. */
-export type LineageFields = {
-  task_id: string;
-  parent_task_id: string | null;
-  is_root: boolean;
-  is_subagent: boolean;
-};
+export type {
+  ApprovalRequestPayload,
+  TokenUsage,
+  ToolErrorPayload,
+} from "./protocol-native.ts";
 
-/** Provider token counts when the model backend reports usage metadata. */
-export type TokenUsage = {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-};
-
-/** Structured tool error payload emitted on failed tool completions. */
-export type ToolErrorPayload = {
-  message: string;
-  kind: string | null;
-};
-
-/** One plan row emitted by the AgentLane planning tool. */
-export type PlanStep = {
-  status: string;
-  step: string;
-};
-
-/** Approval request metadata displayed by downstream app permission UI. */
-export type ApprovalRequestPayload = {
-  tool_name: string;
-  operation: string;
-  cwd: string;
-  path: string | null;
-  command: string | null;
-  skill_name: string | null;
-  reason: string | null;
-  run_id: string | null;
-  agent_name: string | null;
-  tool_call_id: string | null;
-  metadata: Record<string, unknown>;
-};
+import { NATIVE_RUN_EVENT_SCHEMA } from "./protocol-native.ts";
 
 type BridgeEnvelopeShape = {
   protocol_version: z.ZodString;
   ts: z.ZodNumber;
-};
-
-type LineageFieldsShape = {
-  task_id: z.ZodString;
-  parent_task_id: z.ZodNullable<z.ZodString>;
-  is_root: z.ZodBoolean;
-  is_subagent: z.ZodBoolean;
 };
 
 /** JSON object payload with string keys and bridge-owned unknown values. */
@@ -106,9 +65,6 @@ const recordSchema: z.ZodRecord<z.ZodString, z.ZodUnknown> = z.record(
   z.string(),
   z.unknown(),
 );
-
-/** Reused nullable string schema for optional provider and tool metadata. */
-const nullableStringSchema: z.ZodNullable<z.ZodString> = z.string().nullable();
 
 /** Common schema for the event envelope each backend line must include. */
 const bridgeEnvelopeSchema: z.ZodObject<BridgeEnvelopeShape> = z
@@ -126,58 +82,6 @@ const bridgeEventSchema = <TShape extends z.ZodRawShape>(
 
 /** Schema for the closed set of error scopes emitted by Python. */
 const errorScopeSchema: z.ZodType<ErrorScope> = z.enum(["command", "run"]);
-
-/** Shared schema for task lineage fields on task-scoped events. */
-const lineageFieldsSchema: z.ZodObject<LineageFieldsShape> = z
-  .object({
-    task_id: z.string(),
-    parent_task_id: nullableStringSchema,
-    is_root: z.boolean(),
-    is_subagent: z.boolean(),
-  })
-  .strict();
-
-/** Schema for provider token usage when usage data is available. */
-const tokenUsageSchema: z.ZodType<TokenUsage> = z
-  .object({
-    prompt_tokens: z.number(),
-    completion_tokens: z.number(),
-    total_tokens: z.number(),
-  })
-  .strict();
-
-/** Schema for tool failure details nested under `tool_end.error`. */
-const toolErrorPayloadSchema: z.ZodType<ToolErrorPayload> = z
-  .object({
-    message: z.string(),
-    kind: nullableStringSchema,
-  })
-  .strict();
-
-/** Schema for a single planning step emitted by the plan tool. */
-const planStepSchema: z.ZodType<PlanStep> = z
-  .object({
-    status: z.string(),
-    step: z.string(),
-  })
-  .strict();
-
-/** Schema for approval request details nested under approval events. */
-const approvalRequestPayloadSchema: z.ZodType<ApprovalRequestPayload> = z
-  .object({
-    tool_name: z.string(),
-    operation: z.string(),
-    cwd: z.string(),
-    path: nullableStringSchema,
-    command: nullableStringSchema,
-    skill_name: nullableStringSchema,
-    reason: nullableStringSchema,
-    run_id: nullableStringSchema,
-    agent_name: nullableStringSchema,
-    tool_call_id: nullableStringSchema,
-    metadata: recordSchema,
-  })
-  .strict();
 
 /**
  * Strict backend-to-app event schema registry.
@@ -214,126 +118,6 @@ export const BRIDGE_EVENT_SCHEMAS = {
     message: z.string(),
     scope: errorScopeSchema,
   }),
-  assistant_delta: bridgeEventSchema({
-    type: z.literal("assistant_delta"),
-    text: z.string(),
-  }),
-  reasoning_delta: bridgeEventSchema({
-    type: z.literal("reasoning_delta"),
-    text: z.string(),
-    provider_event_type: nullableStringSchema,
-    reasoning_signature: nullableStringSchema,
-  }),
-  tool_arguments_delta: bridgeEventSchema({
-    type: z.literal("tool_arguments_delta"),
-    tool_call_id: z.string(),
-    tool_call_index: z.number().nullable(),
-    delta: z.string(),
-  }),
-  provider_event: bridgeEventSchema({
-    type: z.literal("provider_event"),
-    provider_event_type: nullableStringSchema,
-    item_index: z.number().nullable(),
-    item_type: nullableStringSchema,
-    phase: nullableStringSchema,
-  }),
-  agent_start: bridgeEventSchema({
-    type: z.literal("agent_start"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    next_turn: z.number().nullable(),
-  }),
-  agent_end: bridgeEventSchema({
-    type: z.literal("agent_end"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    final_output: z.unknown(),
-  }),
-  llm_start: bridgeEventSchema({
-    type: z.literal("llm_start"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    message_count: z.number(),
-  }),
-  llm_end: bridgeEventSchema({
-    type: z.literal("llm_end"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    output: nullableStringSchema,
-    // null when the provider omits usage on this response; treat as missing
-    // data rather than zero.
-    usage: tokenUsageSchema.nullable(),
-  }),
-  tool_start: bridgeEventSchema({
-    type: z.literal("tool_start"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    tool: z.string(),
-    tool_call_id: z.string(),
-    arguments: z.unknown(),
-    is_plan: z.boolean(),
-    is_delegation: z.boolean(),
-  }),
-  tool_end: bridgeEventSchema({
-    type: z.literal("tool_end"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    tool: z.string(),
-    tool_call_id: z.string(),
-    result: z.unknown(),
-    ok: z.boolean(),
-    error: toolErrorPayloadSchema.nullable(),
-    is_plan: z.boolean(),
-    is_delegation: z.boolean(),
-  }),
-  plan_updated: bridgeEventSchema({
-    type: z.literal("plan_updated"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    tool_call_id: z.string(),
-    explanation: nullableStringSchema,
-    raw: z.unknown(),
-    steps: z.array(planStepSchema),
-    title: nullableStringSchema,
-  }),
-  approval_request: bridgeEventSchema({
-    type: z.literal("approval_request"),
-    id: z.string(),
-    request: approvalRequestPayloadSchema,
-    reason: nullableStringSchema,
-  }),
-  approval_resolved: bridgeEventSchema({
-    type: z.literal("approval_resolved"),
-    id: z.string(),
-    allowed: z.boolean(),
-    request: approvalRequestPayloadSchema,
-    reason: nullableStringSchema,
-  }),
-  state_snapshot: bridgeEventSchema({
-    type: z.literal("state_snapshot"),
-    boundary: z.string(),
-    turn_count: z.number(),
-    history_length: z.number(),
-    response_count: z.number(),
-    shim_state: recordSchema,
-  }),
-  handoff_start: bridgeEventSchema({
-    type: z.literal("handoff_start"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    target: z.string(),
-    tool: z.string(),
-    tool_call_id: z.string(),
-  }),
-  handoff_end: bridgeEventSchema({
-    type: z.literal("handoff_end"),
-    ...lineageFieldsSchema.shape,
-    agent: z.string(),
-    target: z.string(),
-    tool: z.string(),
-    tool_call_id: z.string(),
-    final_output: z.unknown(),
-  }),
   reset: bridgeEventSchema({
     type: z.literal("reset"),
     config: recordSchema.optional(),
@@ -350,7 +134,7 @@ export const BRIDGE_EVENT_SCHEMAS = {
   }),
   run_event: bridgeEventSchema({
     type: z.literal("run_event"),
-    run_event_type: z.string(),
+    event: NATIVE_RUN_EVENT_SCHEMA,
   }),
 } as const;
 
@@ -386,54 +170,6 @@ export type RunCancelledEvent = EventOf<"run_cancelled">;
 /** Backend error event scoped to a command or active run. */
 export type ErrorEvent = EventOf<"error">;
 
-/** Streaming assistant text delta. */
-export type AssistantDeltaEvent = EventOf<"assistant_delta">;
-
-/** Streaming reasoning text delta and provider reasoning metadata. */
-export type ReasoningDeltaEvent = EventOf<"reasoning_delta">;
-
-/** Streaming tool-call argument delta from the model provider. */
-export type ToolArgumentsDeltaEvent = EventOf<"tool_arguments_delta">;
-
-/** Provider lifecycle event without bridge-specific side effects. */
-export type ProviderEvent = EventOf<"provider_event">;
-
-/** Agent task start event with task lineage. */
-export type AgentStartEvent = EventOf<"agent_start">;
-
-/** Agent task completion event with the complete final output. */
-export type AgentEndEvent = EventOf<"agent_end">;
-
-/** Model request start event for an agent turn. */
-export type LlmStartEvent = EventOf<"llm_start">;
-
-/** Model response completion event with optional token usage. */
-export type LlmEndEvent = EventOf<"llm_end">;
-
-/** Tool invocation start event with raw tool arguments. */
-export type ToolStartEvent = EventOf<"tool_start">;
-
-/** Tool invocation completion event with result or error details. */
-export type ToolEndEvent = EventOf<"tool_end">;
-
-/** Plan-tool update event carrying current plan rows. */
-export type PlanUpdatedEvent = EventOf<"plan_updated">;
-
-/** Permission approval request event sent to the app UI. */
-export type ApprovalRequestEvent = EventOf<"approval_request">;
-
-/** Approval resolution event confirming backend receipt of a decision. */
-export type ApprovalResolvedEvent = EventOf<"approval_resolved">;
-
-/** Snapshot of backend conversation state at a lifecycle boundary. */
-export type StateSnapshotEvent = EventOf<"state_snapshot">;
-
-/** Handoff tool start event. */
-export type HandoffStartEvent = EventOf<"handoff_start">;
-
-/** Handoff tool completion event. */
-export type HandoffEndEvent = EventOf<"handoff_end">;
-
 /** Backend reset completion event. */
 export type ResetEvent = EventOf<"reset">;
 
@@ -446,7 +182,7 @@ export type CancelIgnoredEvent = EventOf<"cancel_ignored">;
 /** Backend shutdown event emitted before process exit. */
 export type ShutdownEvent = EventOf<"shutdown">;
 
-/** Diagnostic wrapper for AgentLane run events without dedicated UI semantics. */
+/** Complete native AgentLane event inside the bridge transport envelope. */
 export type RunEventEvent = EventOf<"run_event">;
 
 /** Encode one app command as a single NDJSON frame for Python stdin. */

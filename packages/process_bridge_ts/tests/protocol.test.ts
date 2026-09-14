@@ -54,103 +54,12 @@ describe("event decoding", () => {
     });
   });
 
-  test("decodes llm_end token usage and tolerates null usage", () => {
-    const base = {
-      protocol_version: "1.0",
-      type: "llm_end",
-      ts: 1,
-      task_id: "task",
-      parent_task_id: null,
-      is_root: true,
-      is_subagent: false,
-      agent: "Root",
-      output: "done",
-    };
-
-    const withUsage = decodeBridgeEventLine(
-      JSON.stringify({
-        ...base,
-        usage: {
-          prompt_tokens: 1200,
-          completion_tokens: 340,
-          total_tokens: 1540,
-        },
-      }),
-    );
-    const withoutUsage = decodeBridgeEventLine(
-      JSON.stringify({ ...base, usage: null }),
-    );
-
-    expect(withUsage).toMatchObject({
-      type: "llm_end",
-      usage: {
-        prompt_tokens: 1200,
-        completion_tokens: 340,
-        total_tokens: 1540,
-      },
-    });
-    expect(withoutUsage).toMatchObject({ type: "llm_end", usage: null });
-  });
-
   test("rejects missing typed fields", () => {
     const error = decodeErrorFor(
       JSON.stringify({ protocol_version: "1.0", type: "run_start", ts: 1 }),
     );
 
     expect(error.fields).toEqual(["prompt"]);
-  });
-
-  test("rejects missing raw fields", () => {
-    const toolStartError = decodeErrorFor(
-      JSON.stringify({
-        protocol_version: "1.0",
-        type: "tool_start",
-        ts: 1,
-        task_id: "task",
-        parent_task_id: null,
-        is_root: true,
-        is_subagent: false,
-        agent: "agent",
-        tool: "write",
-        tool_call_id: "call_1",
-        is_plan: false,
-        is_delegation: false,
-      }),
-    );
-    const planUpdateError = decodeErrorFor(
-      JSON.stringify({
-        protocol_version: "1.0",
-        type: "plan_updated",
-        ts: 1,
-        task_id: "task",
-        parent_task_id: null,
-        is_root: true,
-        is_subagent: false,
-        agent: "agent",
-        tool_call_id: "call_1",
-        explanation: null,
-        title: null,
-      }),
-    );
-
-    expect(toolStartError.fields).toContain("arguments");
-    expect(planUpdateError.fields).toEqual(["raw", "steps"]);
-  });
-
-  test("rejects approval request payload drift with nested field paths", () => {
-    const error = decodeErrorFor(
-      JSON.stringify({
-        protocol_version: "1.0",
-        type: "approval_request",
-        ts: 1,
-        id: "approval-1",
-        request: {},
-        reason: null,
-      }),
-    );
-
-    expect(error.fields).toContain("request.tool_name");
-    expect(error.fields).toContain("request.metadata");
   });
 
   test("rejects extra fields on known event payloads", () => {
@@ -165,30 +74,6 @@ describe("event decoding", () => {
     );
 
     expect(error.fields).toEqual(["event"]);
-  });
-
-  test("rejects extra fields on nested protocol payloads", () => {
-    const error = decodeErrorFor(
-      JSON.stringify({
-        protocol_version: "1.0",
-        type: "llm_end",
-        ts: 1,
-        task_id: "task",
-        parent_task_id: null,
-        is_root: true,
-        is_subagent: false,
-        agent: "Root",
-        output: "done",
-        usage: {
-          prompt_tokens: 1200,
-          completion_tokens: 340,
-          total_tokens: 1540,
-          cached_tokens: 100,
-        },
-      }),
-    );
-
-    expect(error.fields).toEqual(["usage"]);
   });
 
   test("decodes ready, reset, and config documents", () => {
@@ -302,7 +187,7 @@ describe("event decoding", () => {
   });
 
   test("known event list includes lifecycle and approval events", () => {
-    expect(KNOWN_EVENT_TYPES).toContain("approval_request");
+    expect(KNOWN_EVENT_TYPES).toContain("run_event");
     expect(KNOWN_EVENT_TYPES).toContain("run_complete");
   });
 });
@@ -318,3 +203,68 @@ function decodeErrorFor(line: string): BridgeDecodeError {
 
   throw new Error("Expected bridge decode to fail.");
 }
+
+test("retains unknown native records and all nested fields", () => {
+  const event = {
+    protocol_version: "1.0",
+    ts: 1,
+    type: "run_event" as const,
+    event: {
+      type: "future_native",
+      source_extra: { nested: [null, "界\n"] },
+      payload: { kind: "future_native", data: { complete: true } },
+    },
+  };
+  expect(decodeBridgeEventLine(JSON.stringify(event))).toEqual(event);
+});
+
+test("rejects mismatched native kinds and missing source fields", () => {
+  const frame = (type: string, payload: unknown): string =>
+    JSON.stringify({
+      protocol_version: "1.0",
+      ts: 1,
+      type: "run_event",
+      event: { type, payload },
+    });
+  expect(
+    decodeErrorFor(frame("agent_start", { kind: "agent_end" })).fields,
+  ).toContain("event.payload.kind");
+  expect(
+    decodeErrorFor(frame("tool_start", { kind: "tool_start" })).fields,
+  ).toContain("event.payload.tool_call");
+  expect(
+    decodeErrorFor(
+      frame("model_stream", {
+        kind: "model_stream",
+        event: { kind: "text_delta" },
+      }),
+    ).fields,
+  ).toContain("event.payload.event.text");
+  expect(
+    decodeErrorFor(
+      frame("tool_approval", { kind: "tool_approval", event: { record: {} } }),
+    ).fields,
+  ).toContain("event.payload.event.record.request");
+});
+
+test("accepts unknown model kinds and preserves their fields", () => {
+  const event = {
+    protocol_version: "1.0",
+    ts: 1,
+    type: "run_event" as const,
+    event: {
+      type: "model_stream",
+      payload: {
+        kind: "model_stream",
+        event: { kind: "future_model", details: [null, { signature: "abc" }] },
+      },
+    },
+  };
+  expect(decodeBridgeEventLine(JSON.stringify(event))).toEqual(event);
+});
+
+test("retains source keys that object-schema parsing can omit", () => {
+  const line =
+    '{"protocol_version":"1.0","ts":1,"type":"run_event","event":{"type":"future_native","__proto__":{"source":true},"payload":{"kind":"future_native","__proto__":{"nested":true}}}}';
+  expect(JSON.stringify(decodeBridgeEventLine(line))).toBe(line);
+});

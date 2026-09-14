@@ -228,20 +228,34 @@ describe("process wiring", () => {
               expect(invalid).toEqual([]);
               expect(stderr).toEqual([]);
               expect(
-                events.find((event) => event.type === "assistant_delta"),
-              ).toMatchObject({ text: `Echo: ${prompt}` });
+                events.find(
+                  (event) =>
+                    event.type === "run_event" &&
+                    event.event.type === "model_stream",
+                ),
+              ).toMatchObject({
+                event: { payload: { event: { text: `Echo: ${prompt}` } } },
+              });
               expect(
-                events.find((event) => event.type === "agent_end"),
-              ).toMatchObject({ final_output: `Echo: ${prompt}` });
+                events.find(
+                  (event) =>
+                    event.type === "run_event" &&
+                    event.event.type === "agent_end",
+                ),
+              ).toMatchObject({
+                event: {
+                  payload: { result: { final_output: `Echo: ${prompt}` } },
+                },
+              });
               expect(
                 events.find((event) => event.type === "run_complete"),
               ).toMatchObject({ final_output: `Echo: ${prompt}` });
               expect(events.map((event) => event.type)).toEqual([
                 "ready",
                 "run_start",
-                "agent_start",
-                "assistant_delta",
-                "agent_end",
+                "run_event",
+                "run_event",
+                "run_event",
                 "run_complete",
                 "shutdown",
               ]);

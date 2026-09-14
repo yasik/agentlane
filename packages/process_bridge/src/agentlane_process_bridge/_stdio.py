@@ -4,8 +4,9 @@ import asyncio
 import logging
 import sys
 from collections.abc import Callable
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, suppress
 from dataclasses import dataclass
+from functools import partial
 from typing import TextIO
 
 import structlog
@@ -18,6 +19,7 @@ from ._backend import (
     ReadyMetadataProvider,
     RuntimeConfigStore,
 )
+from ._io import ProcessOutput, TextOutput, call_stream
 from ._protocol import (
     ERROR_SCOPE_COMMAND,
     BridgeEventType,
@@ -57,15 +59,15 @@ async def serve_stdio(
 ) -> None:
     """Serve one NDJSON command loop until shutdown, EOF, or a dead pipe."""
     should_close = True
+    failed = asyncio.create_task(backend.events.wait_failed())
     try:
         while True:
             try:
-                # Read in a worker thread so synchronous TextIO streams do not
-                # block the event loop that also owns run events and approvals.
-                line = await asyncio.to_thread(
-                    readline,
-                    max_command_line_chars + 1,
+                line = await _read_until_failure(
+                    readline, max_command_line_chars + 1, failed
                 )
+                if line is None:
+                    return
             except Exception:
                 _logger.exception("bridge_read_failed")
                 return
@@ -83,6 +85,7 @@ async def serve_stdio(
                     readline,
                     line=line,
                     chunk_size=max_command_line_chars + 1,
+                    failed=failed,
                 )
 
                 if not await _report_command_error(
@@ -128,6 +131,9 @@ async def serve_stdio(
                 should_close = False
                 return
     finally:
+        failed.cancel()
+        with suppress(asyncio.CancelledError):
+            await failed
         if should_close:
             await _close_after_dead_client(backend)
 
@@ -149,7 +155,12 @@ async def run_stdio(
     """
     configure_stderr_logging()
     input_stream = sys.stdin if stdin is None else stdin
-    output_stream = sys.stdout if stdout is None else stdout
+    captured_output = sys.stdout if stdout is None else stdout
+    output_stream = (
+        _process_output(captured_output)
+        if stdout is None or captured_output is sys.__stdout__
+        else captured_output
+    )
     backend = BridgeBackend(
         agent=agent,
         events=EventWriter(output_stream),
@@ -197,10 +208,16 @@ async def _report_command_error(backend: BridgeBackend, message: str) -> bool:
 async def _close_after_dead_client(backend: BridgeBackend) -> None:
     try:
         await backend.close(emit_terminal=False)
-    except (BrokenPipeError, OSError):
+    except Exception as exc:
+        if backend.events.is_writable:
+            raise
         # Dead-client cleanup intentionally avoids terminal run events, but the
         # low-level writer may still observe a closed pipe while flushing.
-        _logger.exception("bridge_close_after_dead_client_failed")
+        # Rendering traceback locals can inspect megabytes of queued payloads
+        # and delay shutdown after the output timeout has already expired.
+        _logger.error(
+            "bridge_close_after_dead_client_failed", error_type=type(exc).__name__
+        )
 
 
 async def _discard_oversized_line_remainder(
@@ -208,17 +225,46 @@ async def _discard_oversized_line_remainder(
     *,
     line: str,
     chunk_size: int,
+    failed: asyncio.Task[None],
 ) -> None:
     if line.endswith("\n"):
         return
 
     while True:
         try:
-            chunk = await asyncio.to_thread(readline, chunk_size)
+            chunk = await _read_until_failure(readline, chunk_size, failed)
         except Exception:
             return
 
-        if chunk == "" or chunk.endswith("\n"):
+        if chunk is None or chunk == "" or chunk.endswith("\n"):
             # Either EOF or the record terminator has been reached; the next
             # serve loop iteration can resume at a command boundary.
             return
+
+
+async def _read_until_failure(
+    readline: Callable[[int], str],
+    limit: int,
+    failed: asyncio.Task[None],
+) -> str | None:
+    """Stop waiting on borrowed input when output can no longer reach the host."""
+    read = asyncio.create_task(call_stream(partial(readline, limit)))
+    try:
+        await asyncio.wait({read, failed}, return_when=asyncio.FIRST_COMPLETED)
+        if failed.done():
+            return None
+        return await read
+    finally:
+        read.cancel()
+        with suppress(asyncio.CancelledError):
+            await read
+
+
+def _process_output(stream: TextIO) -> TextOutput:
+    """Use the real process descriptor without holding its buffered text lock."""
+    try:
+        descriptor = stream.fileno()
+    except (AttributeError, OSError, ValueError):
+        # Redirected in-memory streams retain their existing TextIO behavior.
+        return stream
+    return ProcessOutput(descriptor)

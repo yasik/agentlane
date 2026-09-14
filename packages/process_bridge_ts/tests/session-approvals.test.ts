@@ -117,3 +117,34 @@ describe("agent session approvals", () => {
 function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+test("only a resolved native approval settles its command before a later command error", async () => {
+  const child = new FakeChild();
+  const diagnostics: SessionDiagnostic[] = [];
+  const sessionPromise = attachAgentSession(child, {
+    backend: { command: "fake" },
+    approvals: (): boolean => true,
+    onDiagnostic: (event: SessionDiagnostic): void => {
+      diagnostics.push(event);
+    },
+  });
+  child.emitReady();
+  const session = await sessionPromise;
+  child.emitApprovalRequest("approval-1");
+  await tick();
+  const configure = session.configure({ model: "next" });
+  child.emitModel("error", {
+    error: { type: "ValueError", message: "provider" },
+  });
+  child.emitModel("completed");
+  child.emitApprovalResolved("approval-1", true);
+  child.emitEvent({
+    type: "error",
+    ts: 5,
+    scope: "command",
+    message: "configure rejected",
+  });
+  await expect(configure).rejects.toThrow("configure rejected");
+  expect(diagnostics).toEqual([]);
+  child.emitClose();
+});

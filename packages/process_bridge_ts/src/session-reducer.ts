@@ -1,4 +1,11 @@
 import type { BridgeEvent } from "./protocol.ts";
+import {
+  isKnownModelEvent,
+  isNativeEvent,
+  type NativeApprovalRecord,
+  type NativePayload,
+  type NativeRunEvent,
+} from "./protocol-native.ts";
 import type {
   AgentActivity,
   AgentInfo,
@@ -21,7 +28,6 @@ import {
 
 type PendingApproval = {
   controller: AbortController;
-  request: BridgeEvent & { type: "approval_request" };
   decidedByApp: boolean;
 };
 
@@ -69,7 +75,6 @@ export class SessionReducer {
   private readonly openTools = new Map<string, ToolCallInfo>();
   private readonly openAgents = new Map<string, AgentInfo>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
-  private nextSyntheticToolId = 1;
 
   constructor(callbacks: SessionReducerCallbacks) {
     this.callbacks = callbacks;
@@ -102,32 +107,8 @@ export class SessionReducer {
       case "run_start":
         this.callbacks.onRunStarted();
         return;
-      case "assistant_delta":
-        this.pushText("assistant", event.text);
-        return;
-      case "reasoning_delta":
-        this.pushText("reasoning", event.text);
-        return;
-      case "tool_start":
-        this.toolStarted(event);
-        return;
-      case "tool_end":
-        this.toolEnded(event);
-        return;
-      case "agent_start":
-        this.agentStarted(event);
-        return;
-      case "agent_end":
-        this.agentEnded(event);
-        return;
-      case "plan_updated":
-        this.planUpdated(event);
-        return;
-      case "approval_request":
-        this.approvalRequested(event);
-        return;
-      case "approval_resolved":
-        this.approvalResolved(event);
+      case "run_event":
+        this.processNative(event.event);
         return;
       case "run_complete":
         // Completion is the only terminal path with an authoritative final
@@ -176,6 +157,60 @@ export class SessionReducer {
     }
   }
 
+  private processNative(event: NativeRunEvent): void {
+    if (isNativeEvent(event, "model_stream")) {
+      const model = event.payload.event;
+      if (isKnownModelEvent(model)) {
+        if (model.kind === "text_delta" && typeof model.text === "string") {
+          this.pushText("assistant", model.text);
+          return;
+        }
+        if (model.kind === "reasoning") {
+          const text = model.text ?? model.reasoning;
+          if (typeof text === "string") this.pushText("reasoning", text);
+          return;
+        }
+      }
+      this.flushText();
+      return;
+    }
+    if (isNativeEvent(event, "tool_start")) {
+      this.toolStarted(event.payload);
+      return;
+    }
+
+    if (isNativeEvent(event, "tool_end")) {
+      this.toolEnded(event.payload);
+      return;
+    }
+
+    if (isNativeEvent(event, "agent_start")) {
+      this.agentStarted(event.payload);
+      return;
+    }
+
+    if (isNativeEvent(event, "agent_end")) {
+      this.agentEnded(event.payload);
+      return;
+    }
+
+    if (isNativeEvent(event, "plan_updated")) {
+      this.planUpdated(event.payload);
+      return;
+    }
+
+    if (isNativeEvent(event, "tool_approval")) {
+      const record = event.payload.event.record;
+      if (record.status === "pending") {
+        this.approvalRequested(record);
+        return;
+      }
+      this.approvalResolved(record);
+      return;
+    }
+    this.flushText();
+  }
+
   /** Close all open semantic state for a terminal run/session path. */
   sweepTerminal(): void {
     this.text.complete();
@@ -201,7 +236,7 @@ export class SessionReducer {
     this.text.interrupt();
   }
 
-  private toolStarted(event: BridgeEvent & { type: "tool_start" }): void {
+  private toolStarted(event: NativePayload<"tool_start">): void {
     // Tool rows interrupt streamed prose in the UI; close the current text
     // segment before emitting the tool start.
     this.interruptText();
@@ -210,9 +245,10 @@ export class SessionReducer {
     this.emitTool({ phase: "start", call });
   }
 
-  private toolEnded(event: BridgeEvent & { type: "tool_end" }): void {
+  private toolEnded(event: NativePayload<"tool_end">): void {
     this.interruptText();
-    const call = this.openToolCallForEnd(event) ?? this.toolCallInfo(event);
+    const call =
+      this.openTools.get(event.tool_call.id) ?? this.toolCallInfo(event);
     this.openTools.delete(call.callId);
     this.emitTool({
       phase: "end",
@@ -223,43 +259,21 @@ export class SessionReducer {
     });
   }
 
-  private openToolCallForEnd(
-    event: BridgeEvent & { type: "tool_end" },
-  ): ToolCallInfo | undefined {
-    const exact = this.openTools.get(event.tool_call_id);
-    if (exact !== undefined) return exact;
-
-    // Older or synthetic tool-start events may not have a stable call id. Match
-    // on the task-local identity before synthesizing a fresh end-only call.
-    return [...this.openTools.values()].find(
-      (call: ToolCallInfo): boolean =>
-        call.tool === event.tool &&
-        call.agent === event.agent &&
-        call.taskId === event.task_id,
-    );
-  }
-
   private toolCallInfo(
-    event: BridgeEvent & { type: "tool_start" | "tool_end" },
+    event: NativePayload<"tool_start" | "tool_end">,
   ): ToolCallInfo {
-    // Empty tool_call_id cannot be a reliable map key. Keep the wire id when it
-    // exists so approval payloads can still be correlated exactly.
-    const callId =
-      event.tool_call_id.trim() === ""
-        ? `synthetic-tool-${this.nextSyntheticToolId++}`
-        : event.tool_call_id;
     return {
-      callId,
-      tool: event.tool,
-      agent: event.agent,
+      callId: event.tool_call.id,
+      tool: event.tool_call.function.name,
+      agent: event.task_name,
       taskId: event.task_id,
-      arguments: event.type === "tool_start" ? event.arguments : null,
-      isPlan: event.is_plan,
+      arguments: parseToolArguments(event.tool_call.function.arguments),
+      isPlan: event.tool_call.function.name === "write_plan",
       isDelegation: event.is_delegation,
     };
   }
 
-  private agentStarted(event: BridgeEvent & { type: "agent_start" }): void {
+  private agentStarted(event: NativePayload<"agent_start">): void {
     // Agent lifecycle is a structural boundary, but it does not invalidate the
     // active text stream; flush pending text without marking it done.
     this.flushText();
@@ -268,36 +282,36 @@ export class SessionReducer {
     this.emitAgent({ phase: "start", info });
   }
 
-  private agentEnded(event: BridgeEvent & { type: "agent_end" }): void {
+  private agentEnded(event: NativePayload<"agent_end">): void {
     this.flushText();
     const info = this.openAgents.get(event.task_id) ?? this.agentInfo(event);
     this.openAgents.delete(info.taskId);
     this.emitAgent({
       phase: "end",
       info,
-      finalOutput: event.final_output,
+      finalOutput: event.result?.final_output,
     });
   }
 
   private agentInfo(
-    event: BridgeEvent & { type: "agent_start" | "agent_end" },
+    event: NativePayload<"agent_start" | "agent_end">,
   ): AgentInfo {
     return {
-      agent: event.agent,
+      agent: event.task_name,
       taskId: event.task_id,
       parentTaskId: event.parent_task_id,
       isRoot: event.is_root,
     };
   }
 
-  private planUpdated(event: BridgeEvent & { type: "plan_updated" }): void {
+  private planUpdated(event: NativePayload<"plan_updated">): void {
     this.flushText();
     this.callHandler("onPlan", () =>
       this.callbacks.onPlan?.({
-        agent: event.agent,
+        agent: event.task_name,
         taskId: event.task_id,
         explanation: event.explanation,
-        steps: event.steps.map((step) => ({
+        steps: event.plan.map((step) => ({
           text: step.step,
           status: normalizePlanStatus(step.status),
           rawStatus: step.status,
@@ -306,14 +320,11 @@ export class SessionReducer {
     );
   }
 
-  private approvalRequested(
-    event: BridgeEvent & { type: "approval_request" },
-  ): void {
+  private approvalRequested(event: NativeApprovalRecord): void {
     this.flushText();
     const controller = new AbortController();
-    this.pendingApprovals.set(event.id, {
+    this.pendingApprovals.set(event.request_id, {
       controller,
-      request: event,
       decidedByApp: false,
     });
     const policy = this.callbacks.approvals ?? denyAllApproval;
@@ -324,12 +335,12 @@ export class SessionReducer {
       .then((): ApprovalDecision | Promise<ApprovalDecision> =>
         policy({
           request: event.request,
-          reason: event.reason,
+          reason: event.approval_required_decision.reason,
           signal: controller.signal,
         }),
       )
       .then((decision: ApprovalDecision): void => {
-        this.sendApprovalDecision(event.id, decision);
+        this.sendApprovalDecision(event.request_id, decision);
       })
       .catch((error: unknown): void => {
         this.callbacks.onDiagnostic({
@@ -337,7 +348,7 @@ export class SessionReducer {
           handler: "approvals",
           error,
         });
-        this.sendApprovalDecision(event.id, {
+        this.sendApprovalDecision(event.request_id, {
           allowed: false,
           reason: "Approval policy failed.",
         });
@@ -350,26 +361,24 @@ export class SessionReducer {
 
     const normalized = normalizeApprovalDecision(decision);
     if (this.callbacks.sendApproval(id, normalized)) {
-      // `approval_resolved` remains the source of truth. This flag only tells
+      // The native resolved approval record is the source of truth. This flag tells
       // the app whether its policy produced the resolution Python confirmed.
       pending.decidedByApp = true;
     }
   }
 
-  private approvalResolved(
-    event: BridgeEvent & { type: "approval_resolved" },
-  ): void {
+  private approvalResolved(event: NativeApprovalRecord): void {
     this.flushText();
-    const pending = this.pendingApprovals.get(event.id);
-    this.pendingApprovals.delete(event.id);
+    const pending = this.pendingApprovals.get(event.request_id);
+    this.pendingApprovals.delete(event.request_id);
     // Abort even after a normal app decision so any UI waiting on the signal can
     // dismiss once Python confirms the approval is no longer pending.
     pending?.controller.abort();
     this.callHandler("onApprovalResolved", () =>
       this.callbacks.onApprovalResolved?.({
         request: event.request,
-        allowed: event.allowed,
-        reason: event.reason,
+        allowed: event.final_decision?.outcome === "allow",
+        reason: event.final_decision?.reason ?? null,
         decidedByApp: pending?.decidedByApp ?? false,
       }),
     );
@@ -454,4 +463,12 @@ function denyAllApproval(): ApprovalDecision {
     allowed: false,
     reason: "No approval policy configured.",
   };
+}
+
+function parseToolArguments(argumentsText: string): unknown {
+  try {
+    return JSON.parse(argumentsText);
+  } catch {
+    return argumentsText;
+  }
 }

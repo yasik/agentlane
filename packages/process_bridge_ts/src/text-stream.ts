@@ -43,6 +43,8 @@ export class TextStreamTracker {
   }
 
   push(kind: TextStreamKind, delta: string): void {
+    if (delta === "") return;
+
     if (this.active !== null && this.active.kind !== kind) {
       // Reasoning and assistant text are rendered as separate semantic rows.
       // Switching kind closes the previous row before opening the next.
