@@ -1,0 +1,12 @@
+---
+interface Props {
+  href: string;
+}
+---
+
+<a href={Astro.props.href} class="bracket-link"
+  ><span class="syn" aria-hidden="true">[</span><slot /><span
+    class="syn"
+    aria-hidden="true">]</span
+  ></a
+>

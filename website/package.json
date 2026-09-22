@@ -1,0 +1,44 @@
+{
+  "name": "agentlane-website",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check",
+    "format": "prettier --write .",
+    "lint": "prettier --check .",
+    "test": "node --test tests/*.test.mjs",
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run build && pnpm test"
+  },
+  "dependencies": {
+    "astro": "7.3.3",
+    "@astrojs/mdx": "8.0.1",
+    "@astrojs/react": "6.0.6",
+    "@astrojs/sitemap": "3.7.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/node": "^24.0.0",
+    "cheerio": "1.2.0",
+    "prettier": "3.8.1",
+    "prettier-plugin-astro": "0.14.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

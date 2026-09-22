@@ -1,0 +1,429 @@
+---
+title: AgentLane | A runtime for autonomous organizations
+description: An open-source Python runtime for autonomous organizations. Agent identity, addressed messaging, delegation, and execution across local and distributed systems.
+socialImage: /og.png
+socialImageAlt: AgentLane — A runtime for autonomous organizations
+---
+
+import CopyCommand from "../../components/CopyCommand.astro";
+import CodeBlock from "../../components/CodeBlock.astro";
+import Link from "../../components/BracketLink.astro";
+import ThemeSwitcher from "../../components/ThemeSwitcher.astro";
+import OrganizationExamples from "../../components/OrganizationExamples.astro";
+import Heading from "../../components/Heading.astro";
+
+<main id="top" class="document">
+
+<header class="site-header">
+
+<a class="wordmark" href="#top" aria-label="AgentLane home">
+  {"agentlane"}
+  <span class="file-ext"> / README.md</span>
+</a>
+<ThemeSwitcher />
+
+</header>
+
+<nav class="nav" aria-label="Main navigation">
+
+<Link href="#idea">the idea</Link>
+<Link href="#examples">examples</Link>
+<Link href="#quickstart">quickstart</Link>
+<Link href="#system">harnesses</Link>
+<Link href="https://github.com/yasik/agentlane/tree/main/docs">docs ↗</Link>
+<Link href="https://github.com/yasik/agentlane">github ↗</Link>
+
+</nav>
+
+<section class="intro" aria-labelledby="hero-title">
+
+<Heading
+  level={1}
+  id="hero-title"
+  text="A runtime for autonomous organizations."
+/>
+
+AgentLane is an open-source Python runtime for systems of agents with distinct responsibilities. Agents exchange work through addressed messages, across harnesses, processes, and machines.
+
+<p class="quote"><span class="syn" aria-hidden="true">&gt; </span>Identity, messaging, state, delegation, and execution.<br />The model, interface, and infrastructure are application choices.</p>
+<CopyCommand command="uv add agentlane" />
+<div class="intro-bottom">
+
+<Link href="#quickstart">quickstart ↓</Link>
+<p class="sponsor">
+  {"Open source. Sponsored by "}
+  <strong>Diadia.</strong>
+</p>
+
+</div>
+
+</section>
+
+<section id="idea" aria-labelledby="premise-title">
+
+<Heading level={2} id="premise-title" text="The idea" />
+
+An organization divides work among participants with different responsibilities. A coordinator assigns tasks. Specialists investigate or implement. Services perform deterministic operations. People review decisions that require their authority.
+
+AgentLane applies that structure to agent systems. Each agent has an identity, an address, an inbox, and state of its own. Some agents hold ongoing responsibilities; others exist for one assignment. They communicate through explicit messages and return results to whoever requested the work.
+
+The goal is an organization whose participants can use different models, harnesses, and infrastructure. A local assistant, a cloud worker, and an external coding agent can contribute to the same system. AgentLane provides the common primitives; the application defines how the organization operates.
+
+<Link href="https://www.yasik.org/writings/distributed-agents">Distributed agents and organizations ↗</Link>
+<dl class="primitives">
+
+<div>
+
+<dt>
+  <span class="syn" aria-hidden="true">
+    -{" "}
+  </span>
+  responsibility
+</dt>
+<dd>What each participant owns.</dd>
+
+</div>
+
+<div>
+
+<dt>
+  <span class="syn" aria-hidden="true">
+    -{" "}
+  </span>
+  addressing
+</dt>
+<dd>How work reaches a participant.</dd>
+
+</div>
+
+<div>
+
+<dt>
+  <span class="syn" aria-hidden="true">
+    -{" "}
+  </span>
+  delegation
+</dt>
+<dd>How participants divide work and return results.</dd>
+
+</div>
+
+<div>
+
+<dt>
+  <span class="syn" aria-hidden="true">
+    -{" "}
+  </span>
+  execution
+</dt>
+<dd>Which harness and worker perform the task.</dd>
+
+</div>
+
+<div>
+
+<dt>
+  <span class="syn" aria-hidden="true">
+    -{" "}
+  </span>
+  oversight
+</dt>
+<dd>What people can inspect and approve.</dd>
+
+</div>
+
+</dl>
+
+<div id="examples">
+  <OrganizationExamples />
+</div>
+
+</section>
+
+<section id="why" aria-labelledby="applications-title">
+
+<Heading level={2} id="applications-title" text="Applications of the runtime" />
+
+The runtime supports local harnesses, distributed services, bots, and organizations of agents. The interface, deployment, model provider, and telemetry destination are independent choices.
+
+<div id="modules" class="applications">
+
+<article>
+
+<Heading
+  level={3}
+  id="autonomous-organizations"
+  text="Autonomous organizations"
+/>
+
+Agents with ongoing responsibilities, temporary specialists, and deterministic services connected through addressed messages. Work can be delegated across runtimes, with results returned to the agent that requested it.
+
+The application defines objectives, tools, permissions, and human review.
+
+<Link href="https://github.com/yasik/agentlane/tree/main/docs/harness/distributed-agents.md">
+  Distributed agents ↗
+</Link>
+
+</article>
+
+<article>
+
+<Heading level={3} id="local-coding-harnesses" text="Local coding harnesses" />
+
+A terminal or desktop application with a TypeScript interface and a Python agent backend. The process bridge carries prompts, streamed text, tool activity, plans, and approval requests between them.
+
+The application owns the interface, model configuration, and local process.
+
+<Link href="https://github.com/yasik/agentlane/tree/main/docs/process-bridge">
+  Process bridge ↗
+</Link>
+
+</article>
+
+<article>
+
+<Heading
+  level={3}
+  id="self-hosted-cloud-agents"
+  text="Self-hosted cloud agents"
+/>
+
+Agents and specialist workers running in your own cloud. The runtime handles addressed delivery and worker routing; tracing processors export spans and metrics to your telemetry systems.
+
+Local and distributed runtimes use the same communication model.
+
+<Link href="https://github.com/yasik/agentlane/tree/main/docs/runtime/distributed-runtime-usage.md">
+  Distributed runtime ↗
+</Link>
+
+</article>
+
+<article>
+
+<Heading
+  level={3}
+  id="bots-and-agent-applications"
+  text="Bots and agent applications"
+/>
+
+An assistant behind a chat interface, a webhook, or an application API. Incoming requests can reach an addressed agent, which can call tools, delegate work, and return results through the application.
+
+Channel integrations and application behavior are defined in your code.
+
+<Link href="https://github.com/yasik/agentlane/tree/main/docs/harness/default-agents.md">
+  Agent harness ↗
+</Link>
+
+</article>
+
+</div>
+
+</section>
+
+<section id="quickstart" aria-labelledby="quickstart-title">
+
+<Heading level={2} id="quickstart-title" text="Quickstart" />
+
+Two Markdown definitions, bound to a distributed runtime. The coordinator delegates to the analyst as an addressed agent and uses the returned result in its own response.
+
+<p class="muted">Python 3.12, with <code>OPENAI_API_KEY</code> set in the environment.</p>
+<Heading level={3} id="install" text="1. Install" />
+<CopyCommand command="uv add agentlane" />
+<Heading level={3} id="define-the-agents" text="2. Define the agents" />
+<CodeBlock name="coordinator.md" language="markdown">
+
+```markdown
+---
+name: coordinator
+description: Coordinates release reviews.
+---
+
+Delegate risk analysis to the analyst.
+Use its findings to summarize the review.
+```
+
+</CodeBlock>
+<CodeBlock name="analyst.md" language="markdown">
+
+```markdown
+---
+name: analyst
+description: Reviews release plans for risks.
+model: inherit
+---
+
+Identify failure cases and missing checks.
+Return a short analysis to the coordinator.
+```
+
+</CodeBlock>
+<Heading level={3} id="start-the-runtime" text="3. Start the runtime" />
+<CodeBlock name="agent.py" language="python">
+
+```python
+import asyncio
+import os
+
+from agentlane_openai import ResponsesClient
+from agentlane.harness.agents import DefaultAgent
+from agentlane.models import Config
+from agentlane.runtime import distributed_runtime
+
+model = ResponsesClient(
+    config=Config(
+        api_key=os.environ["OPENAI_API_KEY"],
+        model="gpt-5.4-mini",
+    ),
+)
+
+async def main():
+    async with distributed_runtime() as runtime:
+        lead = DefaultAgent.from_markdown(
+            "coordinator.md",
+            model=model,
+            subagents=["analyst.md"],
+            runtime=runtime,
+        )
+        result = await lead.run(
+            "Ask the analyst to review this plan: "
+            "deploy on Friday without a rollback test."
+        )
+        print(result.final_output)
+
+asyncio.run(main())
+```
+
+</CodeBlock>
+<CopyCommand command="uv run agent.py" />
+<p class="muted">The analyst inherits the coordinator’s model. Specialist execution can move to a separate worker using the same addressing model.</p>
+<Link href="https://github.com/yasik/agentlane#quick-start">Quickstart documentation ↗</Link>
+
+</section>
+
+<section id="system" aria-labelledby="system-title">
+
+<Heading level={2} id="system-title" text="Harnesses" />
+
+AgentLane includes a complete agent harness that you can use out of the box to build powerful agents. It brings together model calls, tools, streaming, state, skills, and delegation, and manages the execution loop for you.
+
+The runtime connects these agents and routes work between them. It can also route work to another harness or a deterministic service. Your AgentLane agents can delegate work to those participants and use the results in their own runs.
+
+<Heading
+  level={3}
+  id="delegate-to-another-harness"
+  text="Delegate work to Claude Code or another harness"
+/>
+
+An AgentLane agent can delegate a task to the Claude Agent SDK and use the returned text in its own run. The adapter binds Claude to an AgentLane address; the result comes back through the delivery call.
+
+Each addressed message starts a fresh SDK session. SDK options configure tools and execution limits. Other harnesses can be integrated through the same <code>Task</code> abstraction; additional adapters are planned.
+
+Install the optional Claude integration and authenticate Claude Code before you run this example. See the complete coworker example below for setup steps.
+
+<CopyCommand command={'uv add "agentlane[claude-agent-sdk]"'} />
+
+<CodeBlock name="Existing runtime + lead agent" language="python">
+
+```python
+from agentlane_claude_agent_sdk import ClaudeAgent
+from agentlane.messaging import AgentId, DeliveryStatus
+
+claude = AgentId.from_values("claude-sdk", "analyst")
+ClaudeAgent.bind(runtime, claude)
+
+outcome = await runtime.send_message(
+    "Review this plan for missing rollback steps.",
+    sender=lead.agent_id,
+    recipient=claude,
+)
+if outcome.status != DeliveryStatus.DELIVERED:
+    raise RuntimeError("Claude task failed")
+
+result = await lead.run(
+    f"Summarize this review: {outcome.response_payload}"
+)
+```
+
+</CodeBlock>
+<Link href="https://github.com/yasik/agentlane/tree/main/examples/harness/claude_agent_sdk_coworker">Complete coworker example ↗</Link>
+<div class="integration-notes">
+
+<article>
+
+<Heading level={3} id="runtime-messaging" text="Runtime + messaging" />
+
+Agent identities, direct sends, pub/sub, scheduling, delivery outcomes, and worker routing.
+
+<Link href="https://github.com/yasik/agentlane/tree/main/docs/messaging/routing-and-delivery.md">
+  Routing and delivery ↗
+</Link>
+
+</article>
+
+<article>
+
+<Heading level={3} id="agent-harness" text="Agent harness" />
+
+Model loops, tools, streaming, state, skills, handoffs, and specialist delegation. The harness uses the runtime for communication.
+
+<Link href="https://github.com/yasik/agentlane/tree/main/docs/harness/architecture.md">
+  Harness architecture ↗
+</Link>
+
+</article>
+
+<article>
+
+<Heading level={3} id="tracing" text="Tracing" />
+
+Runtime, model, and application spans share a tracing API. Custom processors export events and metrics to an application’s own systems.
+
+<Link href="https://github.com/yasik/agentlane/tree/main/docs/tracing/overview.md">
+  Tracing documentation ↗
+</Link>
+
+</article>
+
+</div>
+
+</section>
+
+<section aria-labelledby="project-title">
+
+<Heading
+  level={2}
+  id="project-title"
+  text="Source, documentation, and examples"
+/>
+
+<div class="nav">
+
+<Link href="https://github.com/yasik/agentlane">github ↗</Link>
+<Link href="https://github.com/yasik/agentlane/tree/main/docs">
+  documentation ↗
+</Link>
+<Link href="https://github.com/yasik/agentlane/tree/main/examples">
+  examples ↗
+</Link>
+
+</div>
+
+</section>
+
+<footer>
+
+<span>
+  {"agentlane "}
+  <span class="syn" aria-hidden="true">
+    {"/"}
+  </span>{" "}
+  <Link href="https://github.com/yasik/agentlane/blob/main/LICENSE">MIT</Link>
+</span>
+
+Sponsored by **Diadia.**
+
+<Link href="#top">back to top ↑</Link>
+
+</footer>
+
+</main>

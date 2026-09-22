@@ -1,0 +1,32 @@
+---
+import { getCollection, render } from "astro:content";
+import { OrganizationExamples } from "./OrganizationExamples";
+import Heading from "./Heading.astro";
+const entries = (await getCollection("examples")).sort(
+  (a, b) => a.data.order - b.data.order,
+);
+const summaries = await Promise.all(
+  entries.map(async (entry) => ({
+    id: entry.data.id,
+    label: entry.data.label,
+    ...(await render(entry)),
+  })),
+);
+---
+
+<OrganizationExamples
+  examples={entries.map((entry) => entry.data)}
+  client:visible
+/>
+<noscript>
+  {
+    summaries.map(({ id, label, Content }) => (
+      <article>
+        <>
+          <Heading level={3} id={`example-summary-${id}`} text={label} />
+          <Content />
+        </>
+      </article>
+    ))
+  }
+</noscript>

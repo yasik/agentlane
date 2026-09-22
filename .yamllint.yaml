@@ -1,5 +1,6 @@
 ignore: |
   .venv/
+  website/
 
 rules:
   quoted-strings: disable

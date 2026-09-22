@@ -1,0 +1,63 @@
+---
+import type { CollectionEntry } from "astro:content";
+import "../styles/global.css";
+interface Props {
+  meta: CollectionEntry<"pages">["data"];
+}
+const { meta } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+const image = new URL(meta.socialImage, Astro.site);
+const preview = import.meta.env.VERCEL_ENV === "preview";
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  name: "AgentLane",
+  description: meta.description,
+  url: Astro.site?.href,
+  codeRepository: "https://github.com/yasik/agentlane",
+  programmingLanguage: "Python",
+  license: "https://github.com/yasik/agentlane/blob/main/LICENSE",
+  runtimePlatform: "Python 3.12",
+};
+---
+
+<!doctype html>
+<html lang="en" data-theme="ayu">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{meta.title}</title>
+    <meta name="description" content={meta.description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <meta
+      name="robots"
+      content={meta.noindex || preview ? "noindex, nofollow" : "index, follow"}
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AgentLane" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:title" content={meta.title} />
+    <meta property="og:description" content={meta.description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={image} />
+    <meta property="og:image:width" content="1734" />
+    <meta property="og:image:height" content="907" />
+    <meta property="og:image:alt" content={meta.socialImageAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={meta.title} />
+    <meta name="twitter:description" content={meta.description} />
+    <meta name="twitter:image" content={image} />
+    <meta name="twitter:image:alt" content={meta.socialImageAlt} />
+    {
+      !meta.noindex && (
+        <script
+          type="application/ld+json"
+          set:html={JSON.stringify(structuredData).replaceAll("<", "\\u003c")}
+        />
+      )
+    }
+  </head>
+  <body><a class="skip-link" href="#top">Skip to content</a><slot /></body>
+</html>

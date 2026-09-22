@@ -78,6 +78,10 @@ module = [
 ]
 ignore_missing_imports = true
 
+# The static website has its own build and is not part of any distribution.
+[tool.hatch.build]
+exclude = ["/website", "/.github/workflows/website.yml"]
+
 [tool.hatch.build.targets.wheel]
 packages = [
   "src/agentlane",

@@ -1,0 +1,289 @@
+.organization-examples {
+  margin-top: 26px;
+  font-size: 14px;
+  line-height: 1.65;
+}
+.example-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-bottom: 12px;
+}
+.example-tabs button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  padding: 7px 0;
+  cursor: pointer;
+}
+.example-tabs button::before {
+  content: "[";
+  margin-right: 4px;
+  color: var(--syntax);
+}
+.example-tabs button::after {
+  content: "]";
+  margin-left: 4px;
+  color: var(--syntax);
+}
+.example-tabs button[aria-selected="true"] {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 5px;
+}
+.example-tabs button:hover {
+  color: var(--accent);
+}
+.example-panel[hidden] {
+  display: none;
+}
+.example-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 5px;
+}
+.example-panel figure {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.example-panel figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.example-caption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+}
+.example-playback {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  padding: 5px 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.example-content {
+  padding: 16px 18px;
+}
+.example-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.example-channels [data-active="true"] {
+  color: var(--accent);
+}
+.example-tree {
+  padding-top: 10px;
+}
+.example-role {
+  padding: 8px 0;
+}
+.example-role-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.example-role-name {
+  font-weight: 600;
+  color: var(--bright);
+  overflow-wrap: anywhere;
+}
+.example-annotation {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+}
+.example-role-state {
+  font-size: 13px;
+  color: var(--muted);
+}
+.example-duty {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.example-role[data-active="true"] .example-role-name,
+.example-role[data-active="true"] .example-role-state {
+  color: var(--accent);
+}
+.example-branches {
+  list-style: none;
+  margin: 3px 0 0 7px;
+  padding: 0 0 0 20px;
+  border-left: 1px solid var(--line);
+}
+.example-branches > li {
+  position: relative;
+  margin: 0;
+  padding: 0;
+}
+.example-branches > li::before {
+  content: "";
+  position: absolute;
+  top: 20px;
+  left: -21px;
+  width: 13px;
+  border-top: 1px solid var(--line);
+}
+.example-copies {
+  margin: 7px 0 5px;
+  padding-left: 12px;
+  border-left: 1px dashed var(--line);
+  min-height: 125px;
+}
+.example-copy-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+.example-copy {
+  display: grid;
+  grid-template-columns: 14ch minmax(0, 1fr);
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 13px;
+  animation: example-spawn 0.3s ease-out;
+}
+.example-copy > span:first-child {
+  color: var(--muted);
+}
+.example-copy > span:last-child {
+  overflow-wrap: anywhere;
+}
+.example-copy[data-active="true"] > span:first-child {
+  color: var(--accent);
+}
+.example-coverage {
+  padding: 6px 0;
+}
+.example-independent {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 10px;
+}
+.example-event {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  margin-top: 12px;
+  min-height: 112px;
+}
+.example-route {
+  font-size: 13px;
+  color: var(--accent);
+  margin-bottom: 5px;
+  overflow-wrap: anywhere;
+}
+.example-event p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.example-footer {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.example-gate {
+  color: var(--accent);
+}
+.example-draft {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+}
+.example-draft summary {
+  color: var(--accent);
+  padding: 4px 0;
+  cursor: pointer;
+}
+.example-draft > div {
+  border-left: 2px solid var(--line);
+  padding-left: 12px;
+  margin-top: 10px;
+}
+.example-draft p {
+  margin: 10px 0;
+}
+@keyframes example-spawn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (max-width: 640px) {
+  .example-content {
+    padding: 12px;
+  }
+  .example-panel figcaption {
+    padding: 9px 12px;
+    align-items: flex-start;
+  }
+  .example-role-heading {
+    display: block;
+  }
+  .example-role-state {
+    display: block;
+  }
+  .example-branches {
+    padding-left: 13px;
+  }
+  .example-branches > li::before {
+    left: -14px;
+    width: 8px;
+  }
+  .example-copy {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .example-copies {
+    min-height: 202px;
+  }
+  .example-event {
+    min-height: 172px;
+  }
+  .example-tabs {
+    gap: 6px 10px;
+    font-size: 12px;
+  }
+  .example-tabs button::before {
+    margin-right: 2px;
+  }
+  .example-tabs button::after {
+    margin-left: 2px;
+  }
+}
+@media (pointer: coarse) {
+  .example-tabs button,
+  .example-playback,
+  .example-draft summary {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .example-copy {
+    animation: none;
+  }
+}

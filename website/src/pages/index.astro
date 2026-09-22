@@ -1,0 +1,9 @@
+---
+import { getEntry, render } from "astro:content";
+import Page from "../layouts/Page.astro";
+const entry = await getEntry("pages", "home");
+if (!entry) throw new Error("Missing home page content");
+const { Content } = await render(entry);
+---
+
+<Page meta={entry.data}><Content /></Page>

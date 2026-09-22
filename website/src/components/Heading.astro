@@ -1,0 +1,15 @@
+---
+interface Props {
+  level: 1 | 2 | 3;
+  id: string;
+  text: string;
+}
+const { level, id, text } = Astro.props;
+const Tag = `h${level}` as const;
+---
+
+<Tag id={id} aria-label={text}
+  ><a class="heading-anchor" href={`#${id}`} aria-label={`Link to ${text}`}
+    >{"#".repeat(level)}</a
+  >{" "}{text}</Tag
+>

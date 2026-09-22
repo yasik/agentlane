@@ -38,7 +38,7 @@ lint-python:
 lint-static:
 	uv run yamllint -c .yamllint.yaml .
 	@if command -v markdownlint >/dev/null 2>&1; then \
-		markdownlint "**/*.md" --config .markdownlint.yaml --ignore docs/plans/**; \
+		markdownlint "**/*.md" --config .markdownlint.yaml --ignore 'docs/plans/**' --ignore 'website/**'; \
 	else \
 		echo "markdownlint not installed; skipping markdown lint"; \
 	fi

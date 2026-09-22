@@ -1,0 +1,10 @@
+---
+import { getEntry, render } from "astro:content";
+import Page from "../layouts/Page.astro";
+const entry = await getEntry("pages", "not-found");
+if (!entry) throw new Error("Missing not-found content");
+const { Content } = await render(entry);
+---
+
+<Page meta={entry.data}><main id="top" class="document"><Content /></main></Page
+>

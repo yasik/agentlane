@@ -1,0 +1,32 @@
+---
+interface Props {
+  command: string;
+}
+---
+
+<div class="copy-command" role="group" aria-label="Shell command">
+  <span class="prompt" aria-hidden="true">$</span>
+  <code>{Astro.props.command}</code>
+  <button type="button" class="copy-hint" aria-label="Copy command" hidden
+    ><span aria-live="polite">copy</span></button
+  >
+</div>
+<script>
+  document
+    .querySelectorAll<HTMLDivElement>(".copy-command")
+    .forEach((command) => {
+      const button = command.querySelector<HTMLButtonElement>("button");
+      const status = button?.querySelector("span");
+      const text = command.querySelector("code")?.textContent;
+      if (!button || !status || !text) return;
+      button.hidden = false;
+      button.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          status.textContent = "copied";
+        } catch {
+          status.textContent = "select to copy";
+        }
+      });
+    });
+</script>

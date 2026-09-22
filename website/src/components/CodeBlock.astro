@@ -1,0 +1,16 @@
+---
+interface Props {
+  name: string;
+  language: string;
+}
+---
+
+<figure class="code-block">
+  <figcaption>
+    <span class="syn" aria-hidden="true">```</span>{Astro.props.language}<span
+      >{Astro.props.name}</span
+    >
+  </figcaption>
+  <slot />
+  <div class="fence" aria-hidden="true">```</div>
+</figure>

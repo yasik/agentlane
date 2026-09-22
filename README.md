@@ -303,6 +303,11 @@ uv run pytest -s -k <test_name>
 
 ## Contributing
 
+The [website](website/README.md) is a separate static Astro project. Edit its
+Markdown/MDX content under `website/src/content/`. Use `make -C website install`
+and `make -C website dev` to run it. It has its own Makefile and CI and is excluded
+from Python and npm releases.
+
 1. Keep changes small and focused.
 2. Add or update tests when behavior changes.
 3. Update the public docs and examples when the developer-facing surface changes.
