@@ -12,6 +12,8 @@ Read the page that matches the work you are doing instead of treating
    workspace package.
 3. [TypeScript conventions](./typescript/README.md): TypeScript tooling,
    strictness, exports, and package script expectations.
+4. [Maintain documentation](./documentation.md): root Markdown, writing review,
+   and documentation portal checks.
 
 ## Logical blocks and comments
 

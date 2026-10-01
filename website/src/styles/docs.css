@@ -1,0 +1,354 @@
+.docs-shell {
+  max-width: 1560px;
+  margin: 0 auto;
+  padding: 0 32px;
+  font-size: 14px;
+}
+.docs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 84px;
+  border-bottom: 1px solid var(--line);
+}
+.docs-header nav {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+.docs-header nav > a {
+  color: var(--muted);
+}
+.docs-grid {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr) 200px;
+  gap: 48px;
+}
+.docs-sidebar,
+.docs-toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 32px 0;
+  scrollbar-width: thin;
+}
+.docs-sidebar {
+  padding-right: 16px;
+  border-right: 1px solid var(--line);
+}
+.docs-menu summary {
+  display: none;
+}
+.docs-nav-group {
+  margin: 28px 0;
+}
+.docs-nav-group > p,
+.docs-toc nav > p {
+  color: var(--bright);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+.docs-nav-group ul,
+.docs-toc ul,
+.docs-mobile-toc ul,
+#docs-results {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.docs-nav-group a {
+  display: block;
+  padding: 5px 12px;
+  border-left: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.docs-nav-group a:hover,
+.docs-toc a:hover {
+  color: var(--accent);
+}
+.docs-nav-group a[aria-current="page"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.docs-main {
+  min-width: 0;
+  padding: 36px 0 64px;
+}
+.docs-breadcrumb {
+  display: flex;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 28px;
+}
+.docs-prose {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+}
+.docs-prose h1,
+.docs-prose h2,
+.docs-prose h3,
+.docs-prose h4 {
+  font-family: var(--mono);
+}
+.docs-prose h1 {
+  font-size: clamp(26px, 3vw, 36px);
+  white-space: normal;
+  margin: 0 0 24px;
+  line-height: 1.3;
+}
+.docs-prose h2 {
+  margin: 44px 0 16px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-size: 22px;
+}
+.docs-prose h3 {
+  margin: 30px 0 12px;
+  font-size: 18px;
+}
+.docs-prose h4 {
+  margin: 24px 0 10px;
+  font-size: 16px;
+}
+.docs-prose p {
+  margin: 16px 0;
+}
+.docs-prose > h1 + p {
+  font-size: 18px;
+  color: var(--muted);
+}
+.docs-prose a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.docs-prose li {
+  margin: 6px 0;
+}
+.docs-prose ul,
+.docs-prose ol {
+  padding-left: 24px;
+}
+.docs-prose code {
+  font-family: var(--mono);
+  font-size: 0.84em;
+}
+.docs-prose :not(pre) > code {
+  color: var(--accent);
+  background: var(--surface);
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.docs-prose code::before,
+.docs-prose code::after {
+  content: none;
+}
+.docs-prose pre {
+  overflow-x: auto;
+  padding: 20px;
+  margin: 24px 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface) !important;
+  line-height: 1.7;
+}
+.docs-prose pre code {
+  font-size: 13px;
+}
+.docs-prose table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 14px;
+  margin: 24px 0;
+}
+.docs-prose th,
+.docs-prose td {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  text-align: left;
+  min-width: 120px;
+}
+.docs-prose th {
+  background: var(--surface);
+  color: var(--bright);
+}
+.docs-prose blockquote {
+  margin: 24px 0;
+  padding-left: 20px;
+  border-left: 2px solid var(--accent);
+  color: var(--muted);
+}
+.docs-prose img {
+  max-width: 100%;
+  height: auto;
+}
+.docs-toc a {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+.docs-toc .nested {
+  padding-left: 12px;
+}
+.docs-footer {
+  border-top: 1px solid var(--line);
+  margin-top: 48px;
+}
+.docs-pagination {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 32px;
+}
+.docs-pagination a {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 16px;
+  font-size: 13px;
+}
+.docs-pagination a:hover {
+  border-color: var(--accent);
+}
+.docs-pagination span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.docs-mobile-toc {
+  display: none;
+}
+.docs-search label {
+  display: block;
+  font-size: 11px;
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+.docs-search input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--fg);
+  background: var(--surface);
+  font: 12px var(--mono);
+}
+.docs-search input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.docs-search-panel {
+  padding-top: 12px;
+}
+.docs-search-status,
+.docs-search-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+#docs-results li {
+  border-bottom: 1px solid var(--line);
+}
+#docs-results a {
+  display: block;
+  padding: 12px 0;
+}
+#docs-results strong {
+  color: var(--accent);
+  font-size: 12px;
+}
+#docs-results span {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.6;
+}
+@media (max-width: 1200px) {
+  .docs-grid {
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 32px;
+  }
+  .docs-toc {
+    display: none;
+  }
+  .docs-mobile-toc {
+    display: block;
+    padding: 12px 16px;
+    border: 1px solid var(--line);
+    margin-bottom: 28px;
+    font-size: 12px;
+  }
+  .docs-mobile-toc summary {
+    cursor: pointer;
+    color: var(--muted);
+  }
+  .docs-mobile-toc ul {
+    padding-top: 12px;
+  }
+}
+@media (max-width: 800px) {
+  .docs-shell {
+    padding: 0 20px;
+  }
+  .docs-header {
+    min-height: 72px;
+  }
+  .docs-header nav {
+    gap: 16px;
+    font-size: 12px;
+  }
+  .docs-grid {
+    display: block;
+  }
+  .docs-sidebar {
+    position: static;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 20px 0;
+  }
+  .docs-search label {
+    display: none;
+  }
+  .docs-menu summary {
+    display: block;
+    cursor: pointer;
+    margin-top: 16px;
+    color: var(--accent);
+  }
+  .docs-menu summary::after {
+    content: " +";
+  }
+  .docs-menu[open] summary::after {
+    content: " −";
+  }
+  .docs-menu nav {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+  .docs-main {
+    padding-top: 24px;
+  }
+  .docs-prose pre {
+    padding: 14px;
+  }
+  .docs-pagination {
+    grid-template-columns: 1fr;
+  }
+  .docs-pagination > span:empty {
+    display: none;
+  }
+}

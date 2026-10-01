@@ -42,6 +42,10 @@ Always talk and write documentation in ASD-STE100 Simplified Technical English.
 - Ask yourself: "Would a staff engineer approve this?"
 - Run tests, check logs, demonstrate correctness
 - After code changes: spawn the `docs-keeper` agent to detect and update affected READMEs and tech specs
+- For public documentation updates, use `.agents/skills/docs-sync/SKILL.md`.
+  Apply `dev-docs` to changed prose, then use
+  `.agents/skills/docs-portal/SKILL.md` to rebuild and check the website.
+  Keep documentation source in root `docs/`.
 
 ### 5. Demand Elegance (Balanced)
 

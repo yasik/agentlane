@@ -53,6 +53,11 @@
       const theme =
         document.documentElement.dataset.theme === "light" ? "ayu" : "light";
       document.documentElement.dataset.theme = theme;
+      try {
+        localStorage.setItem("agentlane-theme", theme);
+      } catch {
+        // The theme still changes when browser storage is not available.
+      }
       updateLabel();
     });
   }

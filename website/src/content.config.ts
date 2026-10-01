@@ -86,4 +86,12 @@ const pages = defineCollection({
   }),
 });
 
-export const collections = { examples, pages };
+const docs = defineCollection({
+  loader: glob({
+    base: "../docs",
+    pattern: ["**/*.md", "!plans/**"],
+    generateId: ({ entry }) => entry.replace(/\.md$/, ""),
+  }),
+});
+
+export const collections = { examples, pages, docs };

@@ -1,0 +1,90 @@
+<div class="docs-search" hidden>
+  <label for="docs-query">Search documentation</label>
+  <input
+    id="docs-query"
+    type="search"
+    placeholder="Search docs…"
+    autocomplete="off"
+    aria-controls="docs-results"
+  />
+  <div class="docs-search-panel" hidden>
+    <p class="docs-search-status" role="status" aria-live="polite"></p>
+    <ul id="docs-results"></ul>
+  </div>
+</div>
+<noscript
+  ><p class="docs-search-note">
+    Browse topics in the documentation menu. Search requires JavaScript.
+  </p></noscript
+>
+
+<script>
+  import {
+    prepareSearchIndex,
+    searchDocs,
+    type SearchPage,
+  } from "../lib/docs-search";
+
+  const search = document.querySelector<HTMLElement>(".docs-search")!;
+  const input = search.querySelector<HTMLInputElement>("input")!;
+  const panel = search.querySelector<HTMLElement>(".docs-search-panel")!;
+  const status = search.querySelector<HTMLElement>(".docs-search-status")!;
+  const results = search.querySelector<HTMLUListElement>("ul")!;
+  let index: Promise<ReturnType<typeof prepareSearchIndex>> | undefined;
+  search.hidden = false;
+
+  input.addEventListener("input", async () => {
+    panel.hidden = !input.value.trim();
+    results.replaceChildren();
+    if (panel.hidden) return;
+    status.textContent = "Searching…";
+    try {
+      index ??= fetch("/docs/search.json").then(async (response) => {
+        if (!response.ok) throw new Error("Search index request failed");
+        return prepareSearchIndex((await response.json()) as SearchPage[]);
+      });
+      const pages = await index;
+      if (!input.value.trim()) return;
+      const matches = searchDocs(pages, input.value);
+      results.replaceChildren(
+        ...matches.map((page) => {
+          const item = document.createElement("li");
+          const link = document.createElement("a");
+          link.href = page.href;
+          const title = document.createElement("strong");
+          title.textContent = page.title;
+          const detail = document.createElement("span");
+          detail.textContent = `${page.group} · ${page.description}`;
+          link.append(title, detail);
+          item.append(link);
+          return item;
+        }),
+      );
+      status.textContent = matches.length
+        ? `${matches.length} results`
+        : "No results. Try a different term.";
+    } catch {
+      index = undefined;
+      status.textContent =
+        "Search could not load. Change your search to retry, or browse the topics.";
+    }
+  });
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      input.value = "";
+      panel.hidden = true;
+      input.focus();
+    }
+    if (event.key === "ArrowDown" && event.target === input) {
+      results.querySelector<HTMLAnchorElement>("a")?.focus();
+      event.preventDefault();
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (event.target instanceof Node && !search.contains(event.target))
+      panel.hidden = true;
+  });
+  input.addEventListener("focus", () => {
+    if (input.value.trim()) panel.hidden = false;
+  });
+</script>

@@ -25,6 +25,16 @@ const structuredData = {
 <html lang="en" data-theme="ayu">
   <head>
     <meta charset="utf-8" />
+    <script is:inline>
+      try {
+        const theme = localStorage.getItem("agentlane-theme");
+        if (theme === "light" || theme === "ayu") {
+          document.documentElement.dataset.theme = theme;
+        }
+      } catch {
+        // Keep the default theme when browser storage is not available.
+      }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{meta.title}</title>
     <meta name="description" content={meta.description} />

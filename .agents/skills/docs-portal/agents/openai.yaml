@@ -1,0 +1,4 @@
+interface:
+  display_name: "Documentation portal"
+  short_description: "Build and verify the website from root documentation"
+  default_prompt: "Use $docs-portal to rebuild and verify the AgentLane documentation portal after root documentation changes."

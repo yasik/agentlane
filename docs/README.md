@@ -1,161 +1,108 @@
 # Documentation
 
-AgentLane is built for AI systems where the runtime is part of the product. At
-the center is a messaging runtime: agents have stable addresses, receive direct
-messages and published events, preserve per-recipient ordering, and keep state
-when work needs to live longer than one model turn. That makes the framework a
-good fit for long-horizon agentic tasks, background specialists, fan-out and
-fan-in flows, and applications that mix deterministic services with
-model-driven components.
+AgentLane is a Python runtime for agents that send messages, receive events,
+and keep state across tasks. Use these guides to build an agent app, extend
+the harness, or run agents across workers.
 
-Many adjacent frameworks start from the agent loop itself. They are often
-optimized either for interactive local or cloud sessions and delegated
-background work, or for durable runs expressed as explicit workflows and
-graphs.
+## Start here
 
-AgentLane starts one layer lower: it treats addressed messaging, routing,
-delivery outcomes, and instance reuse as the core abstraction, then layers
-prompts, tools, and a default harness on top.
+To install AgentLane and run your first example, follow the
+[project quickstart](../README.md#quick-start).
 
-In practical terms, this gives you a clean progression. Use
-[`single_threaded_runtime()`](../src/agentlane/runtime/_context.py) and the
-harness when you want one local agent loop or one in-process service. Move to
-[`distributed_runtime()`](../src/agentlane/runtime/_context.py) or explicit
-host/worker runtimes when the same system needs cross-worker routing, worker
-placement, or cloud execution. The public messaging model stays the same, so
-you do not need to redesign the application around a different orchestration
-surface just because deployment changed.
+Choose a guide for the part of your app that you need to build:
 
-At a high level:
+- **Local agent loops:** Start with [Default agents](./harness/default-agents.md).
+- **Message-driven services:** Start with
+  [Engine and execution](./runtime/engine-and-execution.md).
+- **Distributed agents:** Start with
+  [Distributed runtime usage](./runtime/distributed-runtime-usage.md).
+- **TypeScript apps:** Start with the [Process bridge](./process-bridge/README.md).
 
-1. runtime and messaging define delivery, routing, and execution
-2. transport turns payloads into wire-safe values
-3. models describe prompts, tools, schemas, and model-call behavior
-4. harness adds reusable agent loops, handoffs, and resumable runs
-5. tracing cuts across those layers and provides observability
+For runnable applications, see the [example index](../examples/README.md).
 
-The main application-facing stack looks like this:
+## Architecture
 
-```text
-+------------------------------------------------------+
-| Application                                          |
-| user code built on the framework                     |
-|                                                      |
-|  +------------------------------------------------+  |
-|  | Harness                                        |  |
-|  | agent loops, handoffs, and resumable runs      |  |
-|  |                                                |  |
-|  |  +------------------------------------------+  |  |
-|  |  | Models                                   |  |  |
-|  |  | prompts, schemas, tools, model clients   |  |  |
-|  |  |                                          |  |  |
-|  |  |  +------------------------------------+  |  |  |
-|  |  |  | Transport                          |  |  |  |
-|  |  |  | payload serialization boundaries   |  |  |  |
-|  |  |  |                                    |  |  |  |
-|  |  |  |  +------------------------------+  |  |  |  |
-|  |  |  |  | Core Runtime + Messaging     |  |  |  |  |
-|  |  |  |  | delivery, routing, execution |  |  |  |  |
-|  |  |  |  +------------------------------+  |  |  |  |
-|  |  |  +------------------------------------+  |  |  |
-|  |  +------------------------------------------+  |  |
-|  +------------------------------------------------+  |
-+------------------------------------------------------+
-```
+The application-facing layers have the following responsibilities:
 
-Tracing is not shown as another wrapper because it is a cross-cutting concern:
-it instruments work that happens in every layer rather than owning a separate
-execution boundary.
+- **Runtime and messaging:** Agent addresses, message routing, delivery, and
+  execution.
+- **Transport:** Payload serialization across process boundaries.
+- **Models:** Prompts, tools, schemas, and model calls.
+- **Harness:** Agent loops, handoffs, and resumable runs.
+- **Tracing:** Execution records across all layers.
 
-## Start Here
-
-If you are new to the codebase, start with the shortest path to a working
-mental model:
-
-1. Read the project [README](../README.md) for the top-level architecture.
-2. If you want explicit message passing, start with
-   [Runtime: Engine and Execution](./runtime/engine-and-execution.md).
-3. If you want the smallest local harness surface, read
-   [Harness Default Agents](./harness/default-agents.md), then
-   [Harness Runner](./harness/runner.md).
-4. If you want to understand how the harness fits together under that local
-   surface, read [Harness Architecture](./harness/architecture.md).
-5. If you want to extend harness behavior without changing core harness types,
-   read [Harness Shims](./harness/shims.md).
-6. If you want to shrink long conversation history while preserving a resumable
-   run, read [Harness Compaction](./harness/compaction.md).
-7. If you want first-party local workspace tools, read
-   [Harness Tools](./harness/tools.md) after
-   [Harness Shims](./harness/shims.md).
-8. If you want skill activation from local or application storage, read
-   [Harness Skills](./harness/skills.md) after
-   [Harness Shims](./harness/shims.md).
-9. If you want to define agents and sub-agents from markdown files, read
-   [Harness Markdown Agent Definitions](./harness/agent-definitions.md) after
-   [Harness Default Agents](./harness/default-agents.md).
-10. If you are building a TypeScript app around a local Python AgentLane
-    backend, read [Process Bridge](./process-bridge/README.md).
-11. If you want to understand prompt construction or tool exposure, read
-    [Models Overview](./models/overview.md) and
-    [Models: Prompt Templating](./models/prompt-templating.md).
-12. If you specifically want streaming, read [Models Overview](./models/overview.md)
-    first, then [Harness Default Agents](./harness/default-agents.md).
-13. If you want high-level harness agents coordinating distributed workers, read
-    [Harness Distributed Agents](./harness/distributed-agents.md) after the
-    runtime distributed docs.
-14. If you want to give an external agent harness an AgentLane identity, read
-    [Harness Tasks](./harness/tasks.md) and run the
-    [Claude Agent SDK coworker example](../examples/harness/claude_agent_sdk_coworker/).
-15. Run one of the examples under [examples/](../examples/README.md).
+Use a local runtime for one process. Use a distributed runtime when you need
+cross-worker routing or worker placement. Both use the same public messaging
+model.
 
 ## Contents
 
+Use the following references to explore each part of AgentLane.
+
 ### Runtime
 
-1. [Runtime: Engine and Execution](./runtime/engine-and-execution.md)
-2. [Runtime: Distributed Runtime Usage](./runtime/distributed-runtime-usage.md)
-3. [Runtime: Distributed Runtime Architecture](./runtime/distributed-runtime-architecture.md)
+Create local runtimes and distribute work across hosts:
+
+- [Runtime: Engine and Execution](./runtime/engine-and-execution.md)
+- [Runtime: Distributed Runtime Usage](./runtime/distributed-runtime-usage.md)
+- [Runtime: Distributed Runtime Architecture](./runtime/distributed-runtime-architecture.md)
 
 ### Messaging
 
-1. [Messaging: Routing and Delivery](./messaging/routing-and-delivery.md)
+Route messages and track delivery:
+
+- [Messaging: Routing and Delivery](./messaging/routing-and-delivery.md)
 
 ### Transport
 
-1. [Transport Serialization](./transport/serialization.md)
+Serialize payloads for transport:
+
+- [Transport Serialization](./transport/serialization.md)
 
 ### Models
 
-1. [Models Overview](./models/overview.md)
-2. [Models: Prompt Templating](./models/prompt-templating.md)
+Configure model calls and prompts:
+
+- [Models Overview](./models/overview.md)
+- [Models: Prompt Templating](./models/prompt-templating.md)
 
 ### Harness
 
-1. [Architecture](./harness/architecture.md)
-2. [Tasks](./harness/tasks.md)
-3. [Agents](./harness/agents.md)
-4. [Default Agents](./harness/default-agents.md)
-5. [Shims](./harness/shims.md)
-6. [Compaction](./harness/compaction.md)
-7. [Tools](./harness/tools.md)
-8. [Skills](./harness/skills.md)
-9. [Markdown Agent Definitions](./harness/agent-definitions.md)
-10. [Runner](./harness/runner.md)
-11. [Run Event Serialization](./harness/event-serialization.md)
-12. [Distributed Agents](./harness/distributed-agents.md)
-13. [File I/O Adapters](./harness/filesystem.md)
+Build agent loops and extend their behavior:
 
-### Process Bridge
+- [Architecture](./harness/architecture.md)
+- [Tasks](./harness/tasks.md)
+- [Agents](./harness/agents.md)
+- [Default Agents](./harness/default-agents.md)
+- [Shims](./harness/shims.md)
+- [Compaction](./harness/compaction.md)
+- [Tools](./harness/tools.md)
+- [Skills](./harness/skills.md)
+- [Markdown Agent Definitions](./harness/agent-definitions.md)
+- [Runner](./harness/runner.md)
+- [Run Event Serialization](./harness/event-serialization.md)
+- [Distributed Agents](./harness/distributed-agents.md)
+- [File I/O Adapters](./harness/filesystem.md)
 
-1. [Overview](./process-bridge/README.md)
-2. [Runtime Configuration](./process-bridge/runtime-configuration.md)
-3. [Protocol and Lifecycle](./process-bridge/protocol.md)
-4. [Development](./process-bridge/development.md)
+### Process bridge
+
+Connect a TypeScript app to a Python backend:
+
+- [Overview](./process-bridge/README.md)
+- [Runtime Configuration](./process-bridge/runtime-configuration.md)
+- [Protocol and Lifecycle](./process-bridge/protocol.md)
+- [Development](./process-bridge/development.md)
 
 ### Tracing
 
-1. [Tracing Overview](./tracing/overview.md)
+Inspect execution with tracing:
+
+- [Tracing Overview](./tracing/overview.md)
 
 ### Project
 
-1. [Changelog](../CHANGELOG.md)
+Read project history and contribution guidance:
+
+- [Changelog](../CHANGELOG.md)
+- [Code style](./code-style/README.md)
+- [Maintain documentation](./code-style/documentation.md)

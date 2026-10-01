@@ -1,0 +1,163 @@
+---
+import { render } from "astro:content";
+import Page from "../../layouts/Page.astro";
+import ThemeSwitcher from "../../components/ThemeSwitcher.astro";
+import DocsSearch from "../../components/DocsSearch.astro";
+import { getDocs } from "../../lib/docs";
+import { repositoryUrl } from "../../lib/docs-paths.mjs";
+import "../../styles/docs.css";
+
+export async function getStaticPaths() {
+  const docs = await getDocs();
+  return docs.map((doc, index) => ({
+    params: {
+      slug: doc.href.slice("/docs/".length).replace(/\/$/, "") || undefined,
+    },
+    props: { doc, docs, index },
+  }));
+}
+
+const { doc, docs, index } = Astro.props;
+const { Content, headings } = await render(doc.entry);
+const sections = [...new Set(docs.map((item) => item.group))];
+const contents = headings.filter(
+  (heading) => heading.depth === 2 || heading.depth === 3,
+);
+const previous = docs[index - 1];
+const next = docs[index + 1];
+---
+
+<Page
+  meta={{
+    title: `${doc.title} | AgentLane docs`,
+    description: doc.description,
+    socialImage: "/og.png",
+    socialImageAlt: "AgentLane documentation",
+    noindex: false,
+  }}
+>
+  <div class="docs-shell">
+    <header class="docs-header">
+      <a class="wordmark" href="/"
+        >agentlane<span class="file-ext">/ docs</span></a
+      >
+      <nav aria-label="Site navigation">
+        <a href="/">Website</a>
+        <a href={repositoryUrl}>GitHub</a>
+        <ThemeSwitcher />
+      </nav>
+    </header>
+    <div class="docs-grid">
+      <aside
+        class="docs-sidebar"
+        aria-label="Documentation navigation and search"
+      >
+        <DocsSearch />
+        <details class="docs-menu" open>
+          <summary>Documentation</summary>
+          <nav aria-label="Documentation">
+            {
+              sections.map((group) => (
+                <div class="docs-nav-group">
+                  <p>{group}</p>
+                  <ul>
+                    {docs
+                      .filter((item) => item.group === group)
+                      .map((item) => (
+                        <li>
+                          <a
+                            href={item.href}
+                            aria-current={
+                              item.href === doc.href ? "page" : undefined
+                            }
+                          >
+                            {item.title}
+                          </a>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              ))
+            }
+          </nav>
+        </details>
+      </aside>
+      <main id="top" class="docs-main" tabindex="-1">
+        <div class="docs-breadcrumb">
+          <a href="/docs/">Docs</a><span aria-hidden="true">/</span><span
+            >{doc.group}</span
+          >
+        </div>
+        {
+          contents.length > 0 && (
+            <details class="docs-mobile-toc">
+              <summary>On this page</summary>
+              <ul>
+                {contents
+                  .filter((heading) => heading.depth === 2)
+                  .map((heading) => (
+                    <li>
+                      <a href={`#${heading.slug}`}>{heading.text}</a>
+                    </li>
+                  ))}
+              </ul>
+            </details>
+          )
+        }
+        <article class="docs-prose"><Content /></article>
+        <footer class="docs-footer">
+          <a href={`${repositoryUrl}/blob/main/docs/${doc.entry.id}.md`}
+            >View Markdown source</a
+          >
+          <a href="#top">Back to top ↑</a>
+        </footer>
+        <nav class="docs-pagination" aria-label="Adjacent pages">
+          {
+            previous ? (
+              <a href={previous.href} rel="prev">
+                <span>← Previous</span>
+                {previous.title}
+              </a>
+            ) : (
+              <span />
+            )
+          }
+          {
+            next && (
+              <a href={next.href} rel="next">
+                <span>Next →</span>
+                {next.title}
+              </a>
+            )
+          }
+        </nav>
+      </main>
+      <aside class="docs-toc" aria-label="Page outline">
+        {
+          contents.length > 0 && (
+            <nav aria-label="On this page">
+              <p>On this page</p>
+              <ul>
+                {contents.map((heading) => (
+                  <li class:list={{ nested: heading.depth === 3 }}>
+                    <a href={`#${heading.slug}`}>{heading.text}</a>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          )
+        }
+      </aside>
+    </div>
+  </div>
+</Page>
+
+<script>
+  const menu = document.querySelector<HTMLDetailsElement>(".docs-menu");
+  const mobile = window.matchMedia("(max-width: 800px)");
+  const updateMenu = () => {
+    if (menu) menu.open = !mobile.matches;
+  };
+  updateMenu();
+  mobile.addEventListener("change", updateMenu);
+</script>

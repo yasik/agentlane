@@ -1,15 +1,9 @@
 name: Website
 
 on:
-  pull_request:
-    paths:
-      - 'website/**'
-      - '.github/workflows/website.yml'
+  pull_request: {}
   push:
     branches: [main]
-    paths:
-      - 'website/**'
-      - '.github/workflows/website.yml'
   workflow_dispatch: {}
 
 permissions:

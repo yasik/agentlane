@@ -113,7 +113,13 @@ test("sitemap, robots, and 404 are valid static outputs", async () => {
   const urls = load(sitemap, { xml: true })("loc")
     .map((_, el) => el.children[0].data)
     .get();
-  assert.deepEqual(urls, [canonical.href]);
+  assert.ok(urls.includes(canonical.href));
+  assert.ok(
+    urls.every(
+      (url) =>
+        url === canonical.href || new URL(url).pathname.startsWith("/docs/"),
+    ),
+  );
   const robots = await readFile(
     new URL("../dist/robots.txt", import.meta.url),
     "utf8",

@@ -88,6 +88,12 @@ Keep the report concise.
 
 ### 6. Apply updates if asked
 
+Use the `dev-docs` skill before drafting or revising public documentation.
+Find it in the session's skill catalog and read its `SKILL.md`. Apply its
+review checklist to changed pages. Repository terminology and ASD-STE100
+Simplified Technical English take precedence. If the skill is unavailable,
+report the missing dependency; do not claim that its review passed.
+
 When applying edits:
 
 1. edit only the relevant public docs under `docs/**`
@@ -95,6 +101,15 @@ When applying edits:
 3. keep examples short and directly tied to the repo
 4. prefer current-state documentation over rollout history
 5. do not add jokes, slang, rhetoric, puns, or contrastive-negation phrasing
+
+### 7. Rebuild the documentation portal
+
+After you apply public documentation updates, use the repository
+[`docs-portal` skill](../docs-portal/SKILL.md) to rebuild and check the website.
+Keep the Markdown in root `docs/`; the website reads it directly at build
+time. Do not create a second content copy under `website/`.
+
+For a read-only audit, report the recommended updates without a rebuild.
 
 ## Writing Style
 

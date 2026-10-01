@@ -3,6 +3,8 @@ import mdx from "@astrojs/mdx";
 import react from "@astrojs/react";
 import sitemap from "@astrojs/sitemap";
 import { loadEnv } from "vite";
+import remarkDocs from "./src/lib/remark-docs.mjs";
+import { unified } from "@astrojs/markdown-remark";
 
 const env = loadEnv(process.env.NODE_ENV ?? "production", process.cwd(), "");
 const origin = new URL(env.SITE_URL || "https://getagentlane.dev");
@@ -22,6 +24,7 @@ export default defineConfig({
   output: "static",
   integrations: [mdx(), react(), sitemap()],
   markdown: {
+    processor: unified({ remarkPlugins: [remarkDocs] }),
     shikiConfig: {
       themes: { dark: "github-dark", light: "github-light-high-contrast" },
       defaultColor: false,
