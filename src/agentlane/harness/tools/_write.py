@@ -1,15 +1,15 @@
 """Write tool implementation for first-party harness base tools."""
 
-import contextlib
-import tempfile
-from pathlib import Path
+import asyncio
+from pathlib import Path, PurePath
 
 from pydantic import BaseModel, Field
 
+from agentlane.harness.filesystem import FileInfo, FileWriter, LocalFileSystem
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
-from ._paths import ToolPathResolver
+from ._paths import RelativeToolPathResolver, ToolPathResolver
 from ._permissions import (
     ToolApprovalCallback,
     ToolOperation,
@@ -39,6 +39,7 @@ class _ToolArgs(BaseModel):
 def write_tool(
     *,
     cwd: str | Path | None = None,
+    writer: FileWriter | None = None,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
 ) -> HarnessToolDefinition:
@@ -46,24 +47,35 @@ def write_tool(
 
     Args:
         cwd: Optional working directory for resolving relative tool paths.
+            Injected writers use a relative storage directory instead.
+        writer: Optional file writer. Defaults to the local filesystem.
         permissions: Optional policy for create/overwrite permission decisions.
         approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable tool plus prompt metadata.
     """
-    resolver = ToolPathResolver.for_optional(cwd)
+    resolver = (
+        ToolPathResolver.for_optional(cwd)
+        if writer is None
+        else RelativeToolPathResolver.for_optional(cwd)
+    )
+    file_writer = writer if writer is not None else LocalFileSystem()
 
     async def run_write(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
         context: ToolExecutionContext,
     ) -> str:
-        del cancellation_token
+        if cancellation_token.is_cancelled:
+            raise asyncio.CancelledError
+
         try:
             return await _write_file(
                 args,
                 resolver=resolver,
+                writer=file_writer,
+                cancellation_token=cancellation_token,
                 permissions=permissions,
                 approval_callback=approval_callback,
                 context=context,
@@ -86,7 +98,9 @@ def write_tool(
 async def _write_file(
     args: _ToolArgs,
     *,
-    resolver: ToolPathResolver,
+    resolver: ToolPathResolver | RelativeToolPathResolver,
+    writer: FileWriter,
+    cancellation_token: CancellationToken,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     context: ToolExecutionContext,
@@ -102,10 +116,25 @@ async def _write_file(
     except UnicodeEncodeError:
         return "content is not valid UTF-8"
 
-    resolved_path = resolver.resolve(args.path)
+    resolved_path = await asyncio.to_thread(resolver.resolve, args.path)
+    parent_info: FileInfo | None = None
+    target_info: FileInfo | None = None
+    invalid_parent = False
+    try:
+        parent_info = await asyncio.to_thread(writer.stat, str(resolved_path.parent))
+        if parent_info is None or parent_info.is_directory:
+            target_info = await asyncio.to_thread(writer.stat, str(resolved_path))
+    except NotADirectoryError:
+        # Match missing-path classification until permissions allow a diagnostic.
+        invalid_parent = True
+    except OSError:
+        return _GENERIC_WRITE_ERROR
+
     permission_error = await _check_write_permissions(
         resolved_path,
         resolver=resolver,
+        parent_info=parent_info,
+        target_info=target_info,
         permissions=permissions,
         approval_callback=approval_callback,
         context=context,
@@ -113,43 +142,43 @@ async def _write_file(
     if permission_error is not None:
         return permission_error
 
-    if resolved_path.is_dir():
+    if target_info is not None and target_info.is_directory:
         return f"path is a directory: `{resolved_path}`"
+    if invalid_parent or (parent_info is not None and not parent_info.is_directory):
+        return f"parent path is not a directory: `{resolved_path.parent}`"
+    if cancellation_token.is_cancelled:
+        raise asyncio.CancelledError
 
     try:
-        resolved_path.parent.mkdir(parents=True, exist_ok=True)
-    except FileExistsError:
+        await _write_content(writer, str(resolved_path), encoded_content)
+    except (FileExistsError, NotADirectoryError):
         return f"parent path is not a directory: `{resolved_path.parent}`"
+    except IsADirectoryError:
+        return f"path is a directory: `{resolved_path}`"
     except PermissionError:
         return f"permission denied: `{resolved_path}`"
     except OSError:
         return f"failed to write file: `{resolved_path}`"
 
-    if resolved_path.exists():
-        write_result = _replace_text_atomically(
-            target=resolved_path,
-            content=args.content,
-        )
-    else:
-        write_result = _write_new_file(target=resolved_path, content=args.content)
-
-    if write_result is not None:
-        return write_result
+    if cancellation_token.is_cancelled:
+        raise asyncio.CancelledError
 
     return f"Wrote {len(encoded_content)} bytes to {resolved_path}."
 
 
 async def _check_write_permissions(
-    path: Path,
+    path: PurePath,
     *,
-    resolver: ToolPathResolver,
+    resolver: ToolPathResolver | RelativeToolPathResolver,
+    parent_info: FileInfo | None,
+    target_info: FileInfo | None,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     context: ToolExecutionContext,
 ) -> str | None:
     """Return a model-facing permission result before any write side effect."""
     requests: list[ToolPermissionRequest] = []
-    if not path.parent.exists():
+    if parent_info is None:
         requests.append(
             ToolPermissionRequest(
                 tool_name=_TOOL_NAME,
@@ -160,7 +189,9 @@ async def _check_write_permissions(
         )
 
     operation = (
-        ToolOperation.OVERWRITE_FILE if path.exists() else ToolOperation.CREATE_FILE
+        ToolOperation.OVERWRITE_FILE
+        if target_info is not None
+        else ToolOperation.CREATE_FILE
     )
     requests.append(
         ToolPermissionRequest(
@@ -180,49 +211,27 @@ async def _check_write_permissions(
         )
         if permission_error is not None:
             return permission_error
+
     return None
 
 
-def _write_new_file(*, target: Path, content: str) -> str | None:
-    """Write a new text file and return a model-facing error if it fails."""
-    try:
-        target.write_text(content, encoding="utf-8", newline="")
-    except PermissionError:
-        return f"permission denied: `{target}`"
-    except OSError:
-        return f"failed to write file: `{target}`"
-    return None
+async def _write_content(writer: FileWriter, path: str, content: bytes) -> None:
+    """Wait for a started write to settle even when the handler is cancelled."""
+    task = asyncio.create_task(asyncio.to_thread(writer.write, path, content))
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            # Retrieve the failure below, after respecting any earlier cancellation.
+            break
 
+    if cancelled:
+        # Consume any worker error before propagating cancellation to the caller.
+        if not task.cancelled():
+            task.exception()
+        raise asyncio.CancelledError
 
-def _replace_text_atomically(*, target: Path, content: str) -> str | None:
-    """Replace an existing file and return a model-facing error if it fails."""
-    temp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            delete=False,
-            dir=target.parent,
-            encoding="utf-8",
-            newline="",
-            prefix=f".{target.name}.",
-            suffix=".tmp",
-        ) as temp_file:
-            temp_path = Path(temp_file.name)
-            temp_file.write(content)
-
-        temp_path.replace(target)
-    except PermissionError:
-        if temp_path is not None:
-            _unlink_temp_file(temp_path)
-        return f"permission denied: `{target}`"
-    except OSError:
-        if temp_path is not None:
-            _unlink_temp_file(temp_path)
-        return f"failed to write file: `{target}`"
-    return None
-
-
-def _unlink_temp_file(path: Path) -> None:
-    """Best-effort cleanup for failed atomic replacements."""
-    with contextlib.suppress(OSError):
-        path.unlink()
+    task.result()

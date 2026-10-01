@@ -36,8 +36,8 @@ A custom `SkillLoader` produces and returns these typed primitives:
    `license`, `compatibility`, `metadata`, `tools`, and `disallowed_tools`
    fields. `SkillLoader.discover()` returns a sequence of these.
 2. `SkillResource` is one bundled file that belongs to an activated skill,
-   carrying a `path` relative to the skill directory. `SkillsShim` renders an
-   absolute path for each resource when it activates the skill.
+   carrying a `path` relative to the skill directory. `SkillsShim` also renders
+   a `read_path` in the reader's namespace when it activates the skill.
 3. `LoadedSkill` is the activated payload returned by `SkillLoader.load(name)`:
    the `manifest`, the rendered `instructions` body, and the bundled
    `resources`.
@@ -72,7 +72,8 @@ That shim does five core things:
 2. appends one skills guidance block to the system instruction before the first
    model turn, if any skills were discovered,
 3. contributes one cache-stable `activate_skill(name: str)` tool,
-4. loads the full skill content only when the model activates a skill,
+4. adds the full skill instructions to the model context when the model
+   activates a skill,
 5. deduplicates repeated activation through `RunState.shim_state`.
 
 ## Before Activation
@@ -82,7 +83,7 @@ Before the model activates any skill, it sees:
 1. the skills system prompt appended by `SkillsShim`,
 2. the available skill names,
 3. the skill descriptions,
-4. the absolute `SKILL.md` paths,
+4. the `SKILL.md` paths (absolute for local files, relative for injected readers),
 5. the `activate_skill` tool.
 
 If no skills are discovered, the shim does not modify the system instruction and
@@ -94,9 +95,9 @@ When the model calls `activate_skill`, the shim returns one tool result that
 contains:
 
 1. the full `SKILL.md` body without frontmatter,
-2. the absolute `Skill directory: ...`,
+2. the `Skill directory: ...` in the reader's namespace,
 3. a `<skill_resources>` list where each resource includes its skill-relative
-   `path` and an `absolute_path` suitable for filesystem tools,
+   `path` and a `read_path` suitable for a read tool in the same namespace,
 4. one `<skill_content name="<skill-name>">` block that groups those pieces
    together, where the `name` attribute matches the dedup directive below.
 
@@ -166,13 +167,13 @@ The harness does not hard-code the filesystem as the only source of skills.
 `SkillsShim` depends on the `SkillLoader` interface. The built-in
 `FilesystemSkillLoader` is only the default implementation.
 
-That means applications may provide custom loaders for skills stored in:
+For a different storage backend, pass a `SkillReader` to
+`FilesystemSkillLoader`. AgentLane then retains discovery, its private
+frontmatter parser, resource listing, and activation. See
+[File I/O adapters](filesystem.md) for the contracts and composition.
 
-1. a database,
-2. a remote service,
-3. an application-specific in-memory source.
-
-Example:
+Use a custom `SkillLoader` when the application needs different discovery or
+loading behavior, not just different storage. For example:
 
 ```python
 shim = SkillsShim(loader=my_loader)
@@ -241,7 +242,8 @@ The accessor honors a custom shim `name`, so a shim configured with
 
 `FilesystemSkillLoader` is the default loader.
 
-It discovers skills from local directories rooted in `SKILL.md`.
+It discovers skill directories that contain `SKILL.md`, using local files by
+default. Pass `reader=` to supply file reading and directory listing.
 
 You can point it at explicit roots:
 
@@ -257,18 +259,36 @@ Or let it include the standard local roots:
 1. `./.agents/skills`
 2. `~/.agents/skills`
 
-Discovered `SKILL.md` files are normalized to absolute paths. Activated skill
-payloads expose resource file paths twice: `path` for the portable
-skill-relative display name, and `absolute_path` for direct use with filesystem
-tools.
+Local `SKILL.md` paths are normalized to absolute paths. With an injected
+reader, `roots` are relative POSIX paths in its storage and default to `(".",)`.
+`include_default_roots` is ignored for injected readers; no local home or working
+directory is inspected. Earlier roots win when skill names repeat.
+
+Manifest `root` and `skill_file` use `PurePath`: local discovery returns `Path`,
+and injected discovery returns `PurePosixPath`. Resource `path` values stay
+relative to the skill directory. Activation adds `read_path` by joining the
+manifest root and resource path.
+
+Discovery checks the immediate child directories of each root for `SKILL.md`.
+It reads and caches the parsed metadata and instructions. Activation uses this
+cached text and lists the current resource names without reading their content.
+Changes to `SKILL.md` appear after another discovery call. Resource listing is
+recursive, excludes the skill's own `SKILL.md`, and skips directory symlinks.
+Local skill directories can themselves be symlinks; their manifest paths resolve
+to the target directory.
+
+Calls run on worker threads; configure storage timeouts and thread safety in
+the reader. See
+[File I/O adapters](filesystem.md#permissions-and-execution).
 
 ### Filesystem Parsing Policy
 
-The filesystem loader is best-effort by design.
+The loader skips invalid skill files. Missing directory roots and roots that
+are files contribute no skills. Other directory listing errors propagate.
 
 It skips a skill entirely when:
 
-1. the file cannot be read,
+1. the file cannot be read or is not valid UTF-8,
 2. YAML frontmatter is missing or malformed,
 3. frontmatter is not a mapping,
 4. `name` is missing or empty,
@@ -370,37 +390,43 @@ already part of the persisted conversation history.
 Installed skills often reference their own bundled files by paths relative to
 the skill root, such as `references/policy.md` or `scripts/run.py`.
 
-`SkillsShim` does not wrap or mutate workspace tools to make those paths mean
-something different. Instead, activation renders the absolute resource path
-beside the relative display path:
+`SkillsShim` does not change tool path resolution. Activation renders a
+`read_path` beside each skill-relative display path. For an injected reader
+with the skill at `skills/refund-policy`, it emits:
 
 ```xml
 <skill_resources>
-  <file path="references/policy.md" absolute_path="/app/skills/refund-policy/references/policy.md" />
+  <file path="references/policy.md" read_path="skills/refund-policy/references/policy.md" />
 </skill_resources>
 ```
 
-Use the `absolute_path` value with ordinary filesystem tools:
+Use `read_path` with a read tool that shares the loader's reader and has
+`cwd="."`. For local skills, `read_path` is absolute and works with the default
+local read tool:
 
 ```python
 from agentlane.harness.skills import (
     SkillsShim,
     FilesystemSkillLoader,
 )
+from agentlane.harness.tools import HarnessToolsShim, read_tool
 
 loader = FilesystemSkillLoader(roots=(SKILLS_ROOT,), include_default_roots=False)
 
 descriptor = AgentDescriptor(
     name="Clinical Review",
     model=model,
-    shims=(SkillsShim(loader=loader),),
+    shims=(
+        SkillsShim(loader=loader),
+        HarnessToolsShim((read_tool(),)),
+    ),
 )
 ```
 
-This keeps the tools' existing semantics intact: absolute paths are opened as
-provided, and relative paths still resolve against each tool's configured
-working directory. Host permission policies and approval callbacks still decide
-whether a resource path can actually be read or executed.
+Use the rendered `read_path` attribute for both local and injected storage.
+Host permission policies and approval callbacks decide whether the read tool
+can open a resource. An injected reader does not make local shell or patch
+tools operate on its storage.
 
 ## Customization
 

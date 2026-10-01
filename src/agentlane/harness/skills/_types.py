@@ -1,7 +1,7 @@
 """Typed skill primitives for the harness skills package."""
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import PurePath
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,11 +14,11 @@ class SkillManifest:
     description: str
     """Short description of what the skill does and when to use it."""
 
-    skill_file: Path
-    """Absolute path to the root `SKILL.md` file."""
+    skill_file: PurePath
+    """Local absolute or reader-relative path to the `SKILL.md` file."""
 
-    root: Path
-    """Absolute path to the skill root directory."""
+    root: PurePath
+    """Local absolute or reader-relative path to the skill directory."""
 
     license: str | None = None
     """Optional license string from the frontmatter."""

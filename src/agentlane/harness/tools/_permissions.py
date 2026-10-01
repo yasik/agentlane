@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Protocol
 
 from agentlane.models import ToolExecutionContext
@@ -48,7 +48,7 @@ def _empty_metadata() -> dict[str, object]:
 
 @dataclass(frozen=True, slots=True)
 class ToolPermissionRequest:
-    """Context for one permission check before a local tool operation.
+    """Context for one permission check before a tool operation.
 
     First-party tools build this after argument validation and path resolution,
     but before file opens, filesystem writes, process startup, or other side
@@ -57,16 +57,27 @@ class ToolPermissionRequest:
     """
 
     tool_name: str
+    """Tool that requests permission."""
     operation: ToolOperation
-    cwd: Path
-    path: Path | None = None
+    """Operation to authorize before execution."""
+    cwd: PurePath
+    """Local working directory or relative directory in injected storage."""
+    path: PurePath | None = None
+    """Local `Path` or storage-relative `PurePosixPath` for this operation."""
     command: str | None = None
+    """Shell command for an execution request."""
     skill_name: str | None = None
+    """Active skill associated with the request, if supplied."""
     reason: str | None = None
+    """Optional explanation for the requested operation."""
     run_id: str | None = None
+    """Run identifier supplied by the tool execution context."""
     agent_name: str | None = None
+    """Agent name supplied by the tool execution context."""
     tool_call_id: str | None = None
+    """Model tool-call identifier used to correlate decisions."""
     metadata: Mapping[str, object] = field(default_factory=_empty_metadata)
+    """Additional context for application permission policies."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -605,11 +616,17 @@ def _permission_subject(request: ToolPermissionRequest) -> str | None:
     return None
 
 
-def _is_path_inside_root(path: Path, *, root: Path) -> bool:
+def _is_path_inside_root(path: PurePath, *, root: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+
     return _real_path_for_request(path).is_relative_to(_real_path(root))
 
 
-def _is_path_inside_scope(path: Path, *, scope: Path) -> bool:
+def _is_path_inside_scope(path: PurePath, *, scope: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+
     real_path = _real_path_for_request(path)
     if scope.exists() and not scope.is_dir():
         return real_path == scope

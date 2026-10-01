@@ -1,7 +1,8 @@
 # Harness Tools
 
 `agentlane.harness.tools` provides first-party harness tool definitions for
-common local workspace actions. Each helper returns a `HarnessToolDefinition`,
+common workspace actions. Read and write tools also support application storage.
+Each helper returns a `HarnessToolDefinition`,
 which wraps an executable `agentlane.models.Tool` or runner-owned `ToolSpec`
 plus optional prompt metadata for `HarnessToolsShim`.
 
@@ -14,6 +15,8 @@ Core docs:
 2. [Tool permissions](./tools-permissions.md): permissive defaults, path
    policy, bundled permission policies, approval callbacks and brokers, and
    `bash` boundaries.
+3. [File I/O adapters](./filesystem.md): injected storage for native read/write
+   tools and skill loading.
 
 Tool reference:
 
@@ -79,11 +82,20 @@ shims = (
 For approval workflows, broader path scopes, operation grants, and `bash`
 behavior, see [Tool permissions](./tools-permissions.md).
 
+For application storage, use `HarnessToolsShim` with injected read and write
+tools as shown in [File I/O adapters](./filesystem.md#paths-and-composition).
+`WorkspaceToolsShim` configures local tools and does not accept storage adapters.
+
 ## Standard Set
 
 `base_harness_tools()` returns `read`, `find`, `grep`, `patch`, `write`,
 `write_plan`, `bash`, and `agent`. The public base-tools set currently does
 not include `ls`.
+
+Pass `reader=` or `writer=` to use application storage for `read` or `write`.
+These arguments do not change `find`, `grep`, `patch`, or `bash`; those tools
+still use local files. See [File I/O adapters](./filesystem.md) for composition
+and relative-path rules.
 
 Pass `include=` or `exclude=` when an application needs the standard set with
 only selected tools. Selectors use the model-visible tool names above, and

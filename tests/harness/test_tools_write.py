@@ -200,7 +200,7 @@ def test_write_tool_sanitizes_os_error_text(
         del kwargs
         raise OSError("Traceback (most recent call last): private details")
 
-    monkeypatch.setattr(Path, "write_text", raise_os_error)
+    monkeypatch.setattr(Path, "write_bytes", raise_os_error)
 
     output = run_tool(write_tool(cwd=tmp_path), path="notes.txt", content="content")
 

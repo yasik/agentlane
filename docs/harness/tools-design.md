@@ -89,7 +89,7 @@ include `ls`.
 
 `base_harness_tools()` returns the standard set. By default each local tool
 captures `Path.cwd()` at construction time and remains permissive. Filesystem
-tools resolve relative paths through `ToolPathResolver`; see
+tools with local storage resolve relative paths through `ToolPathResolver`; see
 [Tool permissions](./tools-permissions.md) for path boundaries and approval
 behavior. Pass `cwd=`, `permissions=`, and optionally `approval_callback=`
 when an agent should operate inside a specific workspace boundary:
@@ -100,6 +100,13 @@ workspace_tools = base_harness_tools(
     permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
 )
 ```
+
+Pass `reader=` to `read_tool()` or `writer=` to `write_tool()` to use application
+storage. `base_harness_tools()` also accepts these arguments and passes each to
+its corresponding tool. Injected tools use relative POSIX paths, with `cwd="."`
+by default. The other file and shell tools continue to use local storage. See
+[File I/O adapters](./filesystem.md) for interfaces, path examples, and
+permission rules.
 
 Use `include=` or `exclude=` to derive a smaller set without manually
 constructing each tool. Selectors are the model-visible names from the standard

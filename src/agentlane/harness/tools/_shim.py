@@ -5,6 +5,7 @@ from itertools import chain
 from pathlib import Path
 from typing import Any, Literal
 
+from agentlane.harness.filesystem import FileReader, FileWriter
 from agentlane.models.run import RunContext
 
 from .._run import RunState, ShimState
@@ -147,6 +148,8 @@ class HarnessToolsShim(Shim):
 def base_harness_tools(
     *,
     cwd: str | Path | None = None,
+    reader: FileReader | None = None,
+    writer: FileWriter | None = None,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
     include: Iterable[str] | None = None,
@@ -157,6 +160,9 @@ def base_harness_tools(
 
     Args:
         cwd: Optional working directory passed to each path-aware tool factory.
+        reader: Optional storage reader for the read tool only.
+        writer: Optional storage writer for the write tool only. Find, grep, patch,
+            and bash continue to use the local filesystem.
         permissions: Optional permission policy threaded into every tool.
         approval_callback: Optional approval callback threaded into every tool.
         include: Optional allowlist of tool names to build, in standard order.
@@ -180,6 +186,7 @@ def base_harness_tools(
     factories: dict[str, _BaseToolFactory] = {
         "read": lambda: read_tool(
             cwd=cwd,
+            reader=reader,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
@@ -200,6 +207,7 @@ def base_harness_tools(
         ),
         "write": lambda: write_tool(
             cwd=cwd,
+            writer=writer,
             permissions=permissions,
             approval_callback=approval_callback,
         ),

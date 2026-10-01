@@ -1,16 +1,19 @@
 """Read tool implementation for first-party harness base tools."""
 
-from collections.abc import Iterable
+import asyncio
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from pathlib import Path
+from io import BytesIO
+from pathlib import Path, PurePath
 
 from pydantic import BaseModel, Field
 
+from agentlane.harness.filesystem import BinaryReader, FileReader, LocalFileSystem
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._output import TEXT_MAX_BYTES, TEXT_MAX_LINES
-from ._paths import ToolPathResolver
+from ._paths import RelativeToolPathResolver, ToolPathResolver
 from ._permissions import (
     ToolApprovalCallback,
     ToolOperation,
@@ -23,7 +26,7 @@ from ._types import HarnessToolDefinition
 _BINARY_SAMPLE_BYTES = 4096
 _TOOL_NAME = "read"
 _TOOL_DESCRIPTION = (
-    "Reads raw local text file contents. Supports offset and limit for large "
+    "Reads raw text file contents. Supports offset and limit for large "
     f"files. Output is truncated to {TEXT_MAX_LINES} lines or "
     f"{TEXT_MAX_BYTES} bytes, whichever is hit first."
 )
@@ -54,13 +57,19 @@ class _ReadContent:
     """Raw file slice and any continuation note."""
 
     lines: tuple[str, ...]
+    """Decoded lines selected for the tool output."""
+
     continuation_message: str | None = None
+    """Instructions to retrieve content omitted by an output limit."""
+
     error: str | None = None
+    """Sanitized failure message when no file slice can be returned."""
 
 
 def read_tool(
     *,
     cwd: str | Path | None = None,
+    reader: FileReader | None = None,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
 ) -> HarnessToolDefinition:
@@ -69,25 +78,35 @@ def read_tool(
     Args:
         cwd: Optional working directory used to resolve relative paths. When
             omitted, the current working directory is captured at construction
-            time.
+            time. Injected readers use a relative storage directory instead.
+        reader: Optional binary file reader. Defaults to the local filesystem.
         permissions: Optional policy for read-file permission decisions.
         approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable read tool with prompt metadata.
     """
-    resolver = ToolPathResolver.for_optional(cwd)
+    resolver = (
+        ToolPathResolver.for_optional(cwd)
+        if reader is None
+        else RelativeToolPathResolver.for_optional(cwd)
+    )
+    file_reader = reader if reader is not None else LocalFileSystem()
 
     async def run_read(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
         context: ToolExecutionContext,
     ) -> str:
-        del cancellation_token
+        if cancellation_token.is_cancelled:
+            raise asyncio.CancelledError
+
         try:
             return await _read_file(
                 args,
                 resolver=resolver,
+                reader=file_reader,
+                cancellation_token=cancellation_token,
                 permissions=permissions,
                 approval_callback=approval_callback,
                 context=context,
@@ -110,7 +129,9 @@ def read_tool(
 async def _read_file(
     args: _ToolArgs,
     *,
-    resolver: ToolPathResolver,
+    resolver: ToolPathResolver | RelativeToolPathResolver,
+    reader: FileReader,
+    cancellation_token: CancellationToken,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     context: ToolExecutionContext,
@@ -123,7 +144,7 @@ async def _read_file(
     if args.path.strip() == "":
         return "path must not be empty"
 
-    resolved_path = resolver.resolve(args.path)
+    resolved_path = await asyncio.to_thread(resolver.resolve, args.path)
     permission_error = await evaluate_tool_permission(
         ToolPermissionRequest(
             tool_name=_TOOL_NAME,
@@ -138,14 +159,19 @@ async def _read_file(
     if permission_error is not None:
         return permission_error
 
-    if resolved_path.is_dir():
-        return f"path is a directory: `{resolved_path}`"
+    if cancellation_token.is_cancelled:
+        raise asyncio.CancelledError
 
-    content = _read_text_slice(
+    content = await asyncio.to_thread(
+        _read_text_slice,
         resolved_path,
+        reader=reader,
         offset=args.offset or 1,
         limit=args.limit,
     )
+    if cancellation_token.is_cancelled:
+        raise asyncio.CancelledError
+
     if content.error is not None:
         return content.error
 
@@ -153,14 +179,31 @@ async def _read_file(
 
 
 def _read_text_slice(
-    path: Path,
+    path: PurePath,
     *,
+    reader: FileReader,
     offset: int,
     limit: int | None,
 ) -> _ReadContent:
-    """Read a text slice from disk without loading the full file."""
+    """Read and close a bounded text slice in the worker that opens the stream."""
     try:
-        binary_file = path.open("rb")
+        with reader.open_read(str(path)) as binary_file:
+            sample = bytearray()
+            while len(sample) < _BINARY_SAMPLE_BYTES:
+                chunk = binary_file.read(_BINARY_SAMPLE_BYTES - len(sample))
+                if not chunk:
+                    break
+                sample.extend(chunk)
+
+            if b"\x00" in sample:
+                return _read_error(
+                    f"file appears to be binary and cannot be read as text: `{path}`"
+                )
+            return _collect_text_slice(
+                _replay_lines(bytes(sample), binary_file), offset=offset, limit=limit
+            )
+    except IsADirectoryError:
+        return _read_error(f"path is a directory: `{path}`")
     except FileNotFoundError:
         return _read_error(f"file not found: `{path}`")
     except PermissionError:
@@ -168,14 +211,17 @@ def _read_text_slice(
     except OSError:
         return _read_error(f"failed to read file: `{path}`")
 
-    with binary_file:
-        sample = binary_file.read(_BINARY_SAMPLE_BYTES)
-        if b"\x00" in sample:
-            return _read_error(
-                f"file appears to be binary and cannot be read as text: `{path}`"
-            )
-        binary_file.seek(0)
-        return _collect_text_slice(binary_file, offset=offset, limit=limit)
+
+def _replay_lines(sample: bytes, stream: BinaryReader) -> Iterator[bytes]:
+    """Replay sampled bytes and complete the last line without seeking the stream."""
+    buffered = BytesIO(sample)
+    while line := buffered.readline():
+        if not line.endswith(b"\n"):
+            line += stream.readline()
+        yield line
+
+    while line := stream.readline():
+        yield line
 
 
 def _read_error(message: str) -> _ReadContent:
@@ -287,7 +333,7 @@ def _oversized_line_message(*, line_number: int, line_bytes: int) -> str:
     """Build the model-facing note for a single line beyond the byte limit."""
     return (
         f"[Line {line_number} is {line_bytes} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
+        f"{TEXT_MAX_BYTES} byte limit. This tool cannot return part of a line.]"
     )
 
 

@@ -8,9 +8,16 @@ Parameters:
 1. `path: str`
 2. `content: str`
 
+At construction, pass `writer=` to write to application storage. The native
+schema and result format stay the same. The writer receives relative POSIX
+paths and UTF-8 bytes; `cwd` defaults to its root (`.`). Omit `writer` for local
+files. See [File I/O adapters](filesystem.md) for metadata, replacement, and
+cancellation requirements.
+
 ## Permissions
 
-`write` resolves `path` through `ToolPathResolver` and may issue two checks:
+For local files, `write` resolves `path` through `ToolPathResolver`. An injected
+writer uses relative storage paths. Both modes may issue two checks:
 `ToolOperation.CREATE_DIRECTORY` for a missing parent directory, then
 `ToolOperation.CREATE_FILE` or `ToolOperation.OVERWRITE_FILE` for the target.
 A denied request returns:
@@ -36,8 +43,9 @@ Example tool result:
 Wrote 128 bytes to /workspace/notes.txt.
 ```
 
-The tool creates parent directories automatically. Existing files are replaced
-through a sibling temporary file where practical.
+The tool asks the writer to create parent directories automatically. The local
+writer replaces existing files through a sibling temporary file. Injected
+writers supply their own replacement guarantees.
 
 Use `write` for new files or complete rewrites. It does not provide append mode
 or precise patch operations.

@@ -2,15 +2,23 @@
 
 ## Path Policy
 
-Filesystem tools use `ToolPathResolver`. Relative paths resolve against the
+Local filesystem tools use `ToolPathResolver`. Relative paths resolve against the
 `cwd` captured when the tool is constructed. Absolute path strings are accepted
 as tool inputs, but workspace and path-scope policies still enforce boundaries
 on the resolved target. Paths are normalized with `Path.resolve(strict=False)`.
 
+Injected readers and writers use relative POSIX paths and place `PurePosixPath`
+values in permission requests. `WorkspaceToolPermissionPolicy` and
+`PathScopeToolPermissionPolicy` deny these non-local paths. Use a custom policy
+for the adapter's storage namespace; operation grants and approval callbacks
+remain available. See [File I/O adapters](filesystem.md).
+
 AgentLane is a framework, so first-party helpers stay permissive unless an
 application passes an explicit policy. With no `permissions=` argument,
 `read`, `find`, `grep`, `patch`, `write`, and `bash` keep their trusted local
-behavior. A specific `cwd` only changes path resolution; it is not a sandbox:
+behavior. Injected read and write tools also allow every operation by default,
+subject to the adapter's own access checks. A specific `cwd` only changes path
+resolution; it is not a sandbox:
 
 ```python
 tools = base_harness_tools(cwd=WORKSPACE)

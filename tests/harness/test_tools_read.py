@@ -197,7 +197,7 @@ def test_read_tool_reports_oversized_requested_line(tmp_path: Path) -> None:
 
     assert output == (
         f"[Line 1 is {TEXT_MAX_BYTES + 1} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
+        f"{TEXT_MAX_BYTES} byte limit. This tool cannot return part of a line.]"
     )
 
 
@@ -265,6 +265,8 @@ def test_read_tool_sanitizes_os_error_text(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    (tmp_path / "notes.txt").write_text("content", encoding="utf-8")
+
     def raise_os_error(
         self: Path,
         *args: object,

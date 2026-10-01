@@ -1,7 +1,7 @@
 """`SKILL.md` frontmatter parsing for harness skills."""
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import cast
 
 from .._frontmatter import (
@@ -40,9 +40,18 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
 
+    return parse_skill_text(text, path.resolve())
+
+
+def parse_skill_text(text: str, path: PurePath) -> ParsedSkillFile | None:
+    """Parse skill text with a location supplied by the reader.
+
+    Keep filesystem and injected-reader parsing identical without exposing a
+    second public parsing contract. This function does not access storage.
+    """
     if _exceeds_file_size_limit(text):
         return None
 
@@ -51,8 +60,8 @@ def parse_skill_file(path: Path) -> ParsedSkillFile | None:
         return None
 
     frontmatter, body = loaded
-    root = path.parent.resolve()
-    skill_file = path.resolve()
+    root = path.parent
+    skill_file = path
 
     name = coerce_required_string(frontmatter, "name")
     if not name:

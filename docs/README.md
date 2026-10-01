@@ -87,7 +87,7 @@ mental model:
 7. If you want first-party local workspace tools, read
    [Harness Tools](./harness/tools.md) after
    [Harness Shims](./harness/shims.md).
-8. If you want skill activation from local skill files, read
+8. If you want skill activation from local or application storage, read
    [Harness Skills](./harness/skills.md) after
    [Harness Shims](./harness/shims.md).
 9. If you want to define agents and sub-agents from markdown files, read
@@ -143,6 +143,7 @@ mental model:
 10. [Runner](./harness/runner.md)
 11. [Run Event Serialization](./harness/event-serialization.md)
 12. [Distributed Agents](./harness/distributed-agents.md)
+13. [File I/O Adapters](./harness/filesystem.md)
 
 ### Process Bridge
 
