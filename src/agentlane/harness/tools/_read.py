@@ -333,7 +333,7 @@ def _oversized_line_message(*, line_number: int, line_bytes: int) -> str:
     """Build the model-facing note for a single line beyond the byte limit."""
     return (
         f"[Line {line_number} is {line_bytes} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. This tool cannot return part of a line.]"
+        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
     )
 
 

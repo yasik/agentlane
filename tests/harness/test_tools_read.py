@@ -197,7 +197,7 @@ def test_read_tool_reports_oversized_requested_line(tmp_path: Path) -> None:
 
     assert output == (
         f"[Line 1 is {TEXT_MAX_BYTES + 1} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. This tool cannot return part of a line.]"
+        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
     )
 
 

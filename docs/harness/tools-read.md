@@ -58,7 +58,7 @@ When the byte cap is reached, the result reports:
 If the first requested line exceeds the byte cap by itself, the result reports:
 
 ```text
-[Line 1 is 51201 bytes, exceeds 51200 byte limit. This tool cannot return part of a line.]
+[Line 1 is 51201 bytes, exceeds 51200 byte limit. Use bash to inspect it.]
 ```
 
 The tool returns clear text errors for directories, missing files, likely binary

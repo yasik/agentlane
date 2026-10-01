@@ -345,7 +345,7 @@ async def test_write_token_cancelled_during_approval_does_not_write(
     assert storage.writes == []
 
 
-def test_read_injected_oversized_first_line_has_storage_neutral_message(
+def test_read_injected_oversized_first_line_keeps_bash_guidance(
     storage: MemoryFileSystem,
 ) -> None:
     storage.files["wide.txt"] = b"a" * (TEXT_MAX_BYTES + 1)
@@ -354,6 +354,5 @@ def test_read_injected_oversized_first_line_has_storage_neutral_message(
 
     assert result == (
         f"[Line 1 is {TEXT_MAX_BYTES + 1} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. This tool cannot return part of a line.]"
+        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
     )
-    assert "bash" not in result.lower()
