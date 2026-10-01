@@ -3,7 +3,7 @@ import re
 from collections.abc import Sequence
 
 import agentlane.harness.context as harness_context
-import agentlane.harness.memory as harness_memory
+import agentlane.harness.shims.memory as harness_memory
 from agentlane.harness import (
     Agent,
     AgentDescriptor,
