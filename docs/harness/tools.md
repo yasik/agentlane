@@ -86,6 +86,10 @@ For application storage, use `HarnessToolsShim` with injected read and write
 tools as shown in [File I/O adapters](./filesystem.md#paths-and-composition).
 `WorkspaceToolsShim` configures local tools and does not accept storage adapters.
 
+Use [MountedReader](./filesystem.md#mixed-local-and-remote-readers) when one
+read tool must access both local and remote files. The skill loader can share
+that reader so activation returns paths that the read tool can use.
+
 ## Standard Set
 
 `base_harness_tools()` returns `read`, `find`, `grep`, `patch`, `write`,

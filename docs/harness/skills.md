@@ -264,6 +264,11 @@ reader, `roots` are relative POSIX paths in its storage and default to `(".",)`.
 `include_default_roots` is ignored for injected readers; no local home or working
 directory is inspected. Earlier roots win when skill names repeat.
 
+To combine local and remote roots, share a `MountedReader` between the loader
+and one read tool. Prefix each loader root with its mount name. See
+[Mixed local and remote readers](filesystem.md#mixed-local-and-remote-readers)
+for configuration and resource paths.
+
 Manifest `root` and `skill_file` use `PurePath`: local discovery returns `Path`,
 and injected discovery returns `PurePosixPath`. Resource `path` values stay
 relative to the skill directory. Activation adds `read_path` by joining the

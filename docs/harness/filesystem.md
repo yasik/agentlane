@@ -97,6 +97,69 @@ root remains a working directory, not a security boundary.
 The local reader accepts regular files and rejects special files such as named
 pipes. Local directory listings omit special files and identify symbolic links.
 
+### Mixed Local and Remote Readers
+
+Use `MountedReader` to combine local and remote storage in one reader. Share
+it between `FilesystemSkillLoader` and one `read` tool:
+
+```python
+from agentlane.harness.filesystem import LocalFileSystem, MountedReader
+from agentlane.harness.skills import FilesystemSkillLoader, SkillsShim
+from agentlane.harness.tools import HarnessToolsShim, read_tool
+
+storage = MountedReader(
+    {
+        "workspace": LocalFileSystem(root="/app"),
+        "tenant": remote_reader,
+    }
+)
+loader = FilesystemSkillLoader(
+    reader=storage,
+    roots=("tenant/skills", "workspace/.agents/skills"),
+)
+shims = (
+    SkillsShim(loader=loader),
+    HarnessToolsShim((read_tool(reader=storage),)),
+)
+```
+
+Here `remote_reader` is an application adapter that implements `SkillReader`.
+Each mounted reader must support file reads and directory listings. The mount
+mapping is copied at construction. Mount names must be single, canonical
+relative POSIX path components, such as `workspace` or `tenant`.
+
+The first component of a normalized path selects the reader. The selected
+reader receives the remaining path:
+
+| Tool path | Reader | Path passed to reader |
+| --- | --- | --- |
+| `tenant/skills/refund/SKILL.md` | `remote_reader` | `skills/refund/SKILL.md` |
+| `workspace/.agents/skills/review/SKILL.md` | `LocalFileSystem` | `.agents/skills/review/SKILL.md` |
+| `workspace/reports/result.txt` | `LocalFileSystem` | `reports/result.txt` |
+
+Earlier loader roots win when skill names repeat. With this example, a remote
+skill takes precedence over a local skill with the same name. Discovery and
+activation use the same selected skill. A resource's `path` remains relative
+to its skill directory; its `read_path` includes the mount, such as
+`tenant/skills/refund/references/policy.md`.
+
+Listing `.` returns mount names as directories in sorted order. Listing a
+mount root, such as `tenant`, calls that reader's `list_directory(".")`.
+Reading `.` or a mount root raises `IsADirectoryError`. Unknown mounts raise
+`FileNotFoundError`. Errors from a selected reader propagate; no other reader
+is tried.
+
+Tool permissions receive the full logical path, including the mount name.
+Path normalization can move between mounts: `workspace/../tenant/file.txt`
+resolves to `tenant/file.txt`. Tool `cwd` is not an access boundary. Each child
+reader must enforce physical access restrictions, including local symlink
+restrictions. `LocalFileSystem(root=...)` alone does not enforce these limits.
+
+`MountedReader` supports reads and directory listings only. Local tools such
+as `find`, `grep`, `patch`, and `bash` keep their local path rules. A mounted
+path such as `workspace/report.txt` refers to `/app/report.txt` in this example;
+pass a local path to those other tools.
+
 ## Permissions and Execution
 
 Injected tool requests carry `PurePosixPath` values in `cwd` and `path`.
