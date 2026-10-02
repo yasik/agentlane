@@ -15,7 +15,7 @@ Core docs:
 2. [Tool permissions](./tools-permissions.md): permissive defaults, path
    policy, bundled permission policies, approval callbacks and brokers, and
    `bash` boundaries.
-3. [File I/O adapters](./filesystem.md): injected storage for native file
+3. [File I/O interfaces](./filesystem.md): injected storage for native file
    tools and skill loading.
 
 Tool reference:
@@ -83,7 +83,7 @@ For approval workflows, broader path scopes, operation grants, and `bash`
 behavior, see [Tool permissions](./tools-permissions.md).
 
 For application storage, use `HarnessToolsShim` with injected storage
-tools as shown in [File I/O adapters](./filesystem.md#paths-and-workspace).
+tools as shown in [File I/O interfaces](./filesystem.md#paths-and-workspace).
 `WorkspaceToolsShim` configures local tools and does not accept storage adapters.
 
 Use [MountedReader](./filesystem.md#mixed-local-and-remote-filesystems) when one

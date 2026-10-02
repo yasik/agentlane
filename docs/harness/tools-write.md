@@ -10,9 +10,9 @@ Parameters:
 
 At construction, pass `writer=` to write to application storage. The native
 schema and result format stay the same. The writer receives relative POSIX
-paths and opens a byte writer; `cwd` defaults to its root (`.`). Omit `writer` for local
-files. See [File I/O adapters](filesystem.md) for metadata, replacement, and
-cancellation requirements.
+paths and opens a byte writer; `cwd` defaults to its root (`.`). Omit `writer`
+for local files. See [File I/O interfaces](filesystem.md) for metadata,
+replacement, and cancellation requirements.
 
 ## Permissions
 

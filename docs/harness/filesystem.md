@@ -10,7 +10,7 @@ remote services, or other storage. The framework does not include cloud clients.
 
 | Protocol | Method | Contract |
 | --- | --- | --- |
-| `Reader` | `read(size=-1) -> bytes` | Short reads are valid; empty bytes mean EOF |
+| `Reader` | `read(size=-1) -> bytes` | Short reads are valid; empty bytes mean end of stream |
 | `Writer` | `write(data: bytes) -> int` | Return the number of bytes accepted; short writes are valid |
 
 These protocols have no paths, metadata, seeking, line operations, or harness
@@ -21,7 +21,7 @@ Buffering and complete transfers are separate operations:
 
 - `buffered_reader(reader)` adds Python's standard buffering and `readline`.
   Closing this wrapper does not close the supplied reader.
-- `read_all(reader)` reads through EOF, including short reads.
+- `read_all(reader)` reads to the end of the stream, including short reads.
 - `write_all(writer, data)` handles short writes and rejects zero progress or
   invalid byte counts. Completion of this operation does not close the writer.
 
@@ -69,6 +69,8 @@ Unexpected listing failures return a tool error, not an empty result.
 
 ## Tool Construction
 
+Pass your storage implementation to each tool that needs it:
+
 ```python
 from agentlane.harness.tools import read_tool, write_tool, find_tool, patch_tool
 
@@ -81,11 +83,10 @@ tools = (
 )
 ```
 
-Tools know the required interfaces. They do not branch on provider types.
-Read formatting, write permissions, find matching and ordering, and patch
-matching retain their existing behavior. Find uses one traversal for local
-and supplied filesystems. Patch uses the existing dependency's edit algorithm;
-its public content operation lets supplied filesystems own the reads and writes.
+Tools depend on the required interfaces without checking provider types.
+Find uses one traversal for local and supplied filesystems. Patch uses the
+`llm-patch-tool` edit algorithm; its content operation applies edits while the
+supplied filesystem performs the reads and writes.
 
 `FilesystemSkillLoader(reader=storage, roots=("skills",))` uses the same reader
 and directory-listing contracts. Activation returns a `read_path` that includes
@@ -138,6 +139,9 @@ to their process filesystem. AgentLane does not copy remote files for search.
 `MountedReader` routes reads, listings, and metadata through named children.
 `MountedFileSystem` adds writes for children that implement `FileWriter`.
 Read-only children reject writes with `PermissionError`.
+
+To combine local files with your `remote_storage` adapter, assign each backend
+a mount name:
 
 ```python
 from agentlane.harness.filesystem import LocalFileSystem, MountedFileSystem
@@ -201,7 +205,8 @@ A previous writer adapter implemented `stat(path)` and `write(path, bytes)`.
 Implement `open_write(path)` as a context manager that yields a `Writer`, and
 keep `stat` for the write tool. Whole-file writing is now an operation over the
 stream. `LocalFileSystem.write` remains a convenience method; tools depend on
-the stream interface. Readers need only `read`, with buffering supplied above it.
+the stream interface. Readers need only `read`; `buffered_reader` supplies
+buffering and line reads.
 
 Injected patch calls through one tool instance serialize the complete read,
 edit, and write operation. This lock does not cover other tool instances or

@@ -113,9 +113,10 @@ limits, and paths that do not resolve to a directory.
 Pass `reader=storage` with read, listing, and metadata capabilities. Paths use
 relative POSIX syntax and `cwd` defaults to `.`. Local and supplied filesystems
 use the same traversal, ignore matching, and result limits. Results sort by
-`DirectoryEntry.modified_time`, newest first; missing timestamps count as zero. Ties sort
-alphabetically. Directory symlinks are not followed. Permission requests use
-`SEARCH_FILES` with logical paths. See [File I/O interfaces](./filesystem.md).
+`DirectoryEntry.modified_time`, newest first; missing timestamps count as zero.
+Ties sort alphabetically. Directory symlinks are not followed. Permission
+requests use `SEARCH_FILES` with logical paths. See
+[File I/O interfaces](./filesystem.md).
 
 Traversal skips missing, non-directory, and permission-denied entries. Other
 listing failures return `failed to find files`; they do not produce empty or

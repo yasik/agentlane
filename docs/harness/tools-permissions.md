@@ -11,7 +11,7 @@ Injected readers and writers use relative POSIX paths and place `PurePosixPath`
 values in permission requests. `WorkspaceToolPermissionPolicy` and
 `PathScopeToolPermissionPolicy` deny these non-local paths. Use a custom policy
 for the adapter's storage namespace; operation grants and approval callbacks
-remain available. See [File I/O adapters](filesystem.md).
+remain available. See [File I/O interfaces](filesystem.md).
 
 AgentLane is a framework, so first-party helpers stay permissive unless an
 application passes an explicit policy. With no `permissions=` argument,
