@@ -1,11 +1,20 @@
-"""Read files from named storage backends in one logical namespace."""
+"""Route file access through named backends in one logical namespace."""
 
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from pathlib import PurePosixPath
 
+from agentlane.io import Writer, write_all
+
 from ._paths import normalize_relative_path
-from ._types import BinaryReader, DirectoryEntry, SkillReader
+from ._types import (
+    BinaryReader,
+    DirectoryEntry,
+    FileInfo,
+    FileStat,
+    FileWriter,
+    SkillReader,
+)
 
 
 class MountedReader:
@@ -27,6 +36,8 @@ class MountedReader:
 
     def __init__(self, mounts: Mapping[str, SkillReader]) -> None:
         self._mounts = dict(mounts)
+
+        # Require canonical keys so normalization cannot change which mount wins.
         for name in self._mounts:
             path = normalize_relative_path(name)
             if len(path.parts) != 1 or path.as_posix() != name:
@@ -67,6 +78,39 @@ class MountedReader:
         reader, child_path = self._resolve(normalized)
         return reader.list_directory(child_path)
 
+    def stat(self, path: str) -> FileInfo | None:
+        """Inspect a mounted path without consulting the host filesystem."""
+        normalized = normalize_relative_path(path)
+
+        # The router owns these directories; they need no physical host paths.
+        if normalized == PurePosixPath("."):
+            return FileInfo(is_directory=True)
+
+        try:
+            reader, child_path = self._resolve(normalized)
+        except FileNotFoundError:
+            return None
+
+        if child_path == ".":
+            return FileInfo(is_directory=True)
+
+        if isinstance(reader, FileStat):
+            return reader.stat(child_path)
+
+        # Read/list-only adapters can still provide existence and directory type.
+        # Use the child's namespace; host stat would inspect an unrelated path.
+        child = PurePosixPath(child_path)
+        try:
+            entries = reader.list_directory(child.parent.as_posix())
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+
+        for entry in entries:
+            if entry.name == child.name:
+                return FileInfo(is_directory=entry.is_directory)
+
+        return None
+
     def _resolve(self, path: PurePosixPath) -> tuple[SkillReader, str]:
         name = path.parts[0]
         reader = self._mounts.get(name)
@@ -75,3 +119,33 @@ class MountedReader:
 
         child_path = normalize_relative_path(path.relative_to(name))
         return reader, child_path.as_posix()
+
+
+class MountedFileSystem(MountedReader):
+    """Read, list, and write through named storage mounts.
+
+    Readers that implement `FileWriter` accept writes. Other mounts remain
+    read-only. Mount roots cannot be replaced, and unknown mounts are never
+    created. The child backend owns atomic replacement and concurrency control.
+    """
+
+    def write(self, path: str, content: bytes) -> None:
+        """Convenience operation over the selected mount's writer."""
+        with self.open_write(path) as stream:
+            write_all(stream, content)
+
+    def open_write(self, path: str) -> AbstractContextManager[Writer]:
+        """Open a writable mount; reject read-only mounts and mount roots."""
+        normalized = normalize_relative_path(path)
+        if normalized == PurePosixPath("."):
+            raise IsADirectoryError(path)
+
+        reader, child_path = self._resolve(normalized)
+        if child_path == ".":
+            raise IsADirectoryError(path)
+
+        # A read-only mount must fail here rather than write through another backend.
+        if not isinstance(reader, FileWriter):
+            raise PermissionError(path)
+
+        return reader.open_write(child_path)

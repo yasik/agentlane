@@ -23,13 +23,14 @@ harness directly.
 16. [process_bridge_stdio](./process_bridge_stdio/): no-model-key stdio bridge demo with a scripted Python backend and TypeScript client.
 17. [persistent_agent_quickstart](./persistent_agent_quickstart/): path-backed `DefaultAgent` that restores its address and conversation across separate process runs.
 18. [claude_agent_sdk_coworker](./claude_agent_sdk_coworker/): real OpenAI-to-Claude-to-OpenAI proof where a native AgentLane agent sends an addressed task to a Claude Agent SDK participant and completes the original run.
+19. [mounted_filesystem](./mounted_filesystem/): read, write, find, and patch mounted files; run grep and bash in a separate process workspace, without a model.
 
 ## Run
 
-All harness demos require `OPENAI_API_KEY` in the environment:
+Most harness demos require `OPENAI_API_KEY` in the environment:
 
-The `process_bridge_stdio` demo is the exception; it uses a scripted backend and
-does not call a model provider. The `claude_agent_sdk_coworker` demo also needs
+The `process_bridge_stdio` and `mounted_filesystem` demos do not call a model
+provider and need no API key. The `claude_agent_sdk_coworker` demo also needs
 `ANTHROPIC_API_KEY` and the `claude-agent-sdk` extra.
 
 ```bash

@@ -1,18 +1,19 @@
 """Non-seekable storage and permission fixtures for native file tools."""
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import PurePosixPath
 
 import pytest
 
-from agentlane.harness.filesystem import BinaryReader, FileInfo
+from agentlane.harness.filesystem import BinaryReader, DirectoryEntry, FileInfo
 from agentlane.harness.tools import (
     ToolPermissionDecision,
     ToolPermissionRequest,
 )
+from agentlane.io import Writer
 
 
 class NonSeekableReader:
@@ -22,10 +23,8 @@ class NonSeekableReader:
         self.stream = BytesIO(content)
 
     def read(self, size: int = -1) -> bytes:
+        # A short read must not be treated as EOF by a tool's buffering layer.
         return self.stream.read(min(size, 113) if size >= 0 else size)
-
-    def readline(self, size: int = -1) -> bytes:
-        return self.stream.readline(size)
 
 
 class MemoryFileSystem:
@@ -44,13 +43,16 @@ class MemoryFileSystem:
         self.write_released.set()
 
     @contextmanager
-    def open_read(self, path: str) -> Iterator[BinaryReader]:
+    def open_read(self, path: str) -> Generator[BinaryReader, None, None]:
         self.thread_ids.append(threading.get_ident())
         self.opened.append(path)
+
         if self.failure is not None:
             raise self.failure
+
         if path in self.directories:
             raise IsADirectoryError(path)
+
         if path not in self.files:
             raise FileNotFoundError(path)
 
@@ -63,17 +65,47 @@ class MemoryFileSystem:
 
     def stat(self, path: str) -> FileInfo | None:
         self.thread_ids.append(threading.get_ident())
+
         if path in self.directories:
             return FileInfo(is_directory=True)
+
         if path in self.files:
             return FileInfo(is_directory=False)
+
         return None
+
+    def list_directory(self, path: str) -> tuple[DirectoryEntry, ...]:
+        self.thread_ids.append(threading.get_ident())
+
+        if path in self.files:
+            raise NotADirectoryError(path)
+
+        if path not in self.directories:
+            raise FileNotFoundError(path)
+
+        entries = [
+            DirectoryEntry(PurePosixPath(name).name, name in self.directories)
+            for name in self.directories | self.files.keys()
+            if name != "." and str(PurePosixPath(name).parent) == path
+        ]
+        return tuple(reversed(entries))
+
+    @contextmanager
+    def open_write(self, path: str) -> Generator[Writer, None, None]:
+        with BytesIO() as stream:
+            yield stream
+
+            # Publish only after normal context exit, like an atomic backend.
+            self.write(path, stream.getvalue())
 
     def write(self, path: str, content: bytes) -> None:
         self.thread_ids.append(threading.get_ident())
+
+        # Pause at commit so cancellation tests control the write boundary.
         self.write_started.set()
         if not self.write_released.wait(timeout=5):
             raise TimeoutError("Test write was not released")
+
         if self.failure is not None:
             raise self.failure
 

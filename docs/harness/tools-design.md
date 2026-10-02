@@ -101,12 +101,13 @@ workspace_tools = base_harness_tools(
 )
 ```
 
-Pass `reader=` to `read_tool()` or `writer=` to `write_tool()` to use application
-storage. `base_harness_tools()` also accepts these arguments and passes each to
-its corresponding tool. Injected tools use relative POSIX paths, with `cwd="."`
-by default. The other file and shell tools continue to use local storage. See
-[File I/O adapters](./filesystem.md) for interfaces, path examples, and
-permission rules.
+Pass `reader=` to read and find, `writer=` to write, and both to patch.
+`base_harness_tools()` passes these capabilities to the selected file tools.
+It can infer writes from a reader that implements `WritableFileSystem`.
+Injected tools use relative POSIX paths with `cwd="."` by default. In
+`base_harness_tools()`, set `storage_cwd` for these tools and `cwd` for the
+process workspace used by grep and bash. Process tools do not use storage
+adapters. See [File I/O interfaces](./filesystem.md).
 
 Use `include=` or `exclude=` to derive a smaller set without manually
 constructing each tool. Selectors are the model-visible names from the standard

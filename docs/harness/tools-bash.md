@@ -80,3 +80,20 @@ non-interactive: it does not stream partial output to the model and does not
 accept follow-up stdin for a running command. The default local executor is
 not a process sandbox; hosts with strict data boundaries should provide an
 executor that controls execution and full-output log storage.
+
+## Process Workspace
+
+Bash operates on files visible to its executing process. Pass the workspace
+through `cwd=`. A host can provide `executor=` directly or `bash_executor=` in
+`base_harness_tools()` to run commands in a sandbox or another process
+environment. That executor owns directory validation and process isolation;
+the tool does not check the remote directory on the local machine. An explicit
+`cwd` passes to a custom executor without host symlink resolution or tilde
+expansion. The executor resolves relative paths. When `cwd` is omitted, the
+tool captures the host current directory at construction.
+
+Filesystem readers and logical mounts are independent of process mounts.
+Bash never obtains remote access through a reader or writer. The host must
+expose data to the process when commands need it. Grep runs in the harness
+process environment, so run both tool handlers there when they must share a
+sandbox workspace. See [File I/O interfaces](./filesystem.md).

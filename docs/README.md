@@ -82,7 +82,7 @@ Build agent loops and extend their behavior:
 - [Runner](./harness/runner.md)
 - [Run Event Serialization](./harness/event-serialization.md)
 - [Distributed Agents](./harness/distributed-agents.md)
-- [File I/O Adapters](./harness/filesystem.md)
+- [File I/O Interfaces](./harness/filesystem.md)
 
 ### Process bridge
 

@@ -1,7 +1,7 @@
 # Harness Tools
 
 `agentlane.harness.tools` provides first-party harness tool definitions for
-common workspace actions. Read and write tools also support application storage.
+common workspace actions. File tools also support application storage.
 Each helper returns a `HarnessToolDefinition`,
 which wraps an executable `agentlane.models.Tool` or runner-owned `ToolSpec`
 plus optional prompt metadata for `HarnessToolsShim`.
@@ -15,7 +15,7 @@ Core docs:
 2. [Tool permissions](./tools-permissions.md): permissive defaults, path
    policy, bundled permission policies, approval callbacks and brokers, and
    `bash` boundaries.
-3. [File I/O adapters](./filesystem.md): injected storage for native read/write
+3. [File I/O interfaces](./filesystem.md): injected storage for native file
    tools and skill loading.
 
 Tool reference:
@@ -82,13 +82,15 @@ shims = (
 For approval workflows, broader path scopes, operation grants, and `bash`
 behavior, see [Tool permissions](./tools-permissions.md).
 
-For application storage, use `HarnessToolsShim` with injected read and write
-tools as shown in [File I/O adapters](./filesystem.md#paths-and-composition).
+For application storage, use `HarnessToolsShim` with injected storage
+tools as shown in [File I/O interfaces](./filesystem.md#paths-and-workspace).
 `WorkspaceToolsShim` configures local tools and does not accept storage adapters.
 
-Use [MountedReader](./filesystem.md#mixed-local-and-remote-readers) when one
+Use [MountedReader](./filesystem.md#mixed-local-and-remote-filesystems) when one
 read tool must access both local and remote files. The skill loader can share
 that reader so activation returns paths that the read tool can use.
+Use `MountedFileSystem` to add writes to capable mounts and share paths across
+read, write, find, and patch.
 
 ## Standard Set
 
@@ -96,10 +98,13 @@ that reader so activation returns paths that the read tool can use.
 `write_plan`, `bash`, and `agent`. The public base-tools set currently does
 not include `ls`.
 
-Pass `reader=` or `writer=` to use application storage for `read` or `write`.
-These arguments do not change `find`, `grep`, `patch`, or `bash`; those tools
-still use local files. See [File I/O adapters](./filesystem.md) for composition
-and relative-path rules.
+Pass `reader=` for `read`, `find`, and `patch`. Pass `writer=` for `write` and
+`patch`, or supply a reader that also implements `WritableFileSystem`. Find
+requires read, listing, and metadata capabilities. Injected file tools use
+`storage_cwd`, which defaults to `.`. Grep uses `cwd` in the harness process
+filesystem. Bash uses `cwd` in its executor filesystem, which can be different
+with a custom executor. Logical mounts do not become process mounts.
+See [File I/O interfaces](./filesystem.md) for construction and path rules.
 
 Pass `include=` or `exclude=` when an application needs the standard set with
 only selected tools. Selectors use the model-visible tool names above, and

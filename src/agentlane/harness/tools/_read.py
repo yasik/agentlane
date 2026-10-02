@@ -3,12 +3,13 @@
 import asyncio
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from io import BytesIO
+from io import BufferedReader, BytesIO
 from pathlib import Path, PurePath
 
 from pydantic import BaseModel, Field
 
-from agentlane.harness.filesystem import BinaryReader, FileReader, LocalFileSystem
+from agentlane.harness.filesystem import FileReader, LocalFileSystem
+from agentlane.io import buffered_reader
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
@@ -187,7 +188,12 @@ def _read_text_slice(
 ) -> _ReadContent:
     """Read and close a bounded text slice in the worker that opens the stream."""
     try:
-        with reader.open_read(str(path)) as binary_file:
+        # Providers need only byte reads. The wrapper supplies line buffering,
+        # and the outer context remains responsible for closing the source.
+        with (
+            reader.open_read(str(path)) as source,
+            buffered_reader(source) as binary_file,
+        ):
             sample = bytearray()
             while len(sample) < _BINARY_SAMPLE_BYTES:
                 chunk = binary_file.read(_BINARY_SAMPLE_BYTES - len(sample))
@@ -199,6 +205,8 @@ def _read_text_slice(
                 return _read_error(
                     f"file appears to be binary and cannot be read as text: `{path}`"
                 )
+
+            # Reuse the sampled bytes; remote streams need not support seeking.
             return _collect_text_slice(
                 _replay_lines(bytes(sample), binary_file), offset=offset, limit=limit
             )
@@ -212,12 +220,15 @@ def _read_text_slice(
         return _read_error(f"failed to read file: `{path}`")
 
 
-def _replay_lines(sample: bytes, stream: BinaryReader) -> Iterator[bytes]:
+def _replay_lines(sample: bytes, stream: BufferedReader) -> Iterator[bytes]:
     """Replay sampled bytes and complete the last line without seeking the stream."""
     buffered = BytesIO(sample)
     while line := buffered.readline():
         if not line.endswith(b"\n"):
+            # Sampling can stop inside a line or UTF-8 character. Complete the
+            # line before decoding so that sampling does not change its text.
             line += stream.readline()
+
         yield line
 
     while line := stream.readline():
@@ -277,6 +288,8 @@ def _collect_text_slice(
         output_lines.append(decoded_line)
         output_bytes += line_byte_count
 
+    # No output can mean either an invalid offset or a valid but oversized line.
+    # Preserve the continuation diagnostic in the latter case.
     if (
         not output_lines
         and continuation_message is None

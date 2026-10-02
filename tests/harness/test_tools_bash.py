@@ -210,10 +210,16 @@ def test_bash_tool_rejects_invalid_command_arguments(tmp_path: Path) -> None:
     )
 
 
-def test_bash_tool_adapter_passes_request_to_executor(tmp_path: Path) -> None:
+@pytest.mark.parametrize("workspace_exists", [True, False])
+def test_bash_tool_adapter_passes_request_to_executor(
+    tmp_path: Path, workspace_exists: bool
+) -> None:
+    # A sandbox workspace can exist only in the executor's filesystem.
+    workspace = tmp_path if workspace_exists else tmp_path / "sandbox-only"
+
     async def scenario() -> tuple[str, list[BashExecutionRequest]]:
         executor = _FakeBashExecutor()
-        definition = bash_tool(cwd=tmp_path, executor=executor)
+        definition = bash_tool(cwd=workspace, executor=executor)
         tool = _executable_tool(definition)
         args_model = tool.args_type()
         output = await tool.run(
@@ -228,7 +234,7 @@ def test_bash_tool_adapter_passes_request_to_executor(tmp_path: Path) -> None:
     assert len(requests) == 1
     assert requests[0] == BashExecutionRequest(
         command="pwd",
-        cwd=tmp_path,
+        cwd=workspace,
         timeout_seconds=3,
     )
 
@@ -668,3 +674,17 @@ def test_bash_tool_prompt_snippet_through_harness_tools_shim() -> None:
         "stricter boundary.\n"
         "</default_tools>"
     )
+
+
+@pytest.mark.asyncio
+async def test_custom_executor_keeps_workspace_symlink_path(tmp_path: Path) -> None:
+    physical = tmp_path / "physical"
+    physical.mkdir()
+    logical = tmp_path / "logical"
+    logical.symlink_to(physical, target_is_directory=True)
+
+    # The same path can resolve differently on the executor's machine.
+    executor = _FakeBashExecutor()
+    tool = _executable_tool(bash_tool(cwd=logical, executor=executor))
+    await tool.run(tool.args_type()(command="pwd"), CancellationToken())
+    assert executor.requests[0].cwd == logical

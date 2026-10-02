@@ -10,6 +10,7 @@ from agentlane.harness.filesystem import (
     SkillReader,
     normalize_relative_path,
 )
+from agentlane.io import read_all
 
 from ._discovery import default_skill_roots
 from ._loader import SkillLoader
@@ -79,6 +80,7 @@ class FilesystemSkillLoader(SkillLoader):
 
                 parsed = self._parse_file(root / child.name / "SKILL.md")
                 if parsed is not None:
+                    # Root order defines precedence when two skills share a name.
                     parsed_by_name.setdefault(parsed.manifest.name, parsed)
 
         return parsed_by_name
@@ -107,7 +109,8 @@ class FilesystemSkillLoader(SkillLoader):
     def _parse_file(self, path: PurePath) -> ParsedSkillFile | None:
         try:
             with self._reader.open_read(str(path)) as stream:
-                text = stream.read().decode("utf-8")
+                # A short read is not EOF; parse only after the full transfer.
+                text = read_all(stream).decode("utf-8")
         except (OSError, UnicodeDecodeError):
             return None
 
@@ -139,6 +142,7 @@ class FilesystemSkillLoader(SkillLoader):
             for child in self._list_directory(directory):
                 path = directory / child.name
                 if child.is_directory:
+                    # Resource discovery must not loop through directory links.
                     if not child.is_symlink:
                         pending.append(path)
                 elif path != root / "SKILL.md":

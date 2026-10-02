@@ -10,9 +10,9 @@ Parameters:
 
 At construction, pass `writer=` to write to application storage. The native
 schema and result format stay the same. The writer receives relative POSIX
-paths and UTF-8 bytes; `cwd` defaults to its root (`.`). Omit `writer` for local
-files. See [File I/O adapters](filesystem.md) for metadata, replacement, and
-cancellation requirements.
+paths and opens a byte writer; `cwd` defaults to its root (`.`). Omit `writer`
+for local files. See [File I/O interfaces](filesystem.md) for metadata,
+replacement, and cancellation requirements.
 
 ## Permissions
 
@@ -45,7 +45,8 @@ Wrote 128 bytes to /workspace/notes.txt.
 
 The tool asks the writer to create parent directories automatically. The local
 writer replaces existing files through a sibling temporary file. Injected
-writers supply their own replacement guarantees.
+writer contexts must complete writes on successful exit and preserve an
+existing file on failure. The tool uses `write_all` to handle short writes.
 
 Use `write` for new files or complete rewrites. It does not provide append mode
 or precise patch operations.

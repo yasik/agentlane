@@ -1,6 +1,6 @@
 """In-memory file I/O for skill loader contract tests."""
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from io import BytesIO
 from threading import get_ident
@@ -19,9 +19,10 @@ class MemorySkillReader:
         self.thread_ids: list[int] = []
 
     @contextmanager
-    def open_read(self, path: str) -> Iterator[BinaryReader]:
+    def open_read(self, path: str) -> Generator[BinaryReader, None, None]:
         self.thread_ids.append(get_ident())
         self.opened.append(path)
+
         if path not in self.files:
             raise FileNotFoundError(path)
 
@@ -36,6 +37,8 @@ class MemorySkillReader:
         self.listed.append(path)
         prefix = "" if path == "." else f"{path}/"
         children: dict[str, bool] = {}
+
+        # Infer immediate directories from stored keys, as an object store would.
         for name in self.files:
             if not name.startswith(prefix):
                 continue

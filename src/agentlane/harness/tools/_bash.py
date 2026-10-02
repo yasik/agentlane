@@ -75,7 +75,8 @@ def bash_tool(
         default_timeout: Optional default timeout in seconds for calls that do
             not provide their own timeout.
         executor: Optional executor implementation for tests or host
-            applications.
+            applications. An explicit cwd is passed to custom executors without
+            host resolution or tilde expansion. Relative paths are executor-owned.
         permissions: Optional shared policy for command-execution decisions.
         approval_callback: Optional callback for approval-required decisions.
 
@@ -85,7 +86,16 @@ def bash_tool(
     if default_timeout is not None and default_timeout <= 0:
         raise ValueError("default_timeout must be greater than zero.")
 
-    resolver = ToolPathResolver.for_optional(cwd)
+    # Custom executors own path resolution. A sandbox can interpret the same
+    # path differently from the host's symlink and home-directory rules.
+    is_local = executor is None or isinstance(executor, LocalBashExecutor)
+    if is_local:
+        workspace = ToolPathResolver.for_optional(cwd).cwd
+    elif cwd is not None:
+        workspace = Path(cwd)
+    else:
+        workspace = Path.cwd()
+
     bash_executor = executor or LocalBashExecutor(default_timeout=default_timeout)
 
     async def run_bash(
@@ -96,7 +106,8 @@ def bash_tool(
         try:
             return await _run_bash(
                 args,
-                cwd=resolver.cwd,
+                cwd=workspace,
+                validate_local_cwd=is_local,
                 executor=bash_executor,
                 permissions=permissions,
                 approval_callback=approval_callback,
@@ -131,6 +142,7 @@ async def _run_bash(
     args: _ToolArgs,
     *,
     cwd: Path,
+    validate_local_cwd: bool,
     executor: BashExecutor,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
@@ -157,11 +169,6 @@ async def _run_bash(
             )
         )
 
-    if not cwd.exists():
-        return f"working directory not found: `{cwd}`"
-    if not cwd.is_dir():
-        return f"working directory is not a directory: `{cwd}`"
-
     request = BashExecutionRequest(
         command=args.command,
         cwd=cwd,
@@ -180,6 +187,13 @@ async def _run_bash(
     )
     if permission_error is not None:
         return permission_error
+
+    # Remote workspaces may not exist on the host; their executor validates them.
+    if validate_local_cwd:
+        if not cwd.exists():
+            return f"working directory not found: `{cwd}`"
+        if not cwd.is_dir():
+            return f"working directory is not a directory: `{cwd}`"
 
     result = await executor.run(request, cancellation_token)
     return _format_bash_output(result)

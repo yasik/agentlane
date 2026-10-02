@@ -170,7 +170,7 @@ The harness does not hard-code the filesystem as the only source of skills.
 For a different storage backend, pass a `SkillReader` to
 `FilesystemSkillLoader`. AgentLane then retains discovery, its private
 frontmatter parser, resource listing, and activation. See
-[File I/O adapters](filesystem.md) for the contracts and composition.
+[File I/O interfaces](filesystem.md) for the contracts and composition.
 
 Use a custom `SkillLoader` when the application needs different discovery or
 loading behavior, not just different storage. For example:
@@ -266,7 +266,7 @@ directory is inspected. Earlier roots win when skill names repeat.
 
 To combine local and remote roots, share a `MountedReader` between the loader
 and one read tool. Prefix each loader root with its mount name. See
-[Mixed local and remote readers](filesystem.md#mixed-local-and-remote-readers)
+[Mixed local and remote filesystems](filesystem.md#mixed-local-and-remote-filesystems)
 for configuration and resource paths.
 
 Manifest `root` and `skill_file` use `PurePath`: local discovery returns `Path`,
@@ -284,7 +284,7 @@ to the target directory.
 
 Calls run on worker threads; configure storage timeouts and thread safety in
 the reader. See
-[File I/O adapters](filesystem.md#permissions-and-execution).
+[File I/O interfaces](filesystem.md#permissions-and-execution).
 
 ### Filesystem Parsing Policy
 
