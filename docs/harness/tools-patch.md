@@ -60,3 +60,19 @@ missing files, directory targets, malformed SEARCH/REPLACE blocks, invalid
 UTF-8 edit text, invalid UTF-8 files, permission failures, and failed writes.
 Unexpected implementation errors return a stable generic failure message so the
 agent loop can continue.
+
+## Injected Storage
+
+Pass `reader=storage, writer=storage` for one storage namespace. Supply both
+capabilities together. Paths use relative POSIX syntax and `cwd` defaults to
+`.`. The tool checks `MODIFY_FILE` before reading the target. The existing
+patch engine applies all edits to content and preserves matching, BOMs, line
+endings, and error behavior. The tool opens a writer only after all edits
+succeed. No remote-to-local copy is made.
+
+The writer context completes replacement on success and preserves the target
+on failure. One tool instance serializes the complete read-edit-write operation.
+Separate tool instances and external writers require application coordination
+of the whole operation; serialized commits alone do not prevent lost updates.
+Started writes settle before cancellation propagates and the lock is released.
+See [File I/O interfaces](./filesystem.md).

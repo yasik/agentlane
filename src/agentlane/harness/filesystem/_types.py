@@ -3,24 +3,17 @@
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
+from agentlane.io import Reader, Writer
 
-class BinaryReader(Protocol):
-    """Blocking byte stream. Seeking is not required."""
-
-    def read(self, size: int = -1, /) -> bytes:
-        """Return up to `size` bytes, or all remaining bytes if negative."""
-        ...
-
-    def readline(self, size: int = -1, /) -> bytes:
-        """Return one line, including its ending, with an optional byte limit."""
-        ...
+# Retain the existing import name for reader implementations.
+BinaryReader = Reader
 
 
 @dataclass(frozen=True, slots=True)
 class FileInfo:
-    """File metadata required for write permission decisions."""
+    """File metadata for permission decisions."""
 
     is_directory: bool
     """Whether the path identifies a directory instead of a file."""
@@ -39,6 +32,9 @@ class DirectoryEntry:
     is_symlink: bool = False
     """Whether the child is a symbolic link; recursive listings skip directory links."""
 
+    modified_time: float | None = None
+    """Unix modification time when available; find uses zero when absent."""
+
 
 class FileReader(Protocol):
     """Open files in a storage namespace.
@@ -54,25 +50,32 @@ class FileReader(Protocol):
         ...
 
 
-class FileWriter(Protocol):
-    """Inspect and write files in a storage namespace.
-
-    Calls are blocking and run in worker threads. Paths are relative POSIX
-    paths for injected storage. Use standard `OSError` subclasses for failures.
-    Metadata must describe the same namespace that `write` changes.
-    """
+@runtime_checkable
+class FileStat(Protocol):
+    """Inspect paths independently of read or write access."""
 
     def stat(self, path: str) -> FileInfo | None:
-        """Return file metadata, or `None` for a missing path.
+        """Return metadata or None for a missing path. The root must exist."""
+        ...
 
-        Object stores can report implicit directories as directories. The root
-        `.` must exist. This operation must not create files or directories.
+
+@runtime_checkable
+class FileWriter(Protocol):
+    """Open a writer in a storage namespace. Paths are relative POSIX paths."""
+
+    def open_write(self, path: str) -> AbstractContextManager[Writer]:
+        """Create or replace a file and create its parents as needed.
+
+        Successful context exit completes the write. An exception must abort
+        replacement and preserve any existing file. Each context owns its
+        stream. The backend owns concurrent-write control.
         """
         ...
 
-    def write(self, path: str, content: bytes) -> None:
-        """Create or replace a file, creating its parent directories as needed."""
-        ...
+
+@runtime_checkable
+class WritableFileSystem(FileWriter, FileStat, Protocol):
+    """Write tools need both write access and permission-relevant metadata."""
 
 
 class DirectoryLister(Protocol):
@@ -87,5 +90,11 @@ class DirectoryLister(Protocol):
         ...
 
 
+@runtime_checkable
 class SkillReader(FileReader, DirectoryLister, Protocol):
     """Read and list files for the SDK's native skill loader."""
+
+
+@runtime_checkable
+class ReadableFileSystem(FileReader, DirectoryLister, FileStat, Protocol):
+    """Read, list, and inspect paths for file search."""

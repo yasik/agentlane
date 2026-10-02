@@ -7,6 +7,7 @@ import pytest
 
 from agentlane.harness.filesystem import (
     FileReader,
+    FileStat,
     FileWriter,
     LocalFileSystem,
     SkillReader,
@@ -18,6 +19,7 @@ from agentlane.harness.tools import (
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
 )
+from agentlane.io import write_all
 
 
 @pytest.mark.parametrize(
@@ -74,14 +76,16 @@ def test_local_filesystem_round_trip_preserves_bytes_and_protocols(
     skills: SkillReader = storage
     content = b"hello\r\n\xff\x00"
 
-    writer.write("notes/raw.bin", content)
+    with writer.open_write("notes/raw.bin") as stream:
+        write_all(stream, content)
+    metadata: FileStat = storage
     with reader.open_read("notes/raw.bin") as stream:
         assert stream.read() == content
 
-    assert writer.stat("missing") is None
-    directory = writer.stat("notes")
+    assert metadata.stat("missing") is None
+    directory = metadata.stat("notes")
     assert directory is not None and directory.is_directory
-    file_info = writer.stat("notes/raw.bin")
+    file_info = metadata.stat("notes/raw.bin")
     assert file_info is not None and not file_info.is_directory
     assert [entry.name for entry in skills.list_directory("notes")] == ["raw.bin"]
 
@@ -156,5 +160,66 @@ def test_local_policies_injected_path_reject_without_host_resolution(
         raise AssertionError("injected paths must not resolve against the host")
 
     monkeypatch.setattr(Path, "resolve", unexpected_resolve)
+
+    # Local policies must reject logical paths before host path resolution.
     for policy in policies:
         assert not policy.check(request).allowed
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_local_open_write_aborts_on_failure(tmp_path: Path, exists: bool) -> None:
+    storage = LocalFileSystem(tmp_path)
+    if exists:
+        storage.write("target", b"original")
+
+    # An exception after partial output must abort the whole replacement.
+    with pytest.raises(RuntimeError, match="abort"):
+        with storage.open_write("target") as stream:
+            stream.write(b"partial")
+            raise RuntimeError("abort")
+
+    if exists:
+        assert (tmp_path / "target").read_bytes() == b"original"
+    else:
+        assert not (tmp_path / "target").exists()
+
+    assert {path.name for path in tmp_path.iterdir()} == (
+        {"target"} if exists else set()
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX permissions")
+def test_local_new_file_uses_normal_creation_mode(tmp_path: Path) -> None:
+    # A reference file observes the current umask without changing global state.
+    reference = tmp_path / "reference"
+    reference.write_bytes(b"x")
+    LocalFileSystem(tmp_path).write("created", b"x")
+
+    assert (tmp_path / "created").stat().st_mode == reference.stat().st_mode
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX permissions")
+def test_local_replace_preserves_executable_mode(tmp_path: Path) -> None:
+    target = tmp_path / "script"
+    target.write_bytes(b"old")
+    target.chmod(0o751)
+
+    # Replacing the inode must not discard the target's executable mode bits.
+    LocalFileSystem(tmp_path).write("script", b"new")
+    assert target.stat().st_mode & 0o777 == 0o751
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_local_write_supports_long_valid_filenames(
+    tmp_path: Path, exists: bool
+) -> None:
+    # A valid target can exceed the name limit if a temp suffix is appended.
+    name = "x" * 230
+    target = tmp_path / name
+    if exists:
+        target.write_bytes(b"old")
+
+    LocalFileSystem(tmp_path).write(name, b"new")
+
+    assert target.read_bytes() == b"new"
+    assert list(tmp_path.iterdir()) == [target]

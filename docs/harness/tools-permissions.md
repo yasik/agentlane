@@ -16,7 +16,7 @@ remain available. See [File I/O adapters](filesystem.md).
 AgentLane is a framework, so first-party helpers stay permissive unless an
 application passes an explicit policy. With no `permissions=` argument,
 `read`, `find`, `grep`, `patch`, `write`, and `bash` keep their trusted local
-behavior. Injected read and write tools also allow every operation by default,
+behavior. Injected file tools also allow every operation by default,
 subject to the adapter's own access checks. A specific `cwd` only changes path
 resolution; it is not a sandbox:
 

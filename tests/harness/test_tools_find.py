@@ -150,6 +150,7 @@ def test_find_tool_sorts_by_mtime_newest_first(tmp_path: Path) -> None:
 
 
 def test_find_tool_breaks_mtime_ties_alphabetically(tmp_path: Path) -> None:
+    # Creation order differs from the required tie order.
     touch(tmp_path / "zeta.txt")
     touch(tmp_path / "alpha.txt")
     touch(tmp_path / "middle.txt")
@@ -331,7 +332,7 @@ def test_find_tool_prompt_snippet_through_harness_tools_shim(tmp_path: Path) -> 
             "Available tools:\n"
             "- find: Find files by glob pattern (use `**/` for recursion)\n\n"
             "Guidelines:\n"
-            "- Use find to locate files instead of shelling out to find or ls.\n"
+            "- Use find to locate files in its storage namespace. Use shell commands only for process files outside that namespace.\n"
             "</default_tools>"
         )
 

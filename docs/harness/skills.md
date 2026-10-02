@@ -266,7 +266,7 @@ directory is inspected. Earlier roots win when skill names repeat.
 
 To combine local and remote roots, share a `MountedReader` between the loader
 and one read tool. Prefix each loader root with its mount name. See
-[Mixed local and remote readers](filesystem.md#mixed-local-and-remote-readers)
+[Mixed local and remote readers](filesystem.md#mixed-local-and-remote-filesystems)
 for configuration and resource paths.
 
 Manifest `root` and `skill_file` use `PurePath`: local discovery returns `Path`,

@@ -200,11 +200,13 @@ def test_write_tool_sanitizes_os_error_text(
         del kwargs
         raise OSError("Traceback (most recent call last): private details")
 
-    monkeypatch.setattr(Path, "write_bytes", raise_os_error)
+    # Fail at commit to cover both error sanitization and temp-file cleanup.
+    monkeypatch.setattr(Path, "replace", raise_os_error)
 
     output = run_tool(write_tool(cwd=tmp_path), path="notes.txt", content="content")
 
     assert output == f"failed to write file: `{tmp_path / 'notes.txt'}`"
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_write_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:

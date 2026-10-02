@@ -1,6 +1,6 @@
 """Async context managers for scoped runtime lifecycle management."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from ._runtime import RuntimeEngine, SingleThreadedRuntimeEngine
@@ -13,7 +13,7 @@ async def runtime_scope(
     *,
     expected_type: type[RuntimeEngine] | None = None,
     runtime_factory: type[RuntimeEngine] = SingleThreadedRuntimeEngine,
-) -> AsyncIterator[RuntimeEngine]:
+) -> AsyncGenerator[RuntimeEngine, None]:
     """Scope runtime lifecycle to an async context block.
 
     The scope starts the runtime on entry if it was not already running.
@@ -43,8 +43,8 @@ async def runtime_scope(
         expected_type: Optional runtime class constraint validated on entry.
         runtime_factory: Runtime class used when `runtime` is None.
 
-    Returns:
-        AsyncIterator[RuntimeEngine]: Async context yielding a running runtime.
+    Yields:
+        RuntimeEngine: The running runtime.
 
     Raises:
         ValueError: If `runtime` is provided and does not match `expected_type`.
@@ -58,6 +58,7 @@ async def runtime_scope(
             f"Expected '{expected_type.__name__}', got '{type(runtime).__name__}'."
         )
 
+    # A borrowed running runtime belongs to the caller; this scope must not stop it.
     was_running = runtime.is_running
     if not was_running:
         await runtime.start()
@@ -78,7 +79,7 @@ async def runtime_scope(
 @asynccontextmanager
 async def single_threaded_runtime(
     runtime: RuntimeEngine | None = None,
-) -> AsyncIterator[RuntimeEngine]:
+) -> AsyncGenerator[RuntimeEngine, None]:
     """Scope a single-threaded runtime lifecycle to one async context block.
 
     Use this for in-process message handling that should automatically
@@ -112,8 +113,8 @@ async def single_threaded_runtime(
     Args:
         runtime: Optional runtime instance to scope. If None, creates one.
 
-    Returns:
-        AsyncIterator[RuntimeEngine]: Async context yielding single-threaded runtime.
+    Yields:
+        RuntimeEngine: The single-threaded runtime.
 
     Raises:
         ValueError: If provided runtime is not `SingleThreadedRuntimeEngine`.
@@ -135,7 +136,7 @@ async def single_threaded_runtime(
 @asynccontextmanager
 async def distributed_runtime(
     runtime: RuntimeEngine | None = None,
-) -> AsyncIterator[RuntimeEngine]:
+) -> AsyncGenerator[RuntimeEngine, None]:
     """Scope a distributed runtime lifecycle to one async context block.
 
     Use this for workflows that should run against a distributed runtime
@@ -166,8 +167,8 @@ async def distributed_runtime(
     Args:
         runtime: Optional runtime instance to scope. If None, creates one.
 
-    Returns:
-        AsyncIterator[RuntimeEngine]: Async context yielding distributed runtime.
+    Yields:
+        RuntimeEngine: The distributed runtime.
 
     Raises:
         ValueError: If provided runtime is not `DistributedRuntimeEngine`.

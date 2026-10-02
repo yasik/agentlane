@@ -1,230 +1,209 @@
-# File I/O Adapters
+# File I/O Interfaces
 
-Use `agentlane.harness.filesystem` to supply storage for the native read tool,
-write tool, and skill loader. AgentLane keeps the tool schemas, text limits,
-permission checks, skill discovery, private frontmatter parser, and activation
-behavior. The application supplies file I/O.
+File tools depend on interfaces. AgentLane supplies a local filesystem by
+default. Applications can supply their own implementations for object stores,
+remote services, or other storage. The framework does not include cloud clients.
 
-## Interfaces
+## Byte Streams
 
-Implement only the protocols that the application needs. No inheritance is
-required.
+`agentlane.io` defines two independent protocols:
 
-| Protocol | Methods | Used by |
+| Protocol | Method | Contract |
 | --- | --- | --- |
-| `FileReader` | `open_read(path)` | `read_tool(reader=...)` |
-| `FileWriter` | `stat(path)`, `write(path, content)` | `write_tool(writer=...)` |
-| `DirectoryLister` | `list_directory(path)` | Skill discovery and resource listing |
-| `SkillReader` | `FileReader` and `DirectoryLister` methods | `FilesystemSkillLoader(reader=...)` |
+| `Reader` | `read(size=-1) -> bytes` | Short reads are valid; empty bytes mean EOF |
+| `Writer` | `write(data: bytes) -> int` | Return the number of bytes accepted; short writes are valid |
 
-`open_read` returns a context manager for a binary stream. The stream implements
-`read(size=-1)` and `readline(size=-1)`; seeking is not required. AgentLane opens,
-reads, and closes the stream in the same worker operation.
+These protocols have no paths, metadata, seeking, line operations, or harness
+dependencies. A client implements only the methods it needs. Python binary
+file streams and `BytesIO` satisfy them.
 
-`stat` returns `FileInfo(is_directory=...)`, or `None` for a missing path. The
-root `.` must exist. Metadata must describe the same storage that `write`
-changes. `write` receives bytes and creates parent directories as needed. The
-adapter owns replacement guarantees.
+Buffering and complete transfers are separate operations:
 
-`list_directory` returns direct children as `DirectoryEntry` values. Each name
-must be one path component. Set `is_directory` and `is_symlink` correctly so
-resource discovery can skip directory links. Raise `FileNotFoundError` for a
-missing directory and `NotADirectoryError` for a file. Use standard `OSError`
-subclasses for storage errors.
+- `buffered_reader(reader)` adds Python's standard buffering and `readline`.
+  Closing this wrapper does not close the supplied reader.
+- `read_all(reader)` reads through EOF, including short reads.
+- `write_all(writer, data)` handles short writes and rejects zero progress or
+  invalid byte counts. Completion of this operation does not close the writer.
 
-## Paths and Composition
+The filesystem's context manager owns stream cleanup and write completion.
+`BinaryReader` remains available from `agentlane.harness.filesystem` as an alias
+for `Reader`; implementations no longer need a `readline` method.
 
-The adapter owns its physical root, such as a bucket prefix or database tenant.
-Injected adapters receive normalized relative POSIX path strings. No host path
-resolution occurs. Absolute paths, Windows drive paths, backslashes, null bytes,
-and `..` paths that leave the storage root are rejected.
+## Filesystem Capabilities
 
-The public `normalize_relative_path(path, root=".")` helper applies these rules
-and returns a `PurePosixPath`. It removes redundant separators and `.` segments,
-resolves `..` within the storage root, and raises `ValueError` for invalid paths.
-It does not expand `~` or inspect local files or symlinks.
+Path operations live in `agentlane.harness.filesystem`, independently of the
+stream protocols and concrete implementations.
 
-With an injected adapter, tool `cwd` is a relative directory in that storage
-and defaults to `.`. It is not an additional access boundary: `../file.txt`
-can leave `cwd` if it stays inside the adapter's root. Use adapter access checks
-and a permission policy when the application needs a narrower boundary.
+| Protocol | Methods | Consumers |
+| --- | --- | --- |
+| `FileReader` | `open_read(path)` | Read and patch tools |
+| `FileWriter` | `open_write(path)` | Patch writes |
+| `FileStat` | `stat(path)` | File inspection and permission decisions |
+| `DirectoryLister` | `list_directory(path)` | Directory traversal |
+| `SkillReader` | Read and list | Skill discovery and activation |
+| `ReadableFileSystem` | Read, list, and stat | Find tool |
+| `WritableFileSystem` | Write and stat | Write tool |
 
-Use the same reader namespace for skill loading and resource reading:
+`open_read` returns a context manager for a `Reader`. `open_write` returns one
+for a `Writer`. Each context owns its stream. Use standard `OSError` subclasses
+for storage failures.
+
+A writer creates parent directories as needed. Successful context exit must
+complete the write. A failed context must preserve an existing target instead
+of committing partial content. The backend owns concurrent-write control.
+`LocalFileSystem` uses a temporary file and atomic replacement for this contract.
+New files use normal creation permissions under the process umask. Replacement
+preserves existing mode bits.
+A remote adapter must implement the contract using its provider's facilities.
+
+`stat` returns `FileInfo(is_directory=...)`, or `None` for a missing path.
+The root `.` must exist. Metadata is independent of write access.
+
+`list_directory` returns direct children as `DirectoryEntry` values. Names must
+be single path components. Directory links must set `is_symlink=True` so
+traversal can avoid cycles. Raise `FileNotFoundError` for a missing directory
+and `NotADirectoryError` for a file. `DirectoryEntry.modified_time` is an
+optional Unix timestamp; find uses zero when absent and breaks ties by path.
+Find uses listing metadata without a separate stat call for each file.
+Unexpected listing failures return a tool error, not an empty result.
+
+## Tool Construction
 
 ```python
-from agentlane.harness.skills import FilesystemSkillLoader, SkillsShim
-from agentlane.harness.tools import HarnessToolsShim, read_tool, write_tool
+from agentlane.harness.tools import read_tool, write_tool, find_tool, patch_tool
 
-loader = FilesystemSkillLoader(reader=storage, roots=("skills",))
-shims = (
-    SkillsShim(loader=loader),
-    HarnessToolsShim((read_tool(reader=storage), write_tool(writer=storage))),
+# storage is the application's filesystem implementation.
+tools = (
+    read_tool(reader=storage),
+    write_tool(writer=storage),
+    find_tool(reader=storage),
+    patch_tool(reader=storage, writer=storage),
 )
 ```
 
-Here `storage` is an application adapter that implements `SkillReader` and
-`FileWriter`. The loader defaults to `roots=(".",)` for an injected reader.
-It ignores `include_default_roots` and does not inspect local home or working
-directories. Activated resources keep their skill-relative `path`; `read_path`
-adds the skill root and is suitable for the read tool at `cwd="."`.
+Tools know the required interfaces. They do not branch on provider types.
+Read formatting, write permissions, find matching and ordering, and patch
+matching retain their existing behavior. Find uses one traversal for local
+and supplied filesystems. Patch uses the existing dependency's edit algorithm;
+its public content operation lets supplied filesystems own the reads and writes.
 
-For a skill under `skills/refund-policy`, the paths are:
+`FilesystemSkillLoader(reader=storage, roots=("skills",))` uses the same reader
+and directory-listing contracts. Activation returns a `read_path` that includes
+the skill root. Supply that path to a read tool at storage `cwd="."`.
 
-| Value | Path |
-| --- | --- |
-| Loader root | `skills` |
-| Manifest `root` | `skills/refund-policy` |
-| Manifest `skill_file` | `skills/refund-policy/SKILL.md` |
-| Resource `path` | `references/policy.md` |
-| Activation `read_path` | `skills/refund-policy/references/policy.md` |
+## Paths and Workspace
 
-The read tool passes that `read_path` unchanged when `cwd="."`. With
-`cwd="skills/refund-policy"`, pass `references/policy.md` instead. The tool
-resolves it to the same storage path. Skill activation does not change `cwd`.
-The adapter maps the resulting path to its physical root. AgentLane does not
-create a local copy or choose an organization, agent, or session prefix.
+Injected file tools use relative POSIX paths. `cwd` defaults to `.` within the
+supplied storage. The adapter owns its physical root and access restrictions.
+`normalize_relative_path(path, root=".")` normalizes paths without local file
+access. It rejects absolute paths, drive paths, backslashes, null bytes, and
+`..` paths that leave the storage root. It does not expand `~`.
 
-`base_harness_tools(reader=storage, writer=storage, include=("read", "write"))`
-is another way to construct those two tools. The factory injects only `read`
-and `write`. `find`, `grep`, `patch`, and `bash` still use local files. Construct
-tools separately when they need different working directories or policies.
+The default local tools retain absolute paths and capture the working directory
+at construction. An explicit `LocalFileSystem(root=...)` uses injected path
+rules. Its physical root is a working directory, not a security boundary.
 
-Omit `reader` and `writer` to retain local defaults through `LocalFileSystem`.
-Local tools still accept absolute paths, and the local skill loader still uses
-its configured roots and standard local roots. An explicitly supplied
-`LocalFileSystem(root=...)` follows injected relative-path rules; its physical
-root remains a working directory, not a security boundary.
-The local reader accepts regular files and rejects special files such as named
-pipes. Local directory listings omit special files and identify symbolic links.
-
-### Mixed Local and Remote Readers
-
-Use `MountedReader` to combine local and remote storage in one reader. Share
-it between `FilesystemSkillLoader` and one `read` tool:
+The base factory keeps the process workspace separate from injected storage:
 
 ```python
-from agentlane.harness.filesystem import LocalFileSystem, MountedReader
-from agentlane.harness.skills import FilesystemSkillLoader, SkillsShim
-from agentlane.harness.tools import HarnessToolsShim, read_tool
+from agentlane.harness.tools import base_harness_tools
 
-storage = MountedReader(
-    {
-        "workspace": LocalFileSystem(root="/app"),
-        "tenant": remote_reader,
-    }
-)
-loader = FilesystemSkillLoader(
+tools = base_harness_tools(
+    cwd="/workspace",       # Files visible to grep and bash in their environment.
     reader=storage,
-    roots=("tenant/skills", "workspace/.agents/skills"),
-)
-shims = (
-    SkillsShim(loader=loader),
-    HarnessToolsShim((read_tool(reader=storage),)),
+    writer=storage,
+    storage_cwd="skills",   # Relative directory for read, write, find, and patch.
 )
 ```
 
-Here `remote_reader` is an application adapter that implements `SkillReader`.
-Each mounted reader must support file reads and directory listings. The mount
-mapping is copied at construction. Mount names must be single, canonical
-relative POSIX path components, such as `workspace` or `tenant`.
+If the reader implements `WritableFileSystem`, the factory uses it as the
+writer unless an explicit writer is supplied. Missing capabilities for selected
+file tools raise `ValueError`; use selectors for a read-only tool set.
 
-The first component of a normalized path selects the reader. The selected
-reader receives the remaining path:
+Grep and bash remain process tools. They use `cwd` in the environment that runs
+them, such as the user's computer or a sandbox. Grep invokes ripgrep in the
+harness process environment. Bash uses its executor; the base factory accepts
+`bash_executor=` for an application-supplied executor. To keep both tools in
+one sandbox workspace, run the tool handlers in that environment. An explicit
+bash cwd passes to custom executors without host symlink resolution or tilde
+expansion; relative paths are resolved by that executor. The base tools add
+prompt guidance about the separate storage and process path namespaces.
 
-| Tool path | Reader | Path passed to reader |
-| --- | --- | --- |
-| `tenant/skills/refund/SKILL.md` | `remote_reader` | `skills/refund/SKILL.md` |
-| `workspace/.agents/skills/review/SKILL.md` | `LocalFileSystem` | `.agents/skills/review/SKILL.md` |
-| `workspace/reports/result.txt` | `LocalFileSystem` | `reports/result.txt` |
+Neither tool consumes the reader or writer. A logical mount does not create an
+operating-system mount. If commands need remote data, the host must expose it
+to their process filesystem. AgentLane does not copy remote files for search.
 
-Earlier loader roots win when skill names repeat. With this example, a remote
-skill takes precedence over a local skill with the same name. Discovery and
-activation use the same selected skill. A resource's `path` remains relative
-to its skill directory; its `read_path` includes the mount, such as
-`tenant/skills/refund/references/policy.md`.
+## Mixed Local and Remote Filesystems
 
-Listing `.` returns mount names as directories in sorted order. Listing a
-mount root, such as `tenant`, calls that reader's `list_directory(".")`.
-Reading `.` or a mount root raises `IsADirectoryError`. Unknown mounts raise
-`FileNotFoundError`. Errors from a selected reader propagate; no other reader
-is tried.
+`MountedReader` routes reads, listings, and metadata through named children.
+`MountedFileSystem` adds writes for children that implement `FileWriter`.
+Read-only children reject writes with `PermissionError`.
 
-Tool permissions receive the full logical path, including the mount name.
-Path normalization can move between mounts: `workspace/../tenant/file.txt`
-resolves to `tenant/file.txt`. Tool `cwd` is not an access boundary. Each child
-reader must enforce physical access restrictions, including local symlink
-restrictions. `LocalFileSystem(root=...)` alone does not enforce these limits.
+```python
+from agentlane.harness.filesystem import LocalFileSystem, MountedFileSystem
+from agentlane.harness.tools import base_harness_tools
 
-`MountedReader` supports reads and directory listings only. Local tools such
-as `find`, `grep`, `patch`, and `bash` keep their local path rules. A mounted
-path such as `workspace/report.txt` refers to `/app/report.txt` in this example;
-pass a local path to those other tools.
+storage = MountedFileSystem({
+    "workspace": LocalFileSystem(root="/workspace"),
+    "tenant": remote_storage,
+})
+tools = base_harness_tools(cwd="/workspace", reader=storage)
+```
+
+Mount names are canonical single POSIX path components. The mapping is copied
+at construction. A path such as `tenant/reports/result.txt` selects `tenant`
+and passes `reports/result.txt` to that child. The same path works through
+read, write, find, and patch. Mounted implementations do not contain search,
+copying, buffering, or cloud-provider logic.
+
+Listing `.` returns sorted mount names as directories. A named mount root
+lists the child at `.`. Reads and writes to roots raise `IsADirectoryError`.
+Writes cannot create mounts. Unknown mounts raise `FileNotFoundError` for
+reads, listings, and writes; `stat` returns `None`. Child errors propagate.
+Readers without `FileStat` can still be mounted: metadata is obtained from
+their directory listings. Find uses optional timestamps from these same entries.
+
+Path normalization can cross mounts: `workspace/../tenant/file.txt` becomes
+`tenant/file.txt`. Tool `cwd` is not an access boundary. Child adapters must
+enforce physical access restrictions, including symlink rules.
+
+Use `MountedReader` with `FilesystemSkillLoader` to combine skill roots.
+Earlier roots retain precedence when skill names repeat. Skill activation does
+not change the tool working directory.
+
+See the [runnable example](../../examples/harness/mounted_filesystem/main.py).
 
 ## Permissions and Execution
 
-Injected tool requests carry `PurePosixPath` values in `cwd` and `path`.
-`WorkspaceToolPermissionPolicy` and `PathScopeToolPermissionPolicy` deny these
-paths because their checks apply to local `Path` objects. Supply a policy that
-checks the storage namespace. Operation grants and approval callbacks still
-apply. Write tools check directory creation and file creation or overwrite
-before calling the adapter's `write`; metadata reads occur before these checks.
-See [Tool permissions](tools-permissions.md).
+Injected file-tool permission requests carry logical `PurePosixPath` values.
+The local `WorkspaceToolPermissionPolicy` and `PathScopeToolPermissionPolicy`
+deny these because their checks apply to local paths. Supply an appropriate
+namespace policy. Operation grants and approval callbacks still apply.
 
-`FilesystemSkillLoader` calls its reader directly for discovery and activation.
-Policies passed to read or write tools do not govern these loader calls. Limit
-skill access through the reader and its configured storage root.
+Read checks `READ_FILE`, find checks `SEARCH_FILES`, and patch checks
+`MODIFY_FILE` before accessing data. Write inspects metadata to distinguish
+creation from overwrite, then checks permissions before opening a writer.
+Grep and bash retain their process-tool permission behavior. See
+[Tool permissions](tools-permissions.md).
 
-All adapter methods are synchronous and run on worker threads. Each read must
-own its stream. Shared clients must support concurrent calls, or the adapter
-must protect them. Configure storage request timeouts and retry limits in the
-adapter; AgentLane does not set a storage deadline.
+Skill loading calls the adapter directly. Tool policies do not govern skill
+loader access; restrict it through the adapter and configured roots.
 
-Cancellation cannot stop a blocking thread. A read or listing can continue
-after its caller is cancelled. The write tool waits for a started write to
-finish, including after repeated cancellation, before it propagates
-cancellation. This does not roll back the write. A slow write can therefore
-delay cancellation until the adapter returns or raises.
+Adapter methods are synchronous and file tools run them in worker threads.
+Each call must own its stream. Shared clients must support concurrent calls or
+provide their own synchronization. The adapter owns timeouts and retries.
+Cancellation cannot stop a blocking adapter call. Write and patch wait for a
+started write context to settle before they propagate task cancellation.
 
-## Minimal Reader Example
+## Writer Migration
 
-Save this example as a Python file and run it with `uv run python <file>`.
-It uses the native read tool without local files or credentials. The dictionary
-is copied at construction and is not changed after that, so concurrent reads
-use separate streams over fixed bytes.
+A previous writer adapter implemented `stat(path)` and `write(path, bytes)`.
+Implement `open_write(path)` as a context manager that yields a `Writer`, and
+keep `stat` for the write tool. Whole-file writing is now an operation over the
+stream. `LocalFileSystem.write` remains a convenience method; tools depend on
+the stream interface. Readers need only `read`, with buffering supplied above it.
 
-```python
-import asyncio
-from io import BytesIO
-
-from agentlane.harness.tools import read_tool
-from agentlane.models import Tool
-from agentlane.runtime import CancellationToken
-
-
-class MemoryReader:
-    def __init__(self, files: dict[str, bytes]) -> None:
-        self._files = dict(files)
-
-    def open_read(self, path: str) -> BytesIO:
-        try:
-            content = self._files[path]
-        except KeyError as error:
-            raise FileNotFoundError(path) from error
-        return BytesIO(content)
-
-
-async def main() -> None:
-    storage = MemoryReader({"notes/example.txt": b"alpha\nbravo\n"})
-    tool = read_tool(reader=storage).tool
-    assert isinstance(tool, Tool)
-    args = tool.args_type().model_validate({"path": "notes/example.txt", "limit": 1})
-    result = await tool.run(args, CancellationToken())
-    print(result)
-
-
-asyncio.run(main())
-```
-
-The result contains `alpha` and the native continuation note. To use an adapter
-with the skill loader, also implement `list_directory`; do not copy or expose
-the private parser. See [Skills](skills.md) for discovery and activation.
+Injected patch calls through one tool instance serialize the complete read,
+edit, and write operation. This lock does not cover other tool instances or
+external writers. Applications must coordinate those operations as a whole;
+serializing write commits alone does not prevent stale read-modify-write updates.

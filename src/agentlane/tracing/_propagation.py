@@ -1,7 +1,7 @@
 """Helpers for propagating tracing context across async task boundaries."""
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -51,9 +51,10 @@ def discard_parent_context(message_id: str) -> None:
 
 
 @contextmanager
-def adopt_parent_context(message_id: str) -> Iterator[None]:
+def adopt_parent_context(message_id: str) -> Generator[None, None, None]:
     """Temporarily adopt the context captured for the message ID, if any."""
     with _MESSAGE_CONTEXT_LOCK:
+        # Consume the snapshot once so later messages cannot reuse stale context.
         snapshot = _MESSAGE_CONTEXTS.pop(message_id, None)
 
     if snapshot is None:
@@ -65,5 +66,6 @@ def adopt_parent_context(message_id: str) -> Iterator[None]:
     try:
         yield
     finally:
+        # Restore the enclosing task's context even when the message handler fails.
         reset_current_span(span_token)
         reset_current_trace(trace_token)

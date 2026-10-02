@@ -1,11 +1,16 @@
 """Shim integration for first-party harness tool definitions."""
 
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace
 from itertools import chain
 from pathlib import Path
 from typing import Any, Literal
 
-from agentlane.harness.filesystem import FileReader, FileWriter
+from agentlane.harness.filesystem import (
+    FileReader,
+    ReadableFileSystem,
+    WritableFileSystem,
+)
 from agentlane.models.run import RunContext
 
 from .._run import RunState, ShimState
@@ -13,6 +18,7 @@ from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._agent import agent_tool
 from ._bash import bash_tool
+from ._bash_executor import BashExecutor
 from ._find import find_tool
 from ._grep import grep_tool
 from ._patch import patch_tool
@@ -149,7 +155,9 @@ def base_harness_tools(
     *,
     cwd: str | Path | None = None,
     reader: FileReader | None = None,
-    writer: FileWriter | None = None,
+    writer: WritableFileSystem | None = None,
+    bash_executor: BashExecutor | None = None,
+    storage_cwd: str | Path = ".",
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
     include: Iterable[str] | None = None,
@@ -159,10 +167,15 @@ def base_harness_tools(
     """Return currently implemented first-party base harness tools.
 
     Args:
-        cwd: Optional working directory passed to each path-aware tool factory.
-        reader: Optional storage reader for the read tool only.
-        writer: Optional storage writer for the write tool only. Find, grep, patch,
-            and bash continue to use the local filesystem.
+        cwd: Process workspace for grep and bash, and for default local file tools.
+        reader: Filesystem for read, find, and patch. Find also requires listings
+            and metadata. A WritableFileSystem reader supplies default writes.
+        writer: Storage writer for write and patch in the reader's namespace.
+        bash_executor: Optional host command executor for bash. Grep runs in the
+            harness process environment; run that environment in the sandbox
+            when both tools must access a sandbox workspace.
+        storage_cwd: Relative directory for injected file tools. Defaults to root.
+            It is independent of the process workspace cwd.
         permissions: Optional permission policy threaded into every tool.
         approval_callback: Optional approval callback threaded into every tool.
         include: Optional allowlist of tool names to build, in standard order.
@@ -183,15 +196,42 @@ def base_harness_tools(
         exclude=exclude,
         extra_names=extra_names,
     )
+
+    # Infer writes only from the supplied backend's explicit capabilities.
+    if writer is None and isinstance(reader, WritableFileSystem):
+        writer = reader
+
+    injected = reader is not None or writer is not None
+    search_reader = reader if isinstance(reader, ReadableFileSystem) else None
+
+    # Validate only selected tools, but never fill missing storage capabilities
+    # with local defaults. That would give the same path different meanings.
+    if injected:
+        if reader is None and set(selected_names) & {"read", "find", "patch"}:
+            raise ValueError("selected storage tools require a reader")
+
+        if search_reader is None and "find" in selected_names:
+            raise ValueError(
+                "find requires a reader with directory listings and metadata"
+            )
+
+        if writer is None and set(selected_names) & {"write", "patch"}:
+            raise ValueError(
+                "write and patch require a writer; exclude them for read-only storage"
+            )
+
+    # Logical storage roots do not change the workspace of process tools.
+    file_cwd = storage_cwd if injected else cwd
     factories: dict[str, _BaseToolFactory] = {
         "read": lambda: read_tool(
-            cwd=cwd,
+            cwd=file_cwd,
             reader=reader,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
         "find": lambda: find_tool(
-            cwd=cwd,
+            cwd=file_cwd,
+            reader=search_reader,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
@@ -201,12 +241,14 @@ def base_harness_tools(
             approval_callback=approval_callback,
         ),
         "patch": lambda: patch_tool(
-            cwd=cwd,
+            cwd=file_cwd,
+            reader=reader,
+            writer=writer,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
         "write": lambda: write_tool(
-            cwd=cwd,
+            cwd=file_cwd,
             writer=writer,
             permissions=permissions,
             approval_callback=approval_callback,
@@ -214,13 +256,31 @@ def base_harness_tools(
         _PLAN_TOOL_NAME: plan_tool,
         "bash": lambda: bash_tool(
             cwd=cwd,
+            executor=bash_executor,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
         "agent": agent_tool,
     }
 
-    return tuple(factories[name]() for name in selected_names)
+    definitions = tuple(factories[name]() for name in selected_names)
+    if not injected:
+        return definitions
+
+    # Each selected tool carries the boundary, including process-only selections.
+    guidance = (
+        f"File tools (read, write, find, patch) use injected storage with working "
+        f"directory {str(storage_cwd)!r}. Grep uses the harness process filesystem; "
+        f"bash uses its executor filesystem, with configured workspace "
+        f"{str(cwd) if cwd is not None else str(Path.cwd())!r}. "
+        "Storage paths and process paths are not interchangeable. Use a process "
+        "tool on a storage file only when the host provides an explicit path mapping."
+    )
+
+    return tuple(
+        replace(definition, prompt_guidelines=(*definition.prompt_guidelines, guidance))
+        for definition in definitions
+    )
 
 
 def render_harness_tools_prompt(

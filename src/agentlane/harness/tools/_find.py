@@ -1,19 +1,24 @@
 """Find tool implementation for first-party harness base tools."""
 
-import os
+import asyncio
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from pydantic import BaseModel, Field
 from wcmatch import glob as wcmatch_glob
 from wcmatch.glob import WcMatcher
 
+from agentlane.harness.filesystem import (
+    LocalFileSystem,
+    ReadableFileSystem,
+    normalize_relative_path,
+)
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._gitignore import GitignoreMatcher
 from ._output import FIND_DEFAULT_LIMIT, TEXT_MAX_BYTES
-from ._paths import ToolPathResolver
+from ._paths import RelativeToolPathResolver, ToolPathResolver
 from ._permissions import (
     ToolApprovalCallback,
     ToolOperation,
@@ -25,7 +30,7 @@ from ._types import HarnessToolDefinition
 
 _TOOL_NAME = "find"
 _TOOL_DESCRIPTION = (
-    "Searches local files by glob pattern. Returns paths relative to the "
+    "Searches files by glob pattern. Returns paths relative to the "
     "search directory, sorted by modification time (newest first), with ties "
     "broken alphabetically. Use `**/` for recursive matches and `{a,b}` for "
     "brace expansion. Matching is case-insensitive. Symlinked directories are "
@@ -33,9 +38,7 @@ _TOOL_DESCRIPTION = (
     "51200 bytes."
 )
 _TOOL_PROMPT_SNIPPET = "Find files by glob pattern (use `**/` for recursion)"
-_TOOL_PROMPT_GUIDELINE = (
-    "Use find to locate files instead of shelling out to find or ls."
-)
+_TOOL_PROMPT_GUIDELINE = "Use find to locate files in its storage namespace. Use shell commands only for process files outside that namespace."
 _GENERIC_FIND_ERROR = "failed to find files"
 
 # IGNORECASE makes matching consistent across case-sensitive (Linux) and
@@ -87,6 +90,7 @@ class _FindContent:
 def find_tool(
     *,
     cwd: str | Path | None = None,
+    reader: ReadableFileSystem | None = None,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
 ) -> HarnessToolDefinition:
@@ -96,23 +100,35 @@ def find_tool(
         cwd: Optional working directory used to resolve relative search paths.
             When omitted, the current working directory is captured at
             construction time.
+        reader: Optional filesystem with read, list, and metadata capabilities.
+            Injected paths are relative POSIX paths. Missing modification times
+            sort as zero, with the same alphabetical tie-break as local files.
         permissions: Optional policy for search permission decisions.
         approval_callback: Optional callback for approval-required decisions.
 
     Returns:
         HarnessToolDefinition: Executable find tool with prompt metadata.
     """
-    resolver = ToolPathResolver.for_optional(cwd)
+    resolver = (
+        ToolPathResolver.for_optional(cwd)
+        if reader is None
+        else RelativeToolPathResolver.for_optional(cwd)
+    )
+    filesystem = reader if reader is not None else LocalFileSystem()
 
     async def run_find(
         args: _ToolArgs,
         cancellation_token: CancellationToken,
         context: ToolExecutionContext,
     ) -> str:
+        if cancellation_token.is_cancelled:
+            raise asyncio.CancelledError
+
         try:
             return await _find_files(
                 args,
                 resolver=resolver,
+                filesystem=filesystem,
                 permissions=permissions,
                 approval_callback=approval_callback,
                 cancellation_token=cancellation_token,
@@ -136,7 +152,8 @@ def find_tool(
 async def _find_files(
     args: _ToolArgs,
     *,
-    resolver: ToolPathResolver,
+    resolver: ToolPathResolver | RelativeToolPathResolver,
+    filesystem: ReadableFileSystem,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     cancellation_token: CancellationToken,
@@ -166,10 +183,13 @@ async def _find_files(
     if permission_error is not None:
         return permission_error
 
-    if not search_dir.is_dir():
+    info = await asyncio.to_thread(filesystem.stat, str(search_dir))
+    if info is None or not info.is_directory:
         return f"path is not a directory: `{search_dir}`"
 
-    content = _collect_find_content(
+    content = await asyncio.to_thread(
+        _collect_find_content,
+        filesystem=filesystem,
         search_dir=search_dir,
         pattern=_normalize_pattern(pattern),
         requested_limit=args.limit,
@@ -181,20 +201,24 @@ async def _find_files(
 
 def _collect_find_content(
     *,
-    search_dir: Path,
+    search_dir: PurePath,
+    filesystem: ReadableFileSystem,
     pattern: str,
     requested_limit: int,
     cancellation_token: CancellationToken,
 ) -> _FindContent:
     """Collect matching relative paths sorted newest-first by mtime."""
     glob_matcher = wcmatch_glob.compile(pattern, flags=_GLOB_FLAGS)
-    matcher = GitignoreMatcher.from_path(search_dir)
+    matcher = GitignoreMatcher.from_path(search_dir, filesystem=filesystem)
     raw_matches = _matching_paths(
         search_dir=search_dir,
+        filesystem=filesystem,
         glob_matcher=glob_matcher,
         matcher=matcher,
         cancellation_token=cancellation_token,
     )
+
+    # Apply limits after sorting: a later directory may contain the newest match.
     sorted_paths = _sort_by_mtime_desc(raw_matches)
 
     effective_limit = min(requested_limit, FIND_DEFAULT_LIMIT)
@@ -219,49 +243,55 @@ def _collect_find_content(
 
 def _matching_paths(
     *,
-    search_dir: Path,
+    search_dir: PurePath,
+    filesystem: ReadableFileSystem,
     glob_matcher: WcMatcher[str],
     matcher: GitignoreMatcher,
     cancellation_token: CancellationToken,
 ) -> list[tuple[str, float]]:
-    """Return (relative_path, mtime) pairs for files matching the glob.
-
-    `os.walk` is used with the default `followlinks=False` so symlinked
-    directories are not traversed. This avoids cycles and prevents pattern
-    matching from escaping the search directory through symlinks.
-    """
+    """Walk the filesystem interface and collect matching path metadata."""
     matches: list[tuple[str, float]] = []
-    for current_root, directory_names, file_names in os.walk(search_dir, topdown=True):
+    pending = [search_dir]
+
+    while pending:
         if cancellation_token.is_cancelled:
-            break
+            raise asyncio.CancelledError
 
-        root_path = Path(current_root)
-        directory_names[:] = sorted(
-            directory_name
-            for directory_name in directory_names
-            if not matcher.is_ignored(root_path / directory_name, is_dir=True)
-        )
+        root_path = pending.pop()
+        try:
+            entries = filesystem.list_directory(str(root_path))
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
+            # Removed or inaccessible directories are skippable. Other failures
+            # must reach the tool boundary instead of looking like empty results.
+            continue
 
-        for file_name in file_names:
-            file_path = root_path / file_name
-            if matcher.is_ignored(file_path, is_dir=False):
+        directories: list[PurePath] = []
+        for entry in sorted(entries, key=lambda entry: entry.name):
+            if not isinstance(root_path, Path):
+                # A provider entry must not redirect traversal to another path.
+                name = normalize_relative_path(entry.name)
+                if len(name.parts) != 1 or name.as_posix() != entry.name:
+                    raise ValueError("Directory entries must contain one child name")
+
+            path = root_path / entry.name
+            if matcher.is_ignored(path, is_dir=entry.is_directory):
                 continue
 
-            relative_path = file_path.relative_to(search_dir).as_posix()
-            if not glob_matcher.match(relative_path):
+            if entry.is_directory:
+                # Directory links can lead back to an ancestor and create a cycle.
+                if not entry.is_symlink:
+                    directories.append(path)
                 continue
 
-            matches.append((relative_path, _safe_mtime(file_path)))
+            relative = path.relative_to(search_dir).as_posix()
+            if glob_matcher.match(relative):
+                # Listing metadata avoids a backend request for every match.
+                matches.append((relative, entry.modified_time or 0.0))
+
+        # The stack visits the first sorted directory next.
+        pending.extend(reversed(directories))
 
     return matches
-
-
-def _safe_mtime(path: Path) -> float:
-    """Return mtime, or 0.0 when the file disappeared mid-walk."""
-    try:
-        return path.stat().st_mtime
-    except OSError:
-        return 0.0
 
 
 def _sort_by_mtime_desc(matches: list[tuple[str, float]]) -> list[str]:
@@ -331,7 +361,7 @@ def _build_continuation_message(
     )
 
 
-def _format_find_output(search_dir: Path, content: _FindContent) -> str:
+def _format_find_output(search_dir: PurePath, content: _FindContent) -> str:
     """Render the final model-facing tool result."""
     output = [f"Search directory: {search_dir}"]
     if content.paths:

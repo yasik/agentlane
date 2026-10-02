@@ -5,7 +5,7 @@ from pathlib import Path, PurePath
 
 from pydantic import BaseModel, Field
 
-from agentlane.harness.filesystem import FileInfo, FileWriter, LocalFileSystem
+from agentlane.harness.filesystem import FileInfo, LocalFileSystem, WritableFileSystem
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
@@ -17,6 +17,7 @@ from ._permissions import (
     ToolPermissionRequest,
     evaluate_tool_permission,
 )
+from ._storage_write import write_content
 from ._types import HarnessToolDefinition
 
 _TOOL_NAME = "write"
@@ -39,7 +40,7 @@ class _ToolArgs(BaseModel):
 def write_tool(
     *,
     cwd: str | Path | None = None,
-    writer: FileWriter | None = None,
+    writer: WritableFileSystem | None = None,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
 ) -> HarnessToolDefinition:
@@ -99,7 +100,7 @@ async def _write_file(
     args: _ToolArgs,
     *,
     resolver: ToolPathResolver | RelativeToolPathResolver,
-    writer: FileWriter,
+    writer: WritableFileSystem,
     cancellation_token: CancellationToken,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
@@ -117,6 +118,9 @@ async def _write_file(
         return "content is not valid UTF-8"
 
     resolved_path = await asyncio.to_thread(resolver.resolve, args.path)
+
+    # Metadata determines create versus overwrite permissions. Do not open a
+    # writer yet: entering its context may create directories or stage a file.
     parent_info: FileInfo | None = None
     target_info: FileInfo | None = None
     invalid_parent = False
@@ -142,6 +146,7 @@ async def _write_file(
     if permission_error is not None:
         return permission_error
 
+    # Report path details only after the corresponding permission checks pass.
     if target_info is not None and target_info.is_directory:
         return f"path is a directory: `{resolved_path}`"
     if invalid_parent or (parent_info is not None and not parent_info.is_directory):
@@ -150,7 +155,7 @@ async def _write_file(
         raise asyncio.CancelledError
 
     try:
-        await _write_content(writer, str(resolved_path), encoded_content)
+        await write_content(writer, str(resolved_path), encoded_content)
     except (FileExistsError, NotADirectoryError):
         return f"parent path is not a directory: `{resolved_path.parent}`"
     except IsADirectoryError:
@@ -202,6 +207,7 @@ async def _check_write_permissions(
         )
     )
 
+    # Obtain every required grant before the backend creates parents or writes.
     for request in requests:
         permission_error = await evaluate_tool_permission(
             request,
@@ -213,25 +219,3 @@ async def _check_write_permissions(
             return permission_error
 
     return None
-
-
-async def _write_content(writer: FileWriter, path: str, content: bytes) -> None:
-    """Wait for a started write to settle even when the handler is cancelled."""
-    task = asyncio.create_task(asyncio.to_thread(writer.write, path, content))
-    cancelled = False
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError:
-            cancelled = True
-        except Exception:
-            # Retrieve the failure below, after respecting any earlier cancellation.
-            break
-
-    if cancelled:
-        # Consume any worker error before propagating cancellation to the caller.
-        if not task.cancelled():
-            task.exception()
-        raise asyncio.CancelledError
-
-    task.result()
