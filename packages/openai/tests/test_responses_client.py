@@ -223,10 +223,46 @@ def test_responses_client_get_response_converts_and_forwards_configuration() -> 
     assert await_kwargs["input"][1]["role"] == "user"
     assert await_kwargs["tools"][0]["name"] == "echo"
     assert await_kwargs["parallel_tool_calls"] is True
+    assert await_kwargs["tools"][0]["strict"] is True
     assert await_kwargs["text"]["format"]["type"] == "json_schema"
     assert await_kwargs["text"]["format"]["schema"]["properties"] == {
         "message": {"title": "Message", "type": "string"}
     }
+
+
+def test_responses_client_preserves_non_strict_external_tool_schema() -> None:
+    """External tool schemas keep optional and open nested objects unchanged."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+            "options": {"type": "object", "additionalProperties": {"type": "string"}},
+        },
+        "required": ["text"],
+    }
+    original = deepcopy(schema)
+    tool: NativeTool[EchoArgs, str] = NativeTool(
+        name="remote__echo",
+        description="Remote echo",
+        args_model=EchoArgs,
+        handler=_echo_handler,
+        parameters_schema=schema,
+        strict=False,
+        retry_on_timeout=False,
+    )
+    client = ResponsesClient(Config(api_key="test-key", model="gpt-4o"))
+    create_mock = AsyncMock(return_value=_make_response("done"))
+    cast(Any, client)._openai_client.responses.create = create_mock
+
+    asyncio.run(
+        client.get_response(
+            messages=[{"role": "user", "content": "echo"}], tools=Tools(tools=(tool,))
+        )
+    )
+
+    kwargs = cast(Any, create_mock.await_args).kwargs
+    assert kwargs["tools"][0]["strict"] is False
+    assert kwargs["tools"][0]["parameters"] == original == schema
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])

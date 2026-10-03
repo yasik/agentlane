@@ -153,7 +153,7 @@ class ToolExecutor:
 
             with function_span(
                 name=function_name,
-                inputs=raw_arguments,
+                inputs=raw_arguments if tracing.include_data() else None,
                 parent=parent_span,
                 disabled=tracing.is_disabled(),
             ) as span_function:
@@ -165,10 +165,11 @@ class ToolExecutor:
                         result = await _run_tool()
                         await _maybe_await(on_tool_end, call, result)
                         output_text = tool.return_value_as_string(result)
-                        span_function.span_data.output = output_text
+                        if tracing.include_data():
+                            span_function.span_data.output = output_text
                         break
                     except TimeoutError:
-                        if attempts <= max_retries:
+                        if tool.retry_on_timeout and attempts <= max_retries:
                             LOGGER.warning(
                                 "Tool call timed out, retrying",
                                 tool=function_name,

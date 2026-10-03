@@ -238,6 +238,41 @@ def test_litellm_client_forwards_native_tool_schema(
     assert await_kwargs["drop_params"] is True
 
 
+def test_litellm_client_preserves_non_strict_external_tool_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """External tool strictness and optional arguments reach the provider."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string"},
+            "options": {"type": "object", "additionalProperties": True},
+        },
+        "required": ["text"],
+    }
+    tool: Tool[EchoArgs, str] = Tool(
+        name="remote__echo",
+        description="Remote echo",
+        args_model=EchoArgs,
+        handler=_echo_handler,
+        parameters_schema=schema,
+        strict=False,
+    )
+    client = Client(Config(api_key="test-key", model="gpt-4o"))
+    completion_mock = AsyncMock(return_value=_make_model_response("done"))
+    monkeypatch.setattr(litellm, "acompletion", completion_mock)
+
+    asyncio.run(
+        client.get_response(
+            messages=[{"role": "user", "content": "echo"}], tools=Tools(tools=(tool,))
+        )
+    )
+
+    kwargs = cast(Any, completion_mock.await_args).kwargs
+    assert kwargs["tools"][0]["function"]["strict"] is False
+    assert kwargs["tools"][0]["function"]["parameters"] == schema
+
+
 def test_litellm_client_redacts_credentials_from_request_log(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

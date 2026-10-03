@@ -124,6 +124,7 @@ class ToolSpec[ArgsT: BaseModel]:
         description: str,
         args_model: type[ArgsT],
         parameters_schema: dict[str, Any] | None = None,
+        strict: bool | None = None,
     ) -> None:
         """Initialize one model-visible tool schema.
 
@@ -132,13 +133,21 @@ class ToolSpec[ArgsT: BaseModel]:
             description: Human-readable tool description for the model.
             args_model: Pydantic arguments model used for validation.
             parameters_schema: Optional explicit parameters schema override.
+            strict: Provider schema enforcement. None preserves adapter defaults.
+                False keeps inferred optional fields and open objects unchanged.
         """
         self.name = name
         self.description = description
         self._args_model = args_model
-        self._parameters_schema = parameters_schema or ensure_strict_json_schema(
-            args_model.model_json_schema()
-        )
+        self.strict = strict
+        if parameters_schema is not None:
+            self._parameters_schema = parameters_schema
+        elif strict is False:
+            self._parameters_schema = args_model.model_json_schema()
+        else:
+            self._parameters_schema = ensure_strict_json_schema(
+                args_model.model_json_schema()
+            )
 
     @staticmethod
     def from_function(
@@ -148,6 +157,8 @@ class ToolSpec[ArgsT: BaseModel]:
         description: str | None = None,
         formatter: ToolFormatter[Any] | None = None,
         parameters_schema: dict[str, Any] | None = None,
+        strict: bool | None = None,
+        retry_on_timeout: bool = True,
     ) -> "Tool[BaseModel, Any]":
         """Create a tool directly from a normal typed Python callable.
 
@@ -164,6 +175,9 @@ class ToolSpec[ArgsT: BaseModel]:
                 function docstring when present.
             formatter: Optional formatter for converting return values to text.
             parameters_schema: Optional explicit parameters schema override.
+            strict: Provider schema enforcement; None preserves adapter defaults.
+            retry_on_timeout: Allow the executor to retry an outer tool timeout.
+                Set False when a repeat can duplicate a remote side effect.
         """
         tool_name = name or _callable_name(func)
         tool_description = description or _callable_description(func, tool_name)
@@ -202,16 +216,21 @@ class ToolSpec[ArgsT: BaseModel]:
             handler=inferred_handler,
             formatter=formatter,
             parameters_schema=parameters_schema,
+            strict=strict,
+            retry_on_timeout=retry_on_timeout,
         )
 
     @property
     def schema(self) -> dict[str, Any]:
         """Return the model-facing function schema."""
-        return {
+        schema: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "parameters": self._parameters_schema,
         }
+        if self.strict is not None:
+            schema["strict"] = self.strict
+        return schema
 
     def args_type(self) -> type[ArgsT]:
         """Return the pydantic arguments model type for the tool."""
@@ -230,6 +249,8 @@ class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
         handler: ToolHandler[ArgsT, ResultT],
         formatter: ToolFormatter[ResultT] | None = None,
         parameters_schema: dict[str, Any] | None = None,
+        strict: bool | None = None,
+        retry_on_timeout: bool = True,
     ) -> None:
         """Initialize one callable tool definition."""
         super().__init__(
@@ -237,9 +258,11 @@ class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
             description=description,
             args_model=args_model,
             parameters_schema=parameters_schema,
+            strict=strict,
         )
         self._handler = handler
         self._formatter = formatter
+        self.retry_on_timeout = retry_on_timeout
 
     @property
     def handler(self) -> ToolHandler[ArgsT, ResultT]:
@@ -275,6 +298,8 @@ class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
             # Forward the resolved schema, not None, so an explicit
             # parameters_schema override survives the copy unchanged.
             "parameters_schema": self._parameters_schema,
+            "strict": self.strict,
+            "retry_on_timeout": self.retry_on_timeout,
         }
 
     def replace(self, **overrides: Any) -> "Tool[Any, Any]":
@@ -288,7 +313,8 @@ class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
         Args:
             **overrides: Any subset of ``Tool`` constructor keyword arguments
                 (``name``, ``description``, ``args_model``, ``handler``,
-                ``formatter``, ``parameters_schema``).
+                ``formatter``, ``parameters_schema``, ``strict``,
+                ``retry_on_timeout``).
 
         Returns:
             A new ``Tool`` carrying the merged fields.
@@ -362,7 +388,17 @@ class Tool[ArgsT: BaseModel, ResultT](ToolSpec[ArgsT]):
 
 
 @overload
-def as_tool(func: ToolFunction, /) -> Tool[BaseModel, Any]: ...
+def as_tool(
+    func: ToolFunction,
+    /,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    formatter: ToolFormatter[Any] | None = None,
+    parameters_schema: dict[str, Any] | None = None,
+    strict: bool | None = None,
+    retry_on_timeout: bool = True,
+) -> Tool[BaseModel, Any]: ...
 
 
 @overload
@@ -374,6 +410,8 @@ def as_tool(
     description: str | None = None,
     formatter: ToolFormatter[Any] | None = None,
     parameters_schema: dict[str, Any] | None = None,
+    strict: bool | None = None,
+    retry_on_timeout: bool = True,
 ) -> ToolDecorator: ...
 
 
@@ -385,6 +423,8 @@ def as_tool(
     description: str | None = None,
     formatter: ToolFormatter[Any] | None = None,
     parameters_schema: dict[str, Any] | None = None,
+    strict: bool | None = None,
+    retry_on_timeout: bool = True,
 ) -> Tool[BaseModel, Any] | ToolDecorator:
     """Decorate one typed callable and return a native ``Tool``.
 
@@ -399,6 +439,8 @@ def as_tool(
             description=description,
             formatter=formatter,
             parameters_schema=parameters_schema,
+            strict=strict,
+            retry_on_timeout=retry_on_timeout,
         )
 
     def decorator(decorated: ToolFunction) -> Tool[BaseModel, Any]:
@@ -408,6 +450,8 @@ def as_tool(
             description=description,
             formatter=formatter,
             parameters_schema=parameters_schema,
+            strict=strict,
+            retry_on_timeout=retry_on_timeout,
         )
 
     return decorator

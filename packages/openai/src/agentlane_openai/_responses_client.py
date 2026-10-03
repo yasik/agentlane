@@ -881,7 +881,7 @@ class ResponsesClient(Model[TResponseType]):
                         "name": tool.name,
                         "description": tool.description,
                         "parameters": tool.schema.get("parameters", {}),
-                        "strict": True,
+                        "strict": tool.strict if tool.strict is not None else True,
                     }
                 )
             call_args["tools"] = tools_payload

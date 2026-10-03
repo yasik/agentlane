@@ -26,6 +26,10 @@ That makes tracing useful for both debugging and operations. You can see how a
 request moved through a system, and you can also aggregate metrics about that
 system over time.
 
+`ToolExecutor` uses the active model's `ModelTracing` mode when the harness
+runs tools. `ModelTracing.ENABLED_WITHOUT_DATA` records function spans with
+the tool name and timing, and leaves their input and output fields empty.
+
 ## Getting Started
 
 Tracing uses one global

@@ -64,6 +64,17 @@ overall round-trip safety limit. That policy belongs in the models layer
 because it describes what the model is allowed to ask for. The harness then
 decides how those tool calls are executed inside a run.
 
+### Schema and timeout policy
+
+`ToolSpec.strict` defaults to `None`, which keeps each model adapter's default
+schema mode. Set `strict=False` to preserve optional fields and open objects
+in inferred schemas. An explicit `parameters_schema` is passed through
+unchanged; adapters receive the strictness setting with the tool definition.
+
+`Tool.retry_on_timeout` defaults to `True`. Set it to `False` to disable
+automatic timeout retries in `ToolExecutor`, even when
+`Tools.tool_call_max_retries` allows retries.
+
 ### Wrapping And Copying Tools
 
 To adapt an existing tool without rebuilding it field by field, use the copy

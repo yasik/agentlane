@@ -482,6 +482,8 @@ def _explicit_schema_tool() -> Tool[EchoArgs, EchoResult]:
         args_model=EchoArgs,
         handler=_echo_handler,
         formatter=lambda result: f"<<{result.echoed}>>",
+        strict=False,
+        retry_on_timeout=False,
         parameters_schema={
             "type": "object",
             "properties": {"text": {"type": "string"}},
@@ -594,6 +596,8 @@ def test_tool_replace_round_trips_every_observable_field() -> None:
     assert copy.handler is original.handler
     assert copy.formatter is original.formatter
     assert copy.schema["parameters"] == original.schema["parameters"]
+    assert copy.strict is original.strict is False
+    assert copy.retry_on_timeout is original.retry_on_timeout is False
 
 
 def test_tool_constructor_signature_matches_known_copy_fields() -> None:
@@ -622,4 +626,6 @@ def test_tool_constructor_signature_matches_known_copy_fields() -> None:
         "handler",
         "formatter",
         "parameters_schema",
+        "strict",
+        "retry_on_timeout",
     }

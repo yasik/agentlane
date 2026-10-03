@@ -168,3 +168,18 @@ def test_execute_records_no_function_span_when_tracing_disabled(
         span for span in collecting_processor.spans if span.span_data.type == "function"
     ]
     assert function_spans == []
+
+
+def test_execute_without_data_records_metadata_only(
+    collecting_processor: _CollectingTracingProcessor,
+) -> None:
+    """No-data tracing must omit both tool arguments and the result."""
+    _execute_echo(ModelTracing.ENABLED_WITHOUT_DATA)
+
+    spans = [
+        span for span in collecting_processor.spans if span.span_data.type == "function"
+    ]
+    assert len(spans) == 1
+    assert spans[0].span_data.name == "echo"
+    assert spans[0].span_data.input is None
+    assert spans[0].span_data.output is None

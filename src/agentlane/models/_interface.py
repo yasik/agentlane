@@ -179,12 +179,13 @@ class Tools:
     """Timeout in seconds for individual tool calls.
 
     When set, each tool call will be wrapped in asyncio.wait_for with this timeout.
-    On timeout, retries up to tool_call_max_retries times, then returns an error
-    message to the LLM allowing it to self-correct or proceed without the tool result.
+    On timeout, retries up to tool_call_max_retries times when the tool permits
+    timeout retries, then returns an error message to the LLM. A tool with
+    retry_on_timeout=False returns the timeout error without retrying.
     """
 
     tool_call_max_retries: int = 3
-    """Number of retries after timeout (default: 3 retries = 4 total attempts)."""
+    """Timeout retries when the tool permits them (default: 3 = 4 total attempts)."""
 
     tool_call_limits: Mapping[str, int] | None = None
     """Per-tool call limits.  Maps tool name to max allowed calls.
