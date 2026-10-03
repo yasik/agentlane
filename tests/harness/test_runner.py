@@ -673,7 +673,7 @@ def test_runner_forwards_native_model_call_options() -> None:
         runner = Runner()
         model = _SequenceModel([make_assistant_response(content="configured")])
         schema = _StructuredResponse
-        tools = Tools(tools=[])
+        tools = Tools(tools=[_named_tool("echo")])
         agent = Agent(
             runtime,
             runner,

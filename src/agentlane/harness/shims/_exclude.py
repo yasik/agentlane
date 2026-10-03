@@ -2,7 +2,6 @@
 
 from collections.abc import Iterable
 
-from .._tooling import exclude_tools
 from ._base import Shim
 from ._types import PreparedTurn
 
@@ -52,4 +51,4 @@ class ExcludeToolsShim(Shim):
         if not self._names:
             return
 
-        turn.tools = exclude_tools(turn.tools, names=self._names)
+        turn.exclude_tools(self._names)

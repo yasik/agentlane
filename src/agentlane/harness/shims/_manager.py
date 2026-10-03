@@ -6,6 +6,7 @@ from typing import Any, Self
 from agentlane.models import MessageDict, ModelResponse
 from agentlane.models.run import RunContext
 
+from .._cancellation import raise_cleanup_errors
 from .._hooks import RunnerHooks
 from .._run import RunResult, RunState
 from ._base import BoundShim, Shim
@@ -17,6 +18,7 @@ class BoundShimManager:
 
     def __init__(self, sessions: tuple[BoundShim, ...]) -> None:
         self._sessions = sessions
+        self._started_sessions: list[BoundShim] = []
         self._runner_hooks = _collect_runner_hooks(sessions)
 
     @classmethod
@@ -51,13 +53,16 @@ class BoundShimManager:
         transient_state: RunContext[Any],
     ) -> None:
         """Notify bound shims that one run has started."""
+        self._started_sessions = []
         for session in self._sessions:
+            self._started_sessions.append(session)
             await session.on_run_start(state, transient_state)
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         """Let bound shims mutate the prepared turn in order."""
         for session in self._sessions:
             await session.prepare_turn(turn)
+        turn.apply_tool_exclusions()
 
     async def transform_messages(
         self,
@@ -87,8 +92,16 @@ class BoundShimManager:
         transient_state: RunContext[Any],
     ) -> None:
         """Notify bound shims that one run has ended."""
-        for session in self._sessions:
-            await session.on_run_end(result, transient_state)
+        sessions, self._started_sessions = self._started_sessions, []
+        errors: list[BaseException] = []
+        for session in sessions:
+            try:
+                await session.on_run_end(result, transient_state)
+            except BaseException as exc:
+                errors.append(exc)
+
+        if errors:
+            raise_cleanup_errors("Shim cleanup failed.", errors)
 
 
 def _collect_runner_hooks(

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `PreparedTurn.add_tools(...)`, persistent tool exclusions, and
+  `ToolNameCollisionError` for shim tool contributions.
+
+### Fixed
+
+- Clean up started shims after partial startup, continue later cleanup after a
+  callback fails, and preserve the primary startup or run error.
+- Apply tool exclusions and execution budgets after all shim contributions,
+  preserve tool settings through empty name filters, and remove required tool
+  choice when the final tool set is empty.
+
 ## [0.16.0] - 2026-10-01
 
 AgentLane `0.16.0` adds file I/O adapters for native tools and skills, combines local and remote skill roots through one reader, and removes known credentials from LiteLLM request debug logs.

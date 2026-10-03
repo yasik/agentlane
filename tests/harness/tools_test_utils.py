@@ -1,5 +1,6 @@
 import asyncio
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,10 +12,14 @@ from agentlane.models import (
     MessageDict,
     Model,
     ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
     Tool,
     ToolCall,
     ToolExecutionContext,
     Tools,
+    ToolSpec,
+    get_content_or_none,
 )
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span
@@ -22,6 +27,19 @@ from agentlane.tracing import Span
 
 class EchoArgs(BaseModel):
     text: str
+
+
+class EmptyToolArgs(BaseModel):
+    """Arguments for a test schema with no inputs."""
+
+
+def named_tool(name: str) -> ToolSpec[EmptyToolArgs]:
+    """Return a declarative test tool with the given name."""
+    return ToolSpec(
+        name=name,
+        description=f"{name} test tool.",
+        args_model=EmptyToolArgs,
+    )
 
 
 async def echo(
@@ -147,3 +165,44 @@ class SequenceModel(Model[ModelResponse]):
         self.calls.append([dict(message) for message in messages])
         self.call_tools.append(tools)
         return self._responses.pop(0)
+
+
+class StreamingSequenceModel(SequenceModel):
+    """Return queued responses through the normal model stream contract."""
+
+    async def get_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
+        **kwargs: object,
+    ) -> ModelResponse:
+        del messages, extra_call_args, schema, tools, cancellation_token, kwargs
+        raise AssertionError("Streaming tests must call stream_response directly.")
+
+    async def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
+        **kwargs: object,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        response = await super().get_response(
+            messages,
+            extra_call_args=extra_call_args,
+            schema=schema,
+            tools=tools,
+            cancellation_token=cancellation_token,
+            parent_span=parent_span,
+            **kwargs,
+        )
+        content = get_content_or_none(response)
+        if content:
+            yield ModelStreamEvent(kind=ModelStreamEventKind.TEXT_DELTA, text=content)
+        yield ModelStreamEvent(kind=ModelStreamEventKind.COMPLETED, response=response)

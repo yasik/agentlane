@@ -249,8 +249,9 @@ class Agent(Task):
     @on_message
     async def handle_str(self, payload: str, context: MessageContext) -> object:
         """Handle one inbound string run input."""
-        _ = context
-        return await self._enqueue_input(payload)
+        return await self._enqueue_input(
+            payload, cancellation_token=context.cancellation_token
+        )
 
     @on_message
     async def handle_list(
@@ -259,8 +260,9 @@ class Agent(Task):
         context: MessageContext,
     ) -> object:
         """Handle one inbound list-based run input."""
-        _ = context
-        return await self._enqueue_input(list(payload))
+        return await self._enqueue_input(
+            list(payload), cancellation_token=context.cancellation_token
+        )
 
     @on_message
     async def handle_run_state(
@@ -269,5 +271,6 @@ class Agent(Task):
         context: MessageContext,
     ) -> object:
         """Handle one inbound resumable run state."""
-        _ = context
-        return await self._enqueue_input(payload)
+        return await self._enqueue_input(
+            payload, cancellation_token=context.cancellation_token
+        )

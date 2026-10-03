@@ -29,11 +29,13 @@ from agentlane.harness.shims import (
     PreparedTurn,
     Shim,
     ShimBindingContext,
+    ToolNameCollisionError,
 )
 ```
 
 The public surface is `Shim`, `BoundShim`, `DelegatingBoundShim`,
-`DelegatingShim`, `PreparedTurn`, and `ShimBindingContext`.
+`DelegatingShim`, `PreparedTurn`, `ShimBindingContext`, and
+`ToolNameCollisionError`.
 
 ## Mental Model
 
@@ -108,6 +110,8 @@ The most important helpers are:
 3. `append_history_item(...)`
 4. `append_history_items(...)`
 5. `replace_history(...)`
+6. `exclude_tools(...)`
+7. `add_tools(...)`
 
 Use them like this:
 
@@ -118,6 +122,23 @@ Use them like this:
 4. replace the whole history only for persistent rewrite behavior such as
    conversation compaction,
 5. write resumable shim-owned state to `RunState.shim_state`.
+
+Use `exclude_tools(...)` to remove names after all shims prepare the turn.
+Directly filtering `turn.tools` affects only the tools present at that step.
+Exclusions preserve the tool settings during preparation, including when no
+tools remain, so later contributions keep those settings.
+
+Use `add_tools(...)` to merge tool definitions while preserving tool settings
+and collision checks. Local contributions keep first-wins precedence. A
+source that requires unambiguous names passes `require_unique_names=True`.
+A conflicting contribution then raises `ToolNameCollisionError` in either
+shim order, even if another shim filtered the earlier tool out of the current
+configuration. Custom shims that assign `turn.tools` directly bypass this
+registration check.
+
+The runner applies tool-call limits and round-trip limits after all shims
+prepare the turn. If no tools remain, the model receives no tool configuration,
+including a previously required tool choice.
 
 `append_history_item(...)` uses the same run-history item contract as the rest
 of the harness request builder. Supported items include:
@@ -200,7 +221,20 @@ The normal mutation points are:
 
 `on_run_end(...)` is the teardown callback. It receives the final
 `RunResult | None` and the same `transient_state`, and runs once after the
-last turn.
+last turn. It also runs if that session's `on_run_start(...)` began but did not
+finish. Cleanup follows shim order and continues if one callback fails. A
+cleanup failure does not replace the original startup or run error or
+cancellation.
+
+Cancelling the run's `CancellationToken` interrupts awaited shim startup and
+turn preparation. Cleanup still runs for each session whose startup began.
+The cancelled run token does not interrupt cleanup, so teardown callbacks can
+await resource release.
+
+If there is no earlier error or cancellation, cancellation during cleanup
+is propagated as cancellation. Other cleanup failures are reported together
+in an exception group. See [run cancellation](./runner.md#stream-cancellation-and-closure)
+for the public result conventions.
 
 ## Minimal Example
 

@@ -10,7 +10,7 @@ from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
 from .._run import ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX, RunState, ShimState
-from .._tooling import exclude_tools, filter_tools, merge_tools
+from .._tooling import exclude_tools, filter_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._catalog import SkillCatalog
 from ._loader import SkillLoader
@@ -76,7 +76,7 @@ class _BoundSkillsShim(BoundShim):
             )
             turn.append_system_instruction(skills_prompt)
 
-        turn.tools = merge_tools(turn.tools, (self._tool,))
+        turn.add_tools((self._tool,))
         turn.tools = apply_active_skill_tool_filters(
             tools=turn.tools,
             catalog=self._catalog,

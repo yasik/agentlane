@@ -119,16 +119,11 @@ def filter_tools(
     *,
     names: frozenset[str],
 ) -> Tools | None:
-    """Return a copy containing only tools whose names are allowed."""
+    """Filter names while retaining settings for later shim contributions."""
     if tools is None:
-        return None
-    if not names:
         return None
 
     filtered = tuple(tool for tool in tools.normalized_tools if tool.name in names)
-    if not filtered:
-        return None
-
     return _with_tools(tools, filtered)
 
 

@@ -648,8 +648,10 @@ class AgentLifecycle:
                     self._run_state = committed_state
                     result.run_state = copy_run_state(committed_state)
                     _resolve_queued_input(active_input, result)
-                finally:
-                    active_input = None
+
+                # Keep the active input until its outcome is delivered. An
+                # escaping cancellation must still fail its stream or future.
+                active_input = None
 
         except BaseException as exc:
             # Catastrophic failure (cancellation, KeyboardInterrupt, etc.).
@@ -753,7 +755,10 @@ def _set_future_exception(
 ) -> None:
     """Fail a future once, guarding against double-resolution."""
     if not future.done():
-        future.set_exception(exc)
+        if isinstance(exc, asyncio.CancelledError):
+            future.cancel()
+        else:
+            future.set_exception(exc)
 
 
 def _resolve_queued_input(queued_input: _QueuedRunInput, result: RunResult) -> None:

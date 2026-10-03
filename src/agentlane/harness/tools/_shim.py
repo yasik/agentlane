@@ -9,7 +9,6 @@ from agentlane.harness.filesystem import FileReader, FileWriter
 from agentlane.models.run import RunContext
 
 from .._run import RunState, ShimState
-from .._tooling import merge_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._agent import agent_tool
 from ._bash import bash_tool
@@ -75,7 +74,7 @@ class _BoundHarnessToolsShim(BoundShim):
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         self._current_run_state = turn.run_state
         tool_specs = tuple(definition.tool for definition in self._definitions)
-        turn.tools = merge_tools(turn.tools, tool_specs)
+        turn.add_tools(tool_specs)
 
         if self._prompt_block is None:
             return

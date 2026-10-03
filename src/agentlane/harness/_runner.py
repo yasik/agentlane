@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
+import structlog
 from pydantic import BaseModel, ValidationError
 
 from agentlane.messaging import AgentId
@@ -44,7 +45,11 @@ from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken, RuntimeEngine
 from agentlane.tracing import Span, generation_span
 
-from ._cancellation import cancel_task_callback
+from ._cancellation import (
+    cancel_task_callback,
+    cancellation_scope,
+    raise_cleanup_errors,
+)
 from ._events import (
     RunEventEmitter,
     RunEventStream,
@@ -87,6 +92,8 @@ from .shims._manager import BoundShimManager
 
 if TYPE_CHECKING:
     from .tools import ToolApprovalEvent
+
+LOGGER = structlog.get_logger("agentlane.harness.runner")
 
 _AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
 _AGENT_THREAD_LIMIT_REACHED = "Agent thread limit reached. Solve the task yourself."
@@ -412,12 +419,14 @@ class Runner:
 
         # Hook receives the same working copy — safe because the lifecycle
         # already isolated it before calling us.
-        await hooks.on_agent_start(agent, state)
-        if shim_manager is not None:
-            await shim_manager.on_run_start(state, transient_state)
-        if run_events is not None:
-            run_events.state_snapshot(RunStateSnapshotBoundary.RUN_START, state)
+        run_error: BaseException | None = None
         try:
+            await hooks.on_agent_start(agent, state)
+            if shim_manager is not None:
+                async with cancellation_scope(cancellation_token):
+                    await shim_manager.on_run_start(state, transient_state)
+            if run_events is not None:
+                run_events.state_snapshot(RunStateSnapshotBoundary.RUN_START, state)
             # One generation span scopes the entire agent run: every model call
             # records onto it (accumulating usage across turns) and every tool
             # call nests under it, regardless of which turn triggered the tool.
@@ -429,14 +438,17 @@ class Runner:
                     _check_turn_limit(state.turn_count, self._max_turns)
                     prepared_turn = PreparedTurn(
                         run_state=state,
-                        tools=_visible_tools(
-                            runner_task, tool_call_counts, tool_round_trips
-                        ),
+                        tools=runner_task.tools,
                         model_args=_model_args(runner_task),
                         transient_state=transient_state,
                     )
                     if shim_manager is not None:
-                        await shim_manager.prepare_turn(prepared_turn)
+                        async with cancellation_scope(cancellation_token):
+                            await shim_manager.prepare_turn(prepared_turn)
+                    if prepared_turn.tools is not None:
+                        prepared_turn.tools = _limit_tools(
+                            prepared_turn.tools, tool_call_counts, tool_round_trips
+                        )
                     if run_events is not None:
                         run_events.register_delegation_tool_names(
                             _delegation_tool_names(prepared_turn.tools)
@@ -538,12 +550,33 @@ class Runner:
                         run_state=copy_run_state(state),
                     )
                     return result
+        except BaseException as exc:
+            run_error = exc
+            raise
         finally:
+            cleanup_errors: list[BaseException] = []
             if shim_manager is not None:
-                await shim_manager.on_run_end(result, transient_state)
+                try:
+                    await shim_manager.on_run_end(result, transient_state)
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
             if run_events is not None:
-                run_events.state_snapshot(RunStateSnapshotBoundary.RUN_END, state)
-            await hooks.on_agent_end(agent, result)
+                try:
+                    run_events.state_snapshot(RunStateSnapshotBoundary.RUN_END, state)
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            try:
+                await hooks.on_agent_end(agent, result)
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+            if cleanup_errors:
+                if run_error is None:
+                    raise_cleanup_errors("Run cleanup failed.", cleanup_errors)
+
+                LOGGER.warning(
+                    "Run cleanup failed after a run error",
+                    error_types=[type(error).__name__ for error in cleanup_errors],
+                )
 
     async def _run_with_retry(
         self,
@@ -1401,24 +1434,14 @@ def _delegation_tool_names(tools: Tools | None) -> frozenset[str]:
     )
 
 
-def _visible_tools(
-    runner_task: RunnerTask,
-    tool_call_counts: dict[str, int],
-    tool_round_trips: int,
-) -> Tools | None:
-    """Return the effective tools visible for the next model turn."""
-    tools = runner_task.tools
-    if tools is None:
-        return None
-    return _limit_tools(tools, tool_call_counts, tool_round_trips)
-
-
 def _limit_tools(
     tools: Tools,
     tool_call_counts: dict[str, int],
     tool_round_trips: int,
 ) -> Tools | None:
     """Apply tool visibility limits using incremental counters."""
+    if not tools.normalized_tools:
+        return None
     if tools.tool_choice == "none":
         return tools
 
