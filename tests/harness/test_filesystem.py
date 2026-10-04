@@ -28,7 +28,7 @@ from agentlane.io import write_all
         ("references/a.md", "skills/example", "skills/example/references/a.md"),
         ("../other/a.md", "skills/example", "skills/other/a.md"),
         ("./assets/../a.md", ".", "a.md"),
-        ("~user/file.md", ".", "~user/file.md"),
+        ("report~backup/file.md", ".", "report~backup/file.md"),
         (".", ".", "."),
     ],
 )
@@ -65,6 +65,28 @@ def test_relative_path_invalid_input_rejects_escape(path: str) -> None:
 def test_relative_path_invalid_root_rejects_even_if_join_returns_inside() -> None:
     with pytest.raises(ValueError):
         normalize_relative_path("inside/file", root="../outside")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "~",
+        "~/file",
+        "~user/file",
+        "./~/file",
+        "sub/../~/file",
+        "mount/~/file",
+        "mount/~user/file",
+    ],
+)
+@pytest.mark.parametrize("as_root", [False, True])
+def test_relative_path_rejects_home_prefixes(path: str, as_root: bool) -> None:
+    # Mount routing can make a nested component the start of a local path.
+    with pytest.raises(ValueError, match="home-directory"):
+        if as_root:
+            normalize_relative_path("../inside", root=path)
+        else:
+            normalize_relative_path(path)
 
 
 def test_local_filesystem_round_trip_preserves_bytes_and_protocols(

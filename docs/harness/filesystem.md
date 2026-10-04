@@ -98,11 +98,15 @@ Injected file tools use relative POSIX paths. `cwd` defaults to `.` within the
 supplied storage. The adapter owns its physical root and access restrictions.
 `normalize_relative_path(path, root=".")` normalizes paths without local file
 access. It rejects absolute paths, drive paths, backslashes, null bytes, and
-`..` paths that leave the storage root. It does not expand `~`.
+`..` paths that leave the storage root. It also rejects path components that
+start with `~`, including `~user`. Mount routing can expose these components
+to home-directory expansion in a local backend. Names such as `report~backup.txt`
+remain valid. The same rules apply to the storage `cwd`.
 
 The default local tools retain absolute paths and capture the working directory
-at construction. An explicit `LocalFileSystem(root=...)` uses injected path
-rules. Its physical root is a working directory, not a security boundary.
+at construction. A `LocalFileSystem(root=...)` supplied to a file tool uses the
+tool's injected path rules. Its physical root is a working directory, not a
+security boundary.
 
 The base factory keeps the process workspace separate from injected storage:
 

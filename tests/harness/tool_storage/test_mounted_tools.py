@@ -98,6 +98,38 @@ def test_process_and_storage_working_directories_are_independent(
     assert run_tool(tools["bash"], command="pwd").strip() == str(tmp_path)
 
 
+@pytest.mark.parametrize("mounted", [False, True])
+@pytest.mark.parametrize("name", ["read", "write", "find", "patch"])
+def test_injected_local_tools_reject_home_expansion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mounted: bool,
+    name: str,
+) -> None:
+    # Use a real local backend so the test covers expansion after validation.
+    home = tmp_path / "home"
+    home.mkdir()
+    note = home / "note.txt"
+    note.write_text("old\n")
+    monkeypatch.setenv("HOME", str(home))
+    local = LocalFileSystem(tmp_path / "workspace")
+    reader = MountedFileSystem({"local": local}) if mounted else local
+    tools = {d.tool.name: d for d in base_harness_tools(reader=reader)}
+    path = "local/~" if mounted else "~"
+    args: dict[str, object] = {"path": path if name == "find" else f"{path}/note.txt"}
+    if name == "write":
+        args["content"] = "new\n"
+    elif name == "patch":
+        args["edits"] = EDITS
+    elif name == "find":
+        args["pattern"] = "*.txt"
+
+    result = run_tool(tools[name], **args)
+
+    assert result.startswith("failed to")
+    assert note.read_text() == "old\n"
+
+
 def test_mounted_writes_preserve_readonly_mounts_and_roots(
     storage: MemoryFileSystem,
 ) -> None:

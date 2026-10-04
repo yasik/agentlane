@@ -20,7 +20,8 @@ def normalize_relative_path(
 
     Raises:
         ValueError: If a path is empty, absolute, contains a null byte or
-            backslash, or leaves the storage namespace through `..`.
+            backslash, has a component that starts with `~`, or leaves the
+            storage namespace through `..`.
     """
     path_text = str(path)
     root_text = str(root)
@@ -31,6 +32,9 @@ def normalize_relative_path(
             raise ValueError("path must use POSIX separators and contain no null bytes")
         if PurePosixPath(value).is_absolute() or PureWindowsPath(value).drive:
             raise ValueError("path must be relative to the storage root")
+        # Mount routing can expose any component to a local backend's expanduser.
+        if any(part.startswith("~") for part in PurePosixPath(value).parts):
+            raise ValueError("path must not contain home-directory prefixes")
 
     normalized_root = posixpath.normpath(root_text)
     normalized = posixpath.normpath(posixpath.join(normalized_root, path_text))
