@@ -10,6 +10,7 @@ import pytest
 
 from agentlane.harness.filesystem import BinaryReader, DirectoryEntry, FileInfo
 from agentlane.harness.tools import (
+    ToolOperation,
     ToolPermissionDecision,
     ToolPermissionRequest,
 )
@@ -134,3 +135,24 @@ def fixture_storage() -> MemoryFileSystem:
 @pytest.fixture(name="policy")
 def fixture_policy() -> RecordingPolicy:
     return RecordingPolicy()
+
+
+class SessionWritePolicy:
+    """Allow reads and mutations within one canonical session directory."""
+
+    def __init__(self, root: str) -> None:
+        self.root = PurePosixPath(root)
+        self.requests: list[ToolPermissionRequest] = []
+
+    def check(self, request: ToolPermissionRequest) -> ToolPermissionDecision:
+        self.requests.append(request)
+        if request.operation in (ToolOperation.READ_FILE, ToolOperation.SEARCH_FILES):
+            return ToolPermissionDecision.allow()
+        if request.path is not None and request.path.is_relative_to(self.root):
+            return ToolPermissionDecision.allow()
+        return ToolPermissionDecision.deny()
+
+
+@pytest.fixture(name="session_policy")
+def fixture_session_policy() -> SessionWritePolicy:
+    return SessionWritePolicy("/workspace/sessions/one")

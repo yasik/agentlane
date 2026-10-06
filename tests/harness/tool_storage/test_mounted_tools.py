@@ -61,16 +61,16 @@ def test_file_tools_share_mounted_paths_and_process_tools_keep_workspace(
     tools = {d.tool.name: d for d in base_harness_tools(reader=mounted, cwd=tmp_path)}
     assert (
         run_tool(tools["write"], path="tenant/note.txt", content="old\n")
-        == "Wrote 4 bytes to tenant/note.txt."
+        == "Wrote 4 bytes to /tenant/note.txt."
     )
     assert run_tool(tools["read"], path="tenant/note.txt") == "old"
     assert (
         run_tool(tools["find"], pattern="**/*.txt")
-        == "Search directory: .\ntenant/note.txt"
+        == "Search directory: /\ntenant/note.txt"
     )
     assert (
         run_tool(tools["patch"], path="tenant/note.txt", edits=EDITS)
-        == "Applied 1 edit to tenant/note.txt."
+        == "Applied 1 edit to /tenant/note.txt."
     )
     assert storage.files == {"note.txt": b"new\n"}
 
@@ -94,7 +94,7 @@ def test_process_and_storage_working_directories_are_independent(
     }
     run_tool(tools["write"], path="note", content="old\n")
     assert run_tool(tools["read"], path="note") == "old"
-    assert run_tool(tools["find"], pattern="*") == "Search directory: tenant\nnote"
+    assert run_tool(tools["find"], pattern="*") == "Search directory: /tenant\nnote"
     assert run_tool(tools["bash"], command="pwd").strip() == str(tmp_path)
 
 
@@ -140,7 +140,7 @@ def test_mounted_writes_preserve_readonly_mounts_and_roots(
     assert mounted.stat("unknown/path") is None
     assert (
         run_tool(write_tool(writer=mounted), path="ro/note", content="x")
-        == "permission denied: `ro/note`"
+        == "permission denied: `/ro/note`"
     )
     for root in (".", "rw", "ro"):
         with pytest.raises(IsADirectoryError):
@@ -469,10 +469,12 @@ def test_find_skips_directory_symlink_cycles(tmp_path: Path, injected: bool) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mounted", [False, True])
 async def test_injected_tools_prompt_explains_both_namespaces(
-    storage: MemoryFileSystem, tmp_path: Path
+    storage: MemoryFileSystem, tmp_path: Path, mounted: bool
 ) -> None:
-    definitions = base_harness_tools(reader=storage, cwd=tmp_path, storage_cwd="tenant")
+    reader = MountedFileSystem({"tenant": storage}) if mounted else storage
+    definitions = base_harness_tools(reader=reader, cwd=tmp_path, storage_cwd="tenant")
     shim = HarnessToolsShim(definitions)
     bound = await shim.bind(cast(ShimBindingContext, object()))
     state = RunState(instructions="Base", history=[], responses=[], turn_count=1)
@@ -480,7 +482,20 @@ async def test_injected_tools_prompt_explains_both_namespaces(
 
     # Check the model-visible instructions, not only the tool metadata.
     prompt = cast(str, state.instructions)
-    assert "working directory 'tenant'" in prompt
+    expected_cwd = "/tenant" if mounted else "tenant"
+    assert f"working directory '{expected_cwd}'" in prompt
+    if mounted:
+        assert "working directory `/tenant`" in prompt
+        assert (
+            "Rooted paths refer to the storage namespace, not the host filesystem"
+            in prompt
+        )
+        for name in ("read", "find", "write", "patch"):
+            definition = next(item for item in definitions if item.tool.name == name)
+            assert any(
+                "working directory `/tenant`" in guideline
+                for guideline in definition.prompt_guidelines
+            )
     assert f"configured workspace '{tmp_path}'" in prompt
     assert "Storage paths and process paths are not interchangeable" in prompt
     assert "explicit path mapping" in prompt

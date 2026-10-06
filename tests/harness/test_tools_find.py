@@ -333,6 +333,8 @@ def test_find_tool_prompt_snippet_through_harness_tools_shim(tmp_path: Path) -> 
             "- find: Find files by glob pattern (use `**/` for recursion)\n\n"
             "Guidelines:\n"
             "- Use find to locate files in its storage namespace. Use shell commands only for process files outside that namespace.\n"
+            f"- Relative paths resolve from the working directory `{tmp_path}`. Absolute paths refer to the local filesystem.\n"
+            "- Result paths are relative to the displayed Search directory. Combine that directory with a result path to read it from another working directory.\n"
             "</default_tools>"
         )
 

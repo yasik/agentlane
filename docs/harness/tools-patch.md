@@ -13,7 +13,7 @@ Parameters:
 
 ## Permissions
 
-`patch` resolves `path` through `ToolPathResolver` and checks
+`patch` resolves `path` from its captured cwd in the selected filesystem and checks
 `ToolOperation.MODIFY_FILE` before parsing or applying edits. A denied request
 returns:
 
@@ -31,7 +31,7 @@ An approval-required request returns:
 approval required: patch requires application approval for `/workspace/notes.txt` before execution
 ```
 
-`path` is structured tool input and resolves through `ToolPathResolver`.
+`path` is structured tool input and resolves in the selected filesystem.
 `edits` should contain one or more bare SEARCH/REPLACE blocks without path
 lines:
 
@@ -64,9 +64,11 @@ agent loop can continue.
 ## Injected Storage
 
 Pass `reader=storage, writer=storage` for one storage namespace. Supply both
-capabilities together. Paths use relative POSIX syntax and `cwd` defaults to
-`.`. The tool checks `MODIFY_FILE` before reading the target. The existing
-patch engine applies all edits to content and preserves matching, BOMs, line
+capabilities together in the same namespace. Paths use that namespace and
+`cwd` defaults to its root. Mounted filesystems accept rooted virtual paths;
+relative paths resolve from the captured cwd. Plain injected backends retain
+relative POSIX syntax. The tool checks `MODIFY_FILE` before reading the target.
+The patch engine applies all edits to content and preserves matching, BOMs, line
 endings, and error behavior. The tool opens a writer only after all edits
 succeed. No remote-to-local copy is made.
 

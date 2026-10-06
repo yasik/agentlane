@@ -440,6 +440,7 @@ def test_patch_tool_prompt_metadata_renders_through_shim(tmp_path: Path) -> None
             "them; use write for new files or complete rewrites.\n"
             "- Each patch SEARCH block must match exactly one location; "
             "include enough surrounding lines to make it unique.\n"
+            f"- Relative paths resolve from the working directory `{tmp_path}`. Absolute paths refer to the local filesystem.\n"
             "</default_tools>"
         )
 

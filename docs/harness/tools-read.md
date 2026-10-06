@@ -10,13 +10,15 @@ Parameters:
 
 At construction, pass `reader=` to read from application storage. The native
 schema, text limits, and result format stay the same. The reader receives
-relative POSIX paths; `cwd` defaults to its root (`.`). Omit `reader` for local
-files. See [File I/O adapters](filesystem.md) for the stream contract and example.
+paths in its logical namespace; `cwd` defaults to the storage root. Mounted
+readers accept rooted virtual paths and resolve relative paths from `cwd`.
+Plain injected readers retain relative POSIX paths. Omit `reader` for local
+files and the process cwd captured at construction. See [File I/O adapters](filesystem.md) for the stream contract and example.
 
 ## Permissions
 
 For local files, `read` resolves `path` through `ToolPathResolver`. An injected
-reader uses relative storage paths. Both modes check
+reader uses its normalized logical paths. Both modes check
 `ToolOperation.READ_FILE` before opening the file. A denied request returns:
 
 ```text

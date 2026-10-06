@@ -10,7 +10,7 @@ Parameters:
 
 ## Permissions
 
-`find` resolves `path` through `ToolPathResolver` and checks
+`find` resolves `path` from its captured cwd in the selected filesystem and checks
 `ToolOperation.SEARCH_FILES` before directory validation or traversal. A denied
 request returns:
 
@@ -62,8 +62,11 @@ src/**/*.spec.ts
 
 ## Search root, ordering, and traversal
 
-By default `path` is the configured `cwd`. If `path` is provided, output paths
-are relative to that search directory.
+By default `path` is the configured `cwd`. Result paths are relative to the
+resolved `Search directory` shown in the output. To read a result from another
+search directory, combine that directory and the result name. For example,
+`Search directory: /library/docs` with result `guide.md` gives the read path
+`/library/docs/guide.md`. The search does not change the read tool's cwd.
 
 Results are sorted by **modification time, newest first**, with ties broken
 alphabetically. This mirrors the ordering used by editor file pickers and is
@@ -111,7 +114,9 @@ limits, and paths that do not resolve to a directory.
 ## Injected Storage
 
 Pass `reader=storage` with read, listing, and metadata capabilities. Paths use
-relative POSIX syntax and `cwd` defaults to `.`. Local and supplied filesystems
+the reader's namespace and `cwd` defaults to its root. Mounted readers accept
+rooted virtual paths; their displayed search directory is canonical and rooted.
+Plain injected readers retain relative POSIX syntax. Local and supplied filesystems
 use the same traversal, ignore matching, and result limits. Results sort by
 `DirectoryEntry.modified_time`, newest first; missing timestamps count as zero.
 Ties sort alphabetically. Directory symlinks are not followed. Permission

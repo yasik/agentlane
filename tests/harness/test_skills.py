@@ -636,6 +636,8 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
                 "Use this skill for refund questions.\n"
                 "\n"
                 "Skill directory: /skills/refund-policy\n"
+                "Resolve relative references in these instructions from the skill directory. "
+                "Activating this skill does not change the file tools' working directory.\n"
                 "Use read_path values below with the read tool. "
                 "The path attribute is the skill-relative display path.\n"
                 "\n"

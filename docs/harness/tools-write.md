@@ -9,15 +9,17 @@ Parameters:
 2. `content: str`
 
 At construction, pass `writer=` to write to application storage. The native
-schema and result format stay the same. The writer receives relative POSIX
-paths and opens a byte writer; `cwd` defaults to its root (`.`). Omit `writer`
-for local files. See [File I/O interfaces](filesystem.md) for metadata,
+schema and result format stay the same. The writer receives logical paths and
+opens a byte writer; `cwd` defaults to the storage root. Mounted writers accept
+rooted virtual paths and resolve relative paths from `cwd`. Plain injected
+writers retain relative POSIX paths. Omit `writer` for local files: a bare
+`notes.md` then writes under the process cwd captured at construction. See [File I/O interfaces](filesystem.md) for metadata,
 replacement, and cancellation requirements.
 
 ## Permissions
 
 For local files, `write` resolves `path` through `ToolPathResolver`. An injected
-writer uses relative storage paths. Both modes may issue two checks:
+writer uses its normalized logical paths. Both modes can issue two checks:
 `ToolOperation.CREATE_DIRECTORY` for a missing parent directory, then
 `ToolOperation.CREATE_FILE` or `ToolOperation.OVERWRITE_FILE` for the target.
 A denied request returns:

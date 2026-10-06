@@ -101,7 +101,10 @@ not include `ls`.
 Pass `reader=` for `read`, `find`, and `patch`. Pass `writer=` for `write` and
 `patch`, or supply a reader that also implements `WritableFileSystem`. Find
 requires read, listing, and metadata capabilities. Injected file tools use
-`storage_cwd`, which defaults to `.`. Grep uses `cwd` in the harness process
+`storage_cwd`, which defaults to the storage root (`/` for mounts, `.` for
+plain injected backends). Set `storage_cwd="/tenant/sessions/session-123"` to
+resolve bare file names within that mounted directory. Each tool captures its
+cwd; activation of a skill does not change it. Grep uses `cwd` in the harness process
 filesystem. Bash uses `cwd` in its executor filesystem, which can be different
 with a custom executor. Logical mounts do not become process mounts.
 See [File I/O interfaces](./filesystem.md) for construction and path rules.

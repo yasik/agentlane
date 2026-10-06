@@ -11,7 +11,7 @@ from agentlane.io import read_all
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
-from ._paths import RelativeToolPathResolver, ToolPathResolver
+from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
     ToolApprovalCallback,
     ToolOperation,
@@ -62,10 +62,12 @@ def patch_tool(
     Args:
         cwd: Optional working directory used to resolve relative paths. When
             omitted, the current working directory is captured at construction
-            time.
+            time. Mounted backends default to the virtual root; other injected
+            backends default to `.`.
         reader: Optional storage reader. Supply both reader and writer.
-        writer: Writer for the same namespace as reader. Paths are relative POSIX
-            paths. Calls through this tool instance serialize read-edit-write.
+        writer: Writer for the same namespace as reader. Mounted paths are rooted
+            virtual paths; other injected paths remain relative POSIX paths.
+            Calls through this tool instance serialize read-edit-write.
             Callers must coordinate separate tool instances and external writers.
         permissions: Optional policy for modify permission decisions.
         approval_callback: Optional callback for approval-required decisions.
@@ -80,7 +82,7 @@ def patch_tool(
     resolver = (
         ToolPathResolver.for_optional(cwd)
         if reader is None
-        else RelativeToolPathResolver.for_optional(cwd)
+        else StorageToolPathResolver.for_optional(cwd, filesystem=reader)
     )
 
     # One lock keeps tool-local edits ordered without a shared backend registry.
@@ -117,14 +119,14 @@ def patch_tool(
             handler=run_patch,
         ),
         prompt_snippet=_TOOL_PROMPT_SNIPPET,
-        prompt_guidelines=_TOOL_PROMPT_GUIDELINES,
+        prompt_guidelines=(*_TOOL_PROMPT_GUIDELINES, tool_path_guideline(resolver)),
     )
 
 
 async def _patch_file(
     args: _ToolArgs,
     *,
-    resolver: ToolPathResolver | RelativeToolPathResolver,
+    resolver: ToolPathResolver | StorageToolPathResolver,
     reader: FileReader | None,
     writer: FileWriter | None,
     storage_lock: asyncio.Lock,

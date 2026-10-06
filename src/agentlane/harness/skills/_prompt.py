@@ -39,6 +39,7 @@ LOADED_SKILL_TEMPLATE = """
 {{ skill.instructions }}
 
 Skill directory: {{ skill.manifest.root }}
+Resolve relative references in these instructions from the skill directory. Activating this skill does not change the file tools' working directory.
 Use read_path values below with the read tool. The path attribute is the skill-relative display path.
 
 <skill_resources>

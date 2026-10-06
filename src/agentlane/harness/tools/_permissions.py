@@ -61,9 +61,9 @@ class ToolPermissionRequest:
     operation: ToolOperation
     """Operation to authorize before execution."""
     cwd: PurePath
-    """Local working directory or relative directory in injected storage."""
+    """Local working directory or canonical directory in injected storage."""
     path: PurePath | None = None
-    """Local `Path` or storage-relative `PurePosixPath` for this operation."""
+    """Local `Path` or canonical storage `PurePosixPath` for this operation."""
     command: str | None = None
     """Shell command for an execution request."""
     skill_name: str | None = None

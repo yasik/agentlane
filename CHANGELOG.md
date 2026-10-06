@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the optional `FilePathResolver` protocol and `normalize_virtual_path`
+  helper for logical filesystem path resolution without host filesystem access.
+
+### Changed
+
+- Mounted file tools resolve relative paths from a captured virtual working
+  directory and accept rooted paths such as `/tenant/skills/guide.md` from any
+  cwd. Mounted skill manifests, permission requests, and tool results use
+  canonical rooted paths. Update custom mounted policies to use rooted scopes.
+  Relative mount paths still start at the tool's cwd; use a leading `/` to
+  select a mount explicitly from a non-root cwd.
+- File-tool prompt guidance includes each tool's cwd and path rules. Skill
+  activation explains relative resource references without changing tool cwd.
+  Find guidance uses the displayed search directory to anchor result paths.
+
 ## [0.17.0] - 2026-10-04
 
 AgentLane `0.17.0` gives read, write, find, and patch a shared filesystem interface, adds writable mounts, and adds a searchable documentation portal. Custom writer adapters must migrate to the stream interface described below.

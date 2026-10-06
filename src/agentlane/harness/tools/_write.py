@@ -9,7 +9,7 @@ from agentlane.harness.filesystem import FileInfo, LocalFileSystem, WritableFile
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
-from ._paths import RelativeToolPathResolver, ToolPathResolver
+from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
     ToolApprovalCallback,
     ToolOperation,
@@ -48,7 +48,8 @@ def write_tool(
 
     Args:
         cwd: Optional working directory for resolving relative tool paths.
-            Injected writers use a relative storage directory instead.
+            Injected writers use their storage namespace; mounted writers default
+            to the virtual root. Other injected writers default to `.`.
         writer: Optional file writer. Defaults to the local filesystem.
         permissions: Optional policy for create/overwrite permission decisions.
         approval_callback: Optional callback for approval-required decisions.
@@ -59,7 +60,7 @@ def write_tool(
     resolver = (
         ToolPathResolver.for_optional(cwd)
         if writer is None
-        else RelativeToolPathResolver.for_optional(cwd)
+        else StorageToolPathResolver.for_optional(cwd, filesystem=writer)
     )
     file_writer = writer if writer is not None else LocalFileSystem()
 
@@ -92,14 +93,14 @@ def write_tool(
             handler=run_write,
         ),
         prompt_snippet=_TOOL_PROMPT_SNIPPET,
-        prompt_guidelines=(_TOOL_PROMPT_GUIDELINE,),
+        prompt_guidelines=(_TOOL_PROMPT_GUIDELINE, tool_path_guideline(resolver)),
     )
 
 
 async def _write_file(
     args: _ToolArgs,
     *,
-    resolver: ToolPathResolver | RelativeToolPathResolver,
+    resolver: ToolPathResolver | StorageToolPathResolver,
     writer: WritableFileSystem,
     cancellation_token: CancellationToken,
     permissions: ToolPermissionPolicy | None,
@@ -174,7 +175,7 @@ async def _write_file(
 async def _check_write_permissions(
     path: PurePath,
     *,
-    resolver: ToolPathResolver | RelativeToolPathResolver,
+    resolver: ToolPathResolver | StorageToolPathResolver,
     parent_info: FileInfo | None,
     target_info: FileInfo | None,
     permissions: ToolPermissionPolicy | None,

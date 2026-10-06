@@ -443,6 +443,7 @@ def test_read_tool_prompt_metadata_renders_through_shim(tmp_path: Path) -> None:
             "- read: Read file contents\n\n"
             "Guidelines:\n"
             "- Use read to examine files instead of cat or sed.\n"
+            f"- Relative paths resolve from the working directory `{tmp_path}`. Absolute paths refer to the local filesystem.\n"
             "</default_tools>"
         )
 

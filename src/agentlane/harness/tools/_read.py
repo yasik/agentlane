@@ -14,7 +14,7 @@ from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from ._output import TEXT_MAX_BYTES, TEXT_MAX_LINES
-from ._paths import RelativeToolPathResolver, ToolPathResolver
+from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
     ToolApprovalCallback,
     ToolOperation,
@@ -79,7 +79,8 @@ def read_tool(
     Args:
         cwd: Optional working directory used to resolve relative paths. When
             omitted, the current working directory is captured at construction
-            time. Injected readers use a relative storage directory instead.
+            time. Mounted readers default to the virtual root; other injected
+            readers default to `.` within their storage namespace.
         reader: Optional binary file reader. Defaults to the local filesystem.
         permissions: Optional policy for read-file permission decisions.
         approval_callback: Optional callback for approval-required decisions.
@@ -90,7 +91,7 @@ def read_tool(
     resolver = (
         ToolPathResolver.for_optional(cwd)
         if reader is None
-        else RelativeToolPathResolver.for_optional(cwd)
+        else StorageToolPathResolver.for_optional(cwd, filesystem=reader)
     )
     file_reader = reader if reader is not None else LocalFileSystem()
 
@@ -123,14 +124,14 @@ def read_tool(
             handler=run_read,
         ),
         prompt_snippet=_TOOL_PROMPT_SNIPPET,
-        prompt_guidelines=(_TOOL_PROMPT_GUIDELINE,),
+        prompt_guidelines=(_TOOL_PROMPT_GUIDELINE, tool_path_guideline(resolver)),
     )
 
 
 async def _read_file(
     args: _ToolArgs,
     *,
-    resolver: ToolPathResolver | RelativeToolPathResolver,
+    resolver: ToolPathResolver | StorageToolPathResolver,
     reader: FileReader,
     cancellation_token: CancellationToken,
     permissions: ToolPermissionPolicy | None,

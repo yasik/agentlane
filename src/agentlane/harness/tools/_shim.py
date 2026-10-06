@@ -22,6 +22,7 @@ from ._bash_executor import BashExecutor
 from ._find import find_tool
 from ._grep import grep_tool
 from ._patch import patch_tool
+from ._paths import StorageToolPathResolver
 from ._permissions import ToolApprovalCallback, ToolPermissionPolicy
 from ._plan import plan_state_key, plan_tool
 from ._read import read_tool
@@ -174,7 +175,8 @@ def base_harness_tools(
         bash_executor: Optional host command executor for bash. Grep runs in the
             harness process environment; run that environment in the sandbox
             when both tools must access a sandbox workspace.
-        storage_cwd: Relative directory for injected file tools. Defaults to root.
+        storage_cwd: Working directory in injected storage. Defaults to its root.
+            Mounted filesystems accept rooted virtual paths.
             It is independent of the process workspace cwd.
         permissions: Optional permission policy threaded into every tool.
         approval_callback: Optional approval callback threaded into every tool.
@@ -267,10 +269,16 @@ def base_harness_tools(
     if not injected:
         return definitions
 
+    filesystem = reader if reader is not None else writer
+    assert filesystem is not None
+    storage_directory = StorageToolPathResolver.for_optional(
+        storage_cwd, filesystem=filesystem
+    ).cwd
+
     # Each selected tool carries the boundary, including process-only selections.
     guidance = (
         f"File tools (read, write, find, patch) use injected storage with working "
-        f"directory {str(storage_cwd)!r}. Grep uses the harness process filesystem; "
+        f"directory {str(storage_directory)!r}. Grep uses the harness process filesystem; "
         f"bash uses its executor filesystem, with configured workspace "
         f"{str(cwd) if cwd is not None else str(Path.cwd())!r}. "
         "Storage paths and process paths are not interchangeable. Use a process "

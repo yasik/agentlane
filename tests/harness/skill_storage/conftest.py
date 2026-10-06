@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from agentlane.harness.filesystem import LocalFileSystem, MountedFileSystem
+
 from ._reader import MemorySkillReader
 
 
@@ -37,5 +39,36 @@ def fixture_skill_reader() -> MemorySkillReader:
             "skills/refund/references/nested/policy.md": b"Refund within 30 days.\n",
             "skills/refund/scripts/run.py": b"print('refund')\n",
             "skills/refund/notes.md": b"Notes\n",
+        }
+    )
+
+
+@pytest.fixture(name="mounted_skill_filesystem")
+def fixture_mounted_skill_filesystem(
+    tmp_path: Path, local_skill_root: Path, skill_reader: MemorySkillReader
+) -> MountedFileSystem:
+    tenant_root = tmp_path / "tenant"
+    for name, content in skill_reader.files.items():
+        path = tenant_root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    # Both origins contain the same authored reference, with different contents.
+    (tenant_root / "skills/refund/policy.md").write_text(
+        "Tenant refund policy.", encoding="utf-8"
+    )
+    for path in (
+        tenant_root / "skills/refund/SKILL.md",
+        local_skill_root / "review/SKILL.md",
+    ):
+        path.write_text(
+            path.read_text(encoding="utf-8") + "\n[Policy](policy.md)\n",
+            encoding="utf-8",
+        )
+
+    return MountedFileSystem(
+        {
+            "tenant": LocalFileSystem(tenant_root),
+            "packaged": LocalFileSystem(local_skill_root),
         }
     )

@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Protocol, runtime_checkable
 
 from agentlane.io import Reader, Writer
@@ -39,7 +40,9 @@ class DirectoryEntry:
 class FileReader(Protocol):
     """Open files in a storage namespace.
 
-    Injected readers receive relative POSIX paths. The implementation owns the
+    Injected readers receive relative POSIX paths unless they implement
+    `FilePathResolver`, which defines their logical namespace. Mounted child
+    readers receive relative POSIX paths. The implementation owns the
     physical root, credentials, timeouts, and error translation. Use standard
     `OSError` subclasses for file errors. Calls run in worker threads, so each
     call must own its stream and be safe to run alongside other calls.
@@ -47,6 +50,20 @@ class FileReader(Protocol):
 
     def open_read(self, path: str) -> AbstractContextManager[BinaryReader]:
         """Open a binary stream and close it when the context exits."""
+        ...
+
+
+@runtime_checkable
+class FilePathResolver(Protocol):
+    """Optional lexical path resolution for a filesystem's logical namespace.
+
+    File tools use this capability to resolve cwd and tool arguments before
+    permission checks and I/O. Resolution must not depend on mutable cwd state
+    or require that the target exists.
+    """
+
+    def resolve_path(self, path: str, *, cwd: str = "/") -> PurePosixPath:
+        """Return a canonical path in this filesystem's logical namespace."""
         ...
 
 
@@ -61,7 +78,11 @@ class FileStat(Protocol):
 
 @runtime_checkable
 class FileWriter(Protocol):
-    """Open a writer in a storage namespace. Paths are relative POSIX paths."""
+    """Open a writer in the same logical namespace as its reader.
+
+    Paths are relative POSIX paths unless `FilePathResolver` defines a different
+    namespace. Mounted child writers receive relative POSIX paths.
+    """
 
     def open_write(self, path: str) -> AbstractContextManager[Writer]:
         """Create or replace a file and create its parents as needed.

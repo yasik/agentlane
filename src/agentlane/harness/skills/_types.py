@@ -15,10 +15,10 @@ class SkillManifest:
     """Short description of what the skill does and when to use it."""
 
     skill_file: PurePath
-    """Local absolute or reader-relative path to the `SKILL.md` file."""
+    """Path to `SKILL.md` in the local or injected reader's namespace."""
 
     root: PurePath
-    """Local absolute or reader-relative path to the skill directory."""
+    """Path to the skill directory in the local or injected reader's namespace."""
 
     license: str | None = None
     """Optional license string from the frontmatter."""

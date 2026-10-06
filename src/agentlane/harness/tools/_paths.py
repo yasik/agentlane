@@ -4,7 +4,12 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Self
 
-from agentlane.harness.filesystem import normalize_relative_path
+from agentlane.harness.filesystem import (
+    FilePathResolver,
+    FileReader,
+    FileWriter,
+    normalize_relative_path,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,17 +47,43 @@ class ToolPathResolver:
 
 
 @dataclass(frozen=True, slots=True)
-class RelativeToolPathResolver:
+class StorageToolPathResolver:
     """Resolve paths lexically in an injected storage namespace."""
 
     cwd: PurePosixPath
-    """Working directory relative to the storage root."""
+    """Working directory in the provider's logical namespace."""
+
+    path_resolver: FilePathResolver | None = None
+    """Optional provider path rules; absent providers use relative POSIX paths."""
 
     @classmethod
-    def for_optional(cls, cwd: str | Path | None = None) -> Self:
-        """Capture a relative working directory without local filesystem I/O."""
-        return cls(cwd=normalize_relative_path(cwd if cwd is not None else "."))
+    def for_optional(
+        cls,
+        cwd: str | Path | None = None,
+        *,
+        filesystem: FileReader | FileWriter,
+    ) -> Self:
+        """Capture the provider's working directory without host filesystem I/O."""
+        directory = str(cwd) if cwd is not None else "."
+        if isinstance(filesystem, FilePathResolver):
+            return cls(cwd=filesystem.resolve_path(directory), path_resolver=filesystem)
+
+        return cls(cwd=normalize_relative_path(directory))
 
     def resolve(self, path: str | Path) -> PurePosixPath:
         """Resolve a path relative to the captured working directory."""
+        if self.path_resolver is not None:
+            return self.path_resolver.resolve_path(str(path), cwd=self.cwd.as_posix())
+
         return normalize_relative_path(path, root=self.cwd)
+
+
+def tool_path_guideline(resolver: ToolPathResolver | StorageToolPathResolver) -> str:
+    """Describe the same path rules used by this tool instance."""
+    prefix = f"Relative paths resolve from the working directory `{resolver.cwd}`."
+    if isinstance(resolver, ToolPathResolver):
+        return f"{prefix} Absolute paths refer to the local filesystem."
+    if resolver.path_resolver is not None:
+        return f"{prefix} Rooted paths refer to the storage namespace, not the host filesystem."
+
+    return f"{prefix} Paths must remain relative to the storage root."

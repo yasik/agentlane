@@ -18,7 +18,7 @@ from agentlane.runtime import CancellationToken
 
 from ._gitignore import GitignoreMatcher
 from ._output import FIND_DEFAULT_LIMIT, TEXT_MAX_BYTES
-from ._paths import RelativeToolPathResolver, ToolPathResolver
+from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
     ToolApprovalCallback,
     ToolOperation,
@@ -99,9 +99,11 @@ def find_tool(
     Args:
         cwd: Optional working directory used to resolve relative search paths.
             When omitted, the current working directory is captured at
-            construction time.
+            construction time. Mounted backends default to the virtual root;
+            other injected backends default to `.`.
         reader: Optional filesystem with read, list, and metadata capabilities.
-            Injected paths are relative POSIX paths. Missing modification times
+            Mounted paths are rooted virtual paths. Other injected paths
+            remain relative POSIX paths. Missing modification times
             sort as zero, with the same alphabetical tie-break as local files.
         permissions: Optional policy for search permission decisions.
         approval_callback: Optional callback for approval-required decisions.
@@ -112,7 +114,7 @@ def find_tool(
     resolver = (
         ToolPathResolver.for_optional(cwd)
         if reader is None
-        else RelativeToolPathResolver.for_optional(cwd)
+        else StorageToolPathResolver.for_optional(cwd, filesystem=reader)
     )
     filesystem = reader if reader is not None else LocalFileSystem()
 
@@ -145,14 +147,18 @@ def find_tool(
             handler=run_find,
         ),
         prompt_snippet=_TOOL_PROMPT_SNIPPET,
-        prompt_guidelines=(_TOOL_PROMPT_GUIDELINE,),
+        prompt_guidelines=(
+            _TOOL_PROMPT_GUIDELINE,
+            tool_path_guideline(resolver),
+            "Result paths are relative to the displayed Search directory. Combine that directory with a result path to read it from another working directory.",
+        ),
     )
 
 
 async def _find_files(
     args: _ToolArgs,
     *,
-    resolver: ToolPathResolver | RelativeToolPathResolver,
+    resolver: ToolPathResolver | StorageToolPathResolver,
     filesystem: ReadableFileSystem,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,

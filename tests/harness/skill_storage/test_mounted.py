@@ -10,7 +10,9 @@ from pydantic import BaseModel
 from agentlane.harness import RunState, Task
 from agentlane.harness.filesystem import (
     DirectoryEntry,
+    FilePathResolver,
     LocalFileSystem,
+    MountedFileSystem,
     MountedReader,
     SkillReader,
 )
@@ -77,6 +79,55 @@ def test_empty_mounts_returns_empty_listing_and_rejects_unknown_path() -> None:
         reader.list_directory("tenant")
 
 
+def test_mounted_resolver_new_mount_does_not_change_relative_path(
+    skill_reader: MemorySkillReader,
+) -> None:
+    first = MountedReader({"tenant": skill_reader})
+    second = MountedReader({"tenant": skill_reader, "local": skill_reader})
+
+    assert isinstance(first, FilePathResolver)
+    for reader in (first, second):
+        assert reader.resolve_path(
+            "local/notes.md", cwd="/tenant/sessions/current"
+        ) == (PurePosixPath("/tenant/sessions/current/local/notes.md"))
+        assert reader.resolve_path(
+            "/local/notes.md", cwd="/tenant/sessions/current"
+        ) == (PurePosixPath("/local/notes.md"))
+
+
+def test_rooted_mount_paths_route_reads_writes_and_metadata(tmp_path: Path) -> None:
+    filesystem = MountedFileSystem({"workspace": LocalFileSystem(tmp_path)})
+
+    filesystem.write("/workspace/session/notes.md", b"Session notes")
+
+    with filesystem.open_read("/workspace/session/notes.md") as stream:
+        assert stream.read() == b"Session notes"
+    assert (tmp_path / "session" / "notes.md").read_bytes() == b"Session notes"
+    assert tuple(filesystem.list_directory("/")) == (
+        DirectoryEntry(name="workspace", is_directory=True),
+    )
+    assert [
+        entry.name for entry in filesystem.list_directory("/workspace/session")
+    ] == ["notes.md"]
+    root_info = filesystem.stat("/")
+    file_info = filesystem.stat("/workspace/session/notes.md")
+    assert root_info is not None and root_info.is_directory
+    assert file_info is not None and not file_info.is_directory
+
+
+def test_unknown_absolute_mount_never_falls_back_to_host(tmp_path: Path) -> None:
+    host_file = tmp_path / "host.txt"
+    host_file.write_text("Host file", encoding="utf-8")
+    filesystem = MountedFileSystem({"workspace": LocalFileSystem(tmp_path)})
+
+    with pytest.raises(FileNotFoundError), filesystem.open_read(str(host_file)):
+        pytest.fail("Host path must not open")
+    with pytest.raises(FileNotFoundError):
+        filesystem.write(str(host_file), b"Changed")
+    assert filesystem.stat(str(host_file)) is None
+    assert host_file.read_text(encoding="utf-8") == "Host file"
+
+
 def test_list_mount_root_and_nested_directory_strips_prefix(
     skill_reader: MemorySkillReader,
 ) -> None:
@@ -91,7 +142,9 @@ def test_list_mount_root_and_nested_directory_strips_prefix(
     assert skill_reader.listed == [".", "skills"]
 
 
-@pytest.mark.parametrize("path", [".", "tenant", "tenant/skills/..", "tenant/.."])
+@pytest.mark.parametrize(
+    "path", [".", "/", "tenant", "/tenant", "tenant/skills/..", "tenant/.."]
+)
 def test_read_namespace_or_mount_root_rejected_before_backend_access(
     skill_reader: MemorySkillReader, path: str
 ) -> None:
@@ -121,7 +174,6 @@ def test_unknown_mount_never_uses_prefix_match_or_fallback(
     "path",
     [
         "",
-        "/tenant/skills",
         "../tenant",
         "tenant/../../escape",
         "tenant\\skills",
@@ -232,7 +284,7 @@ def test_mixed_skill_roots_preserve_duplicate_precedence_and_resources(
     assert loaded.manifest == next(
         manifest for manifest in manifests if manifest.name == "refund"
     )
-    root = roots[0] if remote_first else roots[1]
+    root = f"/{roots[0] if remote_first else roots[1]}"
     assert loaded.manifest.root == PurePosixPath(root) / "refund"
     assert loaded.instructions == (
         "Follow the refund policy."
@@ -263,7 +315,9 @@ def test_single_read_tool_reads_activated_local_and_remote_resources(
                 roots=("tenant/skills", "workspace/.agents/skills"), reader=reader
             )
         )
-        tools_shim = HarnessToolsShim((read_tool(reader=reader),))
+        tools_shim = HarnessToolsShim(
+            (read_tool(reader=reader, cwd="/tenant/sessions/current"),)
+        )
         context = ShimBindingContext(
             task=Task(
                 SingleThreadedRuntimeEngine(),
@@ -291,12 +345,12 @@ def test_single_read_tool_reads_activated_local_and_remote_resources(
         for name, path, expected in (
             (
                 "refund",
-                "tenant/skills/refund/references/nested/policy.md",
+                "/tenant/skills/refund/references/nested/policy.md",
                 "Refund within 30 days.",
             ),
             (
                 "review",
-                "workspace/.agents/skills/review/policy.md",
+                "/workspace/.agents/skills/review/policy.md",
                 "Local review policy.",
             ),
         ):
@@ -312,7 +366,7 @@ def test_single_read_tool_reads_activated_local_and_remote_resources(
 
         assert skills.active_skill_names(state) == ("refund", "review")
         report = await read.run(
-            read.args_type().model_validate({"path": "workspace/report.txt"}),
+            read.args_type().model_validate({"path": "/workspace/report.txt"}),
             CancellationToken(),
         )
         assert report == "Workspace report."
@@ -328,13 +382,13 @@ def test_read_permission_checks_full_normalized_path_before_backend_access(
     definition = read_tool(reader=reader, cwd="tenant/skills", permissions=policy)
 
     assert run_tool(definition, path="refund/./notes.md") == "Notes"
-    assert policy.requests[0].path == PurePosixPath("tenant/skills/refund/notes.md")
-    assert policy.requests[0].cwd == PurePosixPath("tenant/skills")
+    assert policy.requests[0].path == PurePosixPath("/tenant/skills/refund/notes.md")
+    assert policy.requests[0].cwd == PurePosixPath("/tenant/skills")
     skill_reader.opened.clear()
     policy.decision = ToolPermissionDecision.deny()
 
     denied = run_tool(definition, path="refund/notes.md")
 
     assert denied.startswith("permission denied:")
-    assert policy.requests[1].path == PurePosixPath("tenant/skills/refund/notes.md")
+    assert policy.requests[1].path == PurePosixPath("/tenant/skills/refund/notes.md")
     assert skill_reader.opened == []
