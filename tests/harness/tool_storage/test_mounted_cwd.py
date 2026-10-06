@@ -217,7 +217,7 @@ async def test_shared_filesystem_concurrent_session_tools_keep_independent_cwd(
 
     results = await asyncio.gather(session("one"), session("two"))
 
-    assert results == [
+    assert list(results) == [
         ("one", "Search directory: /workspace/sessions/one\nnotes.md"),
         ("two", "Search directory: /workspace/sessions/two\nnotes.md"),
     ]
