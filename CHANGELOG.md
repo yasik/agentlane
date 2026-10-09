@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added application-scoped `MCPClientManager` reuse with bounded connection
+  pooling, idle cleanup, and authorization-aware catalog caching. Catalogs
+  refresh after expiry or tool-list changes and retain only each run's permitted
+  stale fallback.
 - Added `agentlane[mcp]` with Streamable HTTP and stdio servers, native tools,
   and application-managed bearer authorization through `MCPToolsShim`.
 - Added `ToolSpec.strict` for schema handling and `Tool.retry_on_timeout` for

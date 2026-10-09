@@ -13,11 +13,13 @@ from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.mcp import (
     MCPAuthorizationContext,
     MCPAuthorizationError,
+    MCPClientManager,
     MCPDiscoveryError,
     MCPServer,
     MCPStdioTransport,
+    MCPToolsShim,
 )
-from agentlane.harness.mcp._client import MCPClientLease, MCPClientManager
+from agentlane.harness.mcp._client import MCPClientLease
 from agentlane.harness.mcp._shim import (
     _BoundMCPToolsShim,  # pyright: ignore[reportPrivateUsage]
 )
@@ -38,7 +40,6 @@ from ..tools_test_utils import (
     make_assistant_response,
     named_tool,
 )
-from .helpers import ManagedMCPToolsShim as MCPToolsShim
 
 
 class _SourceLease(MCPClientLease):
@@ -246,10 +247,9 @@ async def test_optional_nontransient_failure_is_not_retried(
 @pytest.mark.asyncio
 async def test_inherited_tools_acquire_only_their_owning_servers() -> None:
     manager = _SourceManager()
-    shim = MCPToolsShim(
+    parent = await MCPToolsShim(
         servers=(_server("needed"), _server("unrelated")), client_manager=manager
-    )
-    parent = await shim.bind(_binding())
+    ).bind(_binding())
     context = RunContext[object](context=None)
     child = None
     try:
@@ -257,7 +257,7 @@ async def test_inherited_tools_acquire_only_their_owning_servers() -> None:
         manager.failures["unrelated"] = ConnectionError("no child access")
         inherited = parent.inherit_tools(frozenset({"needed__read"}))
         assert inherited is not None and len(inherited) == 1
-        child = await shim.bind(replace(_binding(), tool_source_bindings=inherited))
+        child = await inherited[0].bind(_binding())
         await child.on_run_start(_state(), context)
         turn = PreparedTurn(run_state=_state(), tools=None, model_args=None)
         await child.prepare_turn(turn)

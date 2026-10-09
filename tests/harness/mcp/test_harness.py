@@ -1,6 +1,5 @@
 """MCP integration with the normal agent lifecycle and tool policies."""
 
-import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeGuard, cast
@@ -24,11 +23,13 @@ from agentlane.harness import (
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.mcp import (
     MCPAuthorizationContext,
+    MCPClientManager,
     MCPDiscoveryError,
     MCPServer,
     MCPStdioTransport,
+    MCPToolsShim,
 )
-from agentlane.harness.mcp._client import MCPClientLease, MCPClientManager
+from agentlane.harness.mcp._client import MCPClientLease
 from agentlane.harness.shims import (
     BoundShim,
     DelegatingBoundShim,
@@ -59,7 +60,6 @@ from ..tools_test_utils import (
     make_assistant_response,
     named_tool,
 )
-from .helpers import ManagedMCPToolsShim as MCPToolsShim
 
 
 class _EmptyArgs(BaseModel):
@@ -84,7 +84,6 @@ class _FakeManager(MCPClientManager):
         return lease
 
     async def aclose(self) -> None:
-        await asyncio.gather(*(lease.release() for lease in self.leases))
         await super().aclose()
 
 

@@ -113,13 +113,20 @@ shim = MCPToolsShim(
 ```
 
 The context `key` must be a stable, non-secret string that identifies the
-authorized user or connection. The optional `value` is opaque application data
-passed to the provider. Each run owns separate connections. Both the provider
-and context value stay in memory.
+authorized user or connection. Different keys isolate connections and cached
+catalogs. The optional `value` is opaque application data passed to the
+provider. Both the provider and context value stay in memory.
+
+Each run lease retains its full authorization context. Discovery, tool calls,
+and their `401` invalidation and retry use that lease's context, including
+when another lease shares the same key with a different value. Connection
+startup, the background tool-change listener, and HTTP session termination
+use the full context of the lease that opened the current connection. A new
+connection records the context of its opener again.
 
 Before each HTTP request and catalog check, AgentLane asks for a current token.
 The provider should reuse a valid token until refresh is needed. A changed token
-or set of scopes invalidates the discovered tools. On `401`, AgentLane invalidates
+or set of scopes invalidates the cached catalog. On `401`, AgentLane invalidates
 that token, requests another, and retries once. Provider errors, a final `401`,
 and `403` are authorization failures. A rejected token, `403`, or provider failure
 also invalidates existing catalogs, even if a later lookup returns the same
@@ -127,44 +134,110 @@ token. AgentLane does not request or store refresh tokens.
 
 ## Connection lifecycle and discovery
 
-The shim opens separate connections for each run and closes them when that run
-ends. Child runs own their connections independently. Reusing a shim definition
-does not retain runtime connections between runs.
+Use one application-scoped `MCPClientManager` for reuse across agents and runs.
+Pass it as `client_manager` to each shim and close it with `aclose()` at
+application shutdown, or use `async with MCPClientManager()`.
+Connections are shared only for matching server settings, provider identity,
+and authorization context key. Without a shared manager, the shim creates and
+closes its own manager for each run.
 
-The shim discovers tools at startup and before each model turn. Each check
-requests all catalog pages. AgentLane and MCP SDK discovery caching are disabled.
-The `max_concurrent_discoveries` parameter on
+Configure pool limits with `MCPClientLimits`. These are the defaults:
+
+```python
+from agentlane.harness.mcp import MCPClientLimits, MCPClientManager
+
+limits = MCPClientLimits(
+    max_connections=64,
+    idle_timeout_seconds=300,
+    shutdown_timeout_seconds=10,
+)
+
+async with MCPClientManager(limits=limits) as manager:
+    shim = MCPToolsShim(servers=(notes,), client_manager=manager)
+    # Create and run agents inside this context.
+```
+
+Opening and closing connections count toward the pool limit. The manager
+closes idle connections after the idle timeout. When the pool is full, it
+first closes the least recently used idle connection. It does not evict a
+connection with a run lease or work in progress. If no connection can be
+evicted, acquisition raises `MCPPoolCapacityError` from
+`agentlane.harness.mcp`. All eviction waits in one acquisition share one
+`shutdown_timeout_seconds` deadline. If cleanup cannot free capacity before
+that deadline, acquisition raises `MCPPoolCapacityError`; cleanup continues
+and keeps its capacity reserved until it finishes. Connection acquisition
+and leases are internal; applications configure the manager and pass it to
+a shim.
+
+The shim checks catalogs at startup and before each model turn. A fresh catalog
+needs no `tools/list` request. The `max_concurrent_discoveries` parameter on
 `MCPToolsShim` limits concurrent server checks to 8 by default. This limit
 covers connection setup and catalog discovery, and does not limit tool execution.
 
-Each discovery sees additions and removals from the server. If returned pages
-use different credentials, discovery restarts once within the same timeout.
+With MCP 2026-07-28, each page's `ttlMs` bounds its
+lifetime from receipt; the earliest page expiry applies to the complete catalog.
+Explicit `ttlMs=0` requires refresh on the next check. `catalog_ttl_seconds`
+caps that lifetime and supplies the fallback when hints are absent or the server
+uses an older protocol. Server TTL hints are also capped at 24 hours.
+Catalogs stay private to the authorization context, including those marked
+`cacheScope="public"` by the server.
+
+Each run receives separate copies of the tool input schemas, including nested
+objects and lists. Changes to a run's schemas do not change the cached catalog
+or another run's schemas.
+
+A tool-list change notification, expiry, or authorization change refreshes the
+tools on the next check, including additions and removals. Confirmation of a
+notification subscription also invalidates catalogs whose discovery started
+before that confirmation. If returned pages use different credentials,
+discovery restarts once within the same timeout.
 Unstable authorization fails discovery without publishing a mixed catalog.
 Authorization is checked again before the first HTTP tool request. Credentials
 must still match discovery before that request is sent. The single refresh and
 retry after an explicit `401` remains supported.
-Failed discovery does not reuse the previous tool list.
+
+An active run can use its own last successful catalog after a transient
+transport or timeout failure. New runs cannot use a stale catalog from another
+run. Calls from a retained catalog use the current connection. Authorization
+changes or failures, schema errors, and protocol errors do not allow this
+fallback.
 
 Servers are required by default: a connection or discovery failure stops the
 run before the next model call. Set `required=False` to let the run continue
 without tools from an unavailable server. Optional servers retry transient
-connection and timeout failures on a later turn preparation, even
+connection, timeout, and capacity failures on a later turn preparation, even
 if the first connection attempt failed. The retry delays are 1, 2, 4, 8, 16,
 then 30 seconds between attempts. A successful check resets the delay.
 There are no background retry attempts. Authorization, configuration, and
 protocol failures disable retries for that server for the current run.
 Failures during tool execution return `ToolFailure`.
 
-A lost connection is reopened at the next catalog check. AgentLane does not
-replay a tool call after a transport failure or timeout. The shim cancels active
-work and starts connection cleanup concurrently. It waits up to 10 seconds per
-cleanup attempt. A timeout produces `MCPShutdownTimeoutError` through the
-harness cleanup-error path, while transport cleanup continues in owned
-background tasks. If the run already failed, its original error stays primary.
+A lost connection is reopened at the next catalog check. If a notification
+subscription ends normally or loses its connection, the next catalog check
+reopens the connection, fetches the catalog, and restores the subscription.
+AgentLane does not replay a tool call after a transport failure or timeout.
+Manager shutdown cancels active work and closes connections concurrently.
+The configured shutdown timeout bounds each `aclose()` wait. If cleanup is
+still in progress, `aclose()` raises `MCPShutdownTimeoutError` from
+`agentlane.harness.mcp`.
+Cleanup continues in owned background tasks; another `aclose()` call waits
+for the same cleanup with a new timeout. `manager.closed` means the manager
+rejects new work. It does not mean all transports have finished closing.
+
+At run cleanup, a shim with its own manager calls `aclose()` directly. A shim
+with a shared manager releases its run leases concurrently and leaves the
+manager open. If the last lease closes a failed or incomplete connection,
+`shutdown_timeout_seconds` also bounds that release wait. A timeout raises
+`MCPShutdownTimeoutError` while the connection cleanup continues.
+
+The harness reports cleanup failures in an exception group. If connection
+setup or the run has already failed or was cancelled, cleanup failures do not
+replace that original error or cancellation.
 
 The connection cleanup deadline also covers credential lookup during HTTP
 session termination. Stdio cleanup can continue beyond that deadline while
-the SDK completes its bounded graceful-exit and forced-kill stages.
+the SDK completes its bounded graceful-exit and forced-kill stages. Closing
+connections keep their capacity reserved until cleanup finishes.
 
 ## Timeouts
 
@@ -177,13 +250,14 @@ server = MCPServer(
     connect_timeout_seconds=30,
     discovery_timeout_seconds=30,
     tool_timeout_seconds=120,
+    catalog_ttl_seconds=300,
 )
 ```
 
 These are the defaults, in seconds. The connection limit includes the MCP
 handshake for both transports. `MCPStreamableHTTPTransport` also has
 `connect_timeout_seconds=30` and `read_timeout_seconds=300` for individual HTTP
-operations. These configured timeout values must be finite and greater
+operations. These configured timeout and TTL values must be finite and greater
 than zero.
 
 `discovery_timeout_seconds` covers waiting for another catalog discovery,
@@ -201,8 +275,8 @@ Subagents and handoffs bind inherited MCP tools independently, limited to the
 names allowed by the parent's policy. Child-local tools remain available.
 Only servers that supply inherited tool names are connected in the child.
 Name collisions between inherited and child-local tools raise an error; use
-`OVERRIDE_TOOLS` for intentional replacement. Each child owns separate
-connections, so ending one run does not close another run's connection.
+`OVERRIDE_TOOLS` for intentional replacement. Each child has its own connection
+lease, so ending one run does not close another run's connection.
 
 When an MCP source is wrapped, the child binds the original wrapper chain
 again and gets fresh wrapper state. The restricted source binding selects

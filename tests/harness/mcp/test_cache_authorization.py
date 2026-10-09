@@ -18,6 +18,7 @@ from agentlane.harness.mcp import (
     MCPAccessToken,
     MCPAuthorizationContext,
     MCPAuthorizationError,
+    MCPClientManager,
     MCPDiscoveryError,
     MCPServer,
     MCPStreamableHTTPTransport,
@@ -26,7 +27,6 @@ from agentlane.harness.mcp import (
     _client as mcp_client,  # pyright: ignore[reportPrivateUsage]
 )
 from agentlane.harness.mcp._catalog import get_catalog
-from agentlane.harness.mcp._client import MCPClientManager
 from agentlane.models import ToolFailure
 from agentlane.runtime import CancellationToken
 
@@ -145,7 +145,7 @@ def _server(provider: _Provider, port: int | None = None) -> MCPServer:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["token", "scopes"])
-async def test_discovery_refetches_after_authorization_changes(
+async def test_fresh_catalog_is_refetched_when_authorization_changes(
     fake_peer: _FakePeer, change: str
 ) -> None:
     provider = _Provider()
@@ -166,7 +166,7 @@ async def test_discovery_refetches_after_authorization_changes(
 
 
 @pytest.mark.asyncio
-async def test_scope_order_preserves_existing_tool_authorization(
+async def test_scope_order_does_not_invalidate_same_authorization(
     fake_peer: _FakePeer,
 ) -> None:
     provider = _Provider()
@@ -174,17 +174,15 @@ async def test_scope_order_preserves_existing_tool_authorization(
         lease = await acquire_lease(
             manager, _server(provider), MCPAuthorizationContext(key="u")
         )
-        tool = (await lease.tools())[0]
+        await lease.tools()
         provider.scopes = tuple(reversed(provider.scopes))
         await lease.tools()
-        assert fake_peer.list_calls == 2
-        result = await tool.run(tool.args_type()(), CancellationToken())
-        assert not isinstance(result, ToolFailure)
+        assert fake_peer.list_calls == 1
         await lease.release()
 
 
 @pytest.mark.asyncio
-async def test_provider_error_blocks_discovery_and_later_transport_fallback(
+async def test_provider_error_blocks_fresh_catalog_and_later_stale_fallback(
     fake_peer: _FakePeer,
 ) -> None:
     provider = _Provider()
@@ -205,7 +203,7 @@ async def test_provider_error_blocks_discovery_and_later_transport_fallback(
 
 
 @pytest.mark.asyncio
-async def test_rotated_authorization_never_restores_previous_tools_after_failure(
+async def test_rotated_authorization_cannot_use_stale_catalog_after_refresh_failure(
     fake_peer: _FakePeer,
 ) -> None:
     provider = _Provider()
@@ -225,7 +223,7 @@ async def test_rotated_authorization_never_restores_previous_tools_after_failure
 
 
 @pytest.mark.asyncio
-async def test_reconnect_failure_checks_authorization_before_discovery(
+async def test_reconnect_failure_checks_authorization_before_stale_fallback(
     fake_peer: _FakePeer,
 ) -> None:
     provider = _Provider()
@@ -257,8 +255,13 @@ async def test_authorization_change_before_discovery_publication_rejects_catalog
         )
         catalog = get_catalog
 
-        async def invalidate_after_catalog(connection: Any) -> Any:
-            snapshot = await catalog(connection)
+        async def invalidate_after_catalog(
+            connection: Any, *, expected_authorization_generation: int
+        ) -> Any:
+            snapshot = await catalog(
+                connection,
+                expected_authorization_generation=expected_authorization_generation,
+            )
             # Run after the discovery task finishes, before its caller resumes.
             asyncio.get_running_loop().call_soon(connection.authorization.reject)
             return snapshot
@@ -404,38 +407,7 @@ async def _http_peer(port: int, peer: _HTTPPeer) -> AsyncIterator[MCPServer]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["token", "scopes", "mint", "none"])
-async def test_http_authorization_is_checked_before_first_tool_request(
-    unused_tcp_port: int, change: str
-) -> None:
-    peer = _HTTPPeer()
-    async with (
-        _http_peer(unused_tcp_port, peer) as server,
-        MCPClientManager() as manager,
-    ):
-        lease = await acquire_lease(manager, server, MCPAuthorizationContext(key="u"))
-        tool = (await lease.tools())[0]
-        if change == "token":
-            peer.provider.token = _token("rotated")
-        elif change == "scopes":
-            peer.provider.scopes = ("read",)
-        elif change == "mint":
-            peer.provider.mint_each_lookup = True
-
-        result = await tool.run(tool.args_type()(), CancellationToken())
-        if change == "none":
-            assert not isinstance(result, ToolFailure)
-            assert peer.calls == 1
-        else:
-            assert isinstance(result, ToolFailure)
-            assert result.error.kind == "mcp_authorization"
-            assert peer.calls == 0
-        assert peer.listed == [("initial", None)]
-        await lease.release()
-
-
-@pytest.mark.asyncio
-async def test_http_successful_token_retry_requires_new_discovery(
+async def test_http_successful_token_retry_invalidates_fresh_catalog(
     unused_tcp_port: int,
 ) -> None:
     peer = _HTTPPeer(reject_initial_calls=True)
@@ -501,7 +473,7 @@ async def test_http_token_retry_during_pagination_never_publishes_mixed_catalog(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [401, 403])
-async def test_http_authorization_rejection_forbids_previous_tools_after_failure(
+async def test_http_authorization_rejection_forbids_later_stale_fallback(
     unused_tcp_port: int, status: int
 ) -> None:
     peer = _HTTPPeer(provider=_Provider(rotate_on_invalidation=False))
@@ -553,4 +525,35 @@ async def test_http_concurrent_token_retry_discards_inflight_old_catalog(
             release.set()
             discovery.cancel()
             await asyncio.gather(discovery, return_exceptions=True)
+        await lease.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["token", "scopes", "mint", "none"])
+async def test_http_authorization_is_checked_before_first_tool_request(
+    unused_tcp_port: int, change: str
+) -> None:
+    peer = _HTTPPeer()
+    async with (
+        _http_peer(unused_tcp_port, peer) as server,
+        MCPClientManager() as manager,
+    ):
+        lease = await acquire_lease(manager, server, MCPAuthorizationContext(key="u"))
+        tool = (await lease.tools())[0]
+        if change == "token":
+            peer.provider.token = _token("rotated")
+        elif change == "scopes":
+            peer.provider.scopes = ("read",)
+        elif change == "mint":
+            peer.provider.mint_each_lookup = True
+
+        result = await tool.run(tool.args_type()(), CancellationToken())
+        if change == "none":
+            assert not isinstance(result, ToolFailure)
+            assert peer.calls == 1
+        else:
+            assert isinstance(result, ToolFailure)
+            assert result.error.kind == "mcp_authorization"
+            assert peer.calls == 0
+        assert peer.listed == [("initial", None)]
         await lease.release()

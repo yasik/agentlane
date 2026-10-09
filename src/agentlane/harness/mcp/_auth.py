@@ -28,13 +28,15 @@ class MCPAuthorizationState:
         self, server: MCPServer, context: MCPAuthorizationContext
     ) -> MCPAccessToken | None:
         provider = server.authorization
+        operation = current_mcp_operation()
         if provider is None:
+            if operation is not None:
+                operation.authorization_generation = self.generation
             return None
 
         # Complete provider lookups in order, so a delayed older lookup cannot
         # overwrite the credential identity observed by a newer lookup.
         async with self._lock:
-            operation = current_mcp_operation()
             try:
                 token = await provider.get_access_token(server, context)
                 self.secrets.add(token.token)
@@ -105,7 +107,14 @@ def product_bearer_auth(
                 return
 
             operation = current_mcp_operation()
-            token = await authorization.get_token(server, context)
+            # Capture one caller for the whole exchange, including 401 recovery.
+            # Requests without a lease use the transport's lifecycle identity.
+            request_context = (
+                operation.authorization_context
+                if operation is not None and operation.authorization_context is not None
+                else context
+            )
+            token = await authorization.get_token(server, request_context)
             assert token is not None
             # The provider can rotate credentials after the lease checked its
             # tool binding. Reject that change before sending the first call.
@@ -137,8 +146,8 @@ def product_bearer_auth(
                 operation.retry_reason = "unauthorized"
 
             try:
-                await provider.invalidate_access_token(server, context, token)
-                replacement = await authorization.get_token(server, context)
+                await provider.invalidate_access_token(server, request_context, token)
+                replacement = await authorization.get_token(server, request_context)
                 assert replacement is not None
             except Exception:
                 authorization.reject()
@@ -166,7 +175,9 @@ def product_bearer_auth(
 
             if retry_response.status_code == 401:
                 try:
-                    await provider.invalidate_access_token(server, context, replacement)
+                    await provider.invalidate_access_token(
+                        server, request_context, replacement
+                    )
                 except Exception:
                     raise MCPAuthorizationError(
                         "MCP rejected-token invalidation failed."

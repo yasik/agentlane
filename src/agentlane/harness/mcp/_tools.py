@@ -5,6 +5,7 @@ import hashlib
 import re
 import time
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from typing import Any
 
 import structlog
@@ -54,7 +55,8 @@ def native_tool(
         name=_visible_tool_name(server.name, remote_tool.name),
         description=f"[{server.name}] {description}",
         args_model=_MCPArguments,
-        parameters_schema=remote_tool.input_schema,
+        # Native tools belong to a run; the cached catalog stays private.
+        parameters_schema=deepcopy(remote_tool.input_schema),
         handler=handler,
         strict=False,
         retry_on_timeout=False,

@@ -21,13 +21,13 @@ from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.mcp import (
     MCPAccessToken,
     MCPAuthorizationContext,
+    MCPClientManager,
     MCPResultPolicy,
     MCPServer,
     MCPStreamableHTTPTransport,
     MCPToolsShim,
 )
 from agentlane.harness.mcp._auth import product_bearer_auth, record_http_failure
-from agentlane.harness.mcp._client import MCPClientManager
 from agentlane.harness.mcp._operation import mcp_operation
 from agentlane.harness.mcp._redaction import contains_secret_key, redact_known_secrets
 from agentlane.harness.mcp._result import render_mcp_result
@@ -642,7 +642,7 @@ async def test_sdk_logs_obey_boundary_without_affecting_unrelated_logs(
 async def test_real_agent_events_and_snapshot_do_not_persist_credentials(
     unused_tcp_port: int,
 ) -> None:
-    async with _http_server(unused_tcp_port) as fixture:
+    async with _http_server(unused_tcp_port) as fixture, MCPClientManager() as manager:
         model = SequenceModel(
             [
                 make_assistant_response(
@@ -665,6 +665,7 @@ async def test_real_agent_events_and_snapshot_do_not_persist_credentials(
                 shims=(
                     MCPToolsShim(
                         servers=(fixture.server,),
+                        client_manager=manager,
                         authorization_context=MCPAuthorizationContext(
                             key="user", value={"credential": _canary("opaque-context")}
                         ),
@@ -808,7 +809,7 @@ async def test_concurrent_practitioners_isolate_auth_sessions_catalogs_and_sse_c
         ),
         authorization=PractitionerProvider(),
     )
-    async with http_server(app, unused_tcp_port):
+    async with http_server(app, unused_tcp_port), MCPClientManager() as manager:
 
         async def run(identity: str) -> None:
             visible_name = f"notes__read_{identity}"
@@ -832,6 +833,7 @@ async def test_concurrent_practitioners_isolate_auth_sessions_catalogs_and_sse_c
                     shims=(
                         MCPToolsShim(
                             servers=(server,),
+                            client_manager=manager,
                             authorization_context=MCPAuthorizationContext(key=identity),
                         ),
                     ),
@@ -848,8 +850,17 @@ async def test_concurrent_practitioners_isolate_auth_sessions_catalogs_and_sse_c
             assert _canary(f"practitioner-{identity}") not in messages
 
         await asyncio.gather(*(run(identity) for identity in practitioners))
-        assert sorted(called) == list(practitioners)
-        assert all(listed.count(identity) == 3 for identity in practitioners)
+        for identity in practitioners:
+            lease = await acquire_lease(
+                manager, server, MCPAuthorizationContext(key=identity)
+            )
+            try:
+                assert [tool.name for tool in await lease.tools()] == [
+                    f"notes__read_{identity}"
+                ]
+            finally:
+                await lease.release()
+        assert sorted(listed) == sorted(called) == list(practitioners)
         assert all(len(ids) == 1 for ids in sessions.values())
         assert sessions["alice"].isdisjoint(sessions["bob"])
         assert len(response_types) == 2

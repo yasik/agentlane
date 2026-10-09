@@ -25,8 +25,7 @@ uv run --env-file .env.local --extra mcp --extra litellm \
 The script prints a JSON report with the observed `tool_calls` and the final
 `answer`. It sets `verified` to `true` after checking that the agent called
 `meetings__search_meetings`, then `meetings__get_meeting`, and returned the
-source record's facts. The shim closes its connections before the report is
-returned.
+source record's facts. The manager closes before the report is returned.
 
 The report includes tool arguments and results. Adapt that output before using
 private meeting data.

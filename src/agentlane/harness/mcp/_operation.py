@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from ._errors import MCPFailureKind
+from ._types import MCPAuthorizationContext
 
 
 @dataclass(slots=True)
@@ -14,6 +15,10 @@ class MCPOperation:
     """Non-persisted outcome metadata for one SDK operation."""
 
     failure_kind: MCPFailureKind | None = None
+    authorization_context: MCPAuthorizationContext | None = field(
+        default=None, repr=False
+    )
+    """Caller identity inherited by nested operations and SDK worker tasks."""
     http_status: int | None = None
     retry_reason: str | None = None
     authorization_generation: int | None = None
@@ -59,7 +64,9 @@ _SDK_LOG_NAMES = (
 
 
 @contextmanager
-def mcp_operation() -> Iterator[MCPOperation]:
+def mcp_operation(
+    *, authorization_context: MCPAuthorizationContext | None = None
+) -> Iterator[MCPOperation]:
     """Scope SDK logs and error metadata to one Agent Lane operation.
 
     The SDK carries the sender's context into its HTTP worker tasks. Each call
@@ -70,7 +77,13 @@ def mcp_operation() -> Iterator[MCPOperation]:
     for name in _SDK_LOG_NAMES:
         logging.getLogger(name).addFilter(_sdk_log_filter)
 
-    operation = MCPOperation()
+    parent = current_mcp_operation()
+    if authorization_context is None and parent is not None:
+        authorization_context = parent.authorization_context
+
+    # Only identity crosses nested scopes. Outcomes and credential generations
+    # describe the new operation, not whichever request created its task.
+    operation = MCPOperation(authorization_context=authorization_context)
     token = _operation.set(operation)
     try:
         yield operation

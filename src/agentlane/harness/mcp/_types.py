@@ -12,6 +12,21 @@ from ._validation import validate_http_url
 
 
 @dataclass(frozen=True, slots=True)
+class MCPClientLimits:
+    """Resource limits for one application-owned MCP client manager."""
+
+    max_connections: int = 64
+    idle_timeout_seconds: float = 300.0
+    shutdown_timeout_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        if type(self.max_connections) is not int or self.max_connections < 1:
+            raise ValueError("MCP max_connections must be at least 1.")
+        _require_positive_timeout(self.idle_timeout_seconds, "idle timeout")
+        _require_positive_timeout(self.shutdown_timeout_seconds, "shutdown timeout")
+
+
+@dataclass(frozen=True, slots=True)
 class MCPRemoteTool:
     name: str
     description: str | None
@@ -21,6 +36,8 @@ class MCPRemoteTool:
 @dataclass(frozen=True, slots=True)
 class MCPCatalog:
     tools: tuple[MCPRemoteTool, ...]
+    revision: int
+    expires_at: float
     authorization_generation: int
 
 
@@ -48,7 +65,7 @@ class MCPAccessToken:
 class MCPAuthorizationContext:
     """Opaque application identity used to isolate MCP connections.
 
-    `key` is a stable, non-secret identity, such as a practitioner ID.
+    `key` is a stable, non-secret cache partition, such as a practitioner ID.
     `value` is passed back to the authorization provider and is never persisted.
     """
 
@@ -166,6 +183,7 @@ class MCPServer:
     connect_timeout_seconds: float = 30.0
     discovery_timeout_seconds: float = 30.0
     tool_timeout_seconds: float = 120.0
+    catalog_ttl_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -178,6 +196,7 @@ class MCPServer:
         _require_positive_timeout(self.connect_timeout_seconds, "connection timeout")
         _require_positive_timeout(self.discovery_timeout_seconds, "discovery timeout")
         _require_positive_timeout(self.tool_timeout_seconds, "tool timeout")
+        _require_positive_timeout(self.catalog_ttl_seconds, "catalog TTL")
 
 
 def _require_positive_timeout(value: float, label: str) -> None:

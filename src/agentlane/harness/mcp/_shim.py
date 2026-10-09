@@ -43,6 +43,7 @@ class _BoundMCPToolsShim(BoundShim):
     servers: tuple[MCPServer, ...]
     authorization_context: MCPAuthorizationContext
     manager: MCPClientManager
+    owns_manager: bool
     max_concurrent_discoveries: int = 8
     inherited_names: frozenset[str] | None = None
     sources: tuple[_SourceState, ...] = ()
@@ -56,7 +57,7 @@ class _BoundMCPToolsShim(BoundShim):
         del state, transient_state
         self.sources = tuple(_SourceState(server) for server in self.servers)
         self.tools = ()
-        if self.manager.closed:
+        if self.owns_manager and self.manager.closed:
             self.manager = MCPClientManager()
         try:
             self.tools = await self._refresh_tools()
@@ -155,6 +156,7 @@ class _BoundMCPToolsShim(BoundShim):
                 if any(tool.name in allowed_names for tool in source.tools)
             ),
             authorization_context=self.authorization_context,
+            client_manager=None if self.owns_manager else self.manager,
             inherited_names=allowed_names,
             max_concurrent_discoveries=self.max_concurrent_discoveries,
         )
@@ -169,11 +171,36 @@ class _BoundMCPToolsShim(BoundShim):
         await self._release_resources()
 
     async def _release_resources(self) -> None:
-        self.sources = ()
+        sources, self.sources = self.sources, ()
         self.tools = ()
-        # The run owns every source. Start all transport cleanup together;
-        # sequential lease releases must not extend the run's close deadline.
-        await self.manager.aclose()
+        errors: list[BaseException] = []
+        if self.owns_manager:
+            try:
+                await self.manager.aclose()
+            except BaseException as exc:
+                errors.append(exc)
+        else:
+            try:
+                # Start every release even if cancellation reaches the batch
+                # before its lease coroutines get their first event-loop turn.
+                results = await asyncio.shield(
+                    asyncio.gather(
+                        *(
+                            source.lease.release()
+                            for source in sources
+                            if source.lease is not None
+                        ),
+                        return_exceptions=True,
+                    )
+                )
+            except BaseException as exc:
+                errors.append(exc)
+            else:
+                errors.extend(
+                    result for result in results if isinstance(result, BaseException)
+                )
+        if errors:
+            raise BaseExceptionGroup("MCP resource cleanup failed.", errors)
 
 
 class MCPToolsShim(Shim):
@@ -184,6 +211,7 @@ class MCPToolsShim(Shim):
         *,
         servers: tuple[MCPServer, ...],
         authorization_context: MCPAuthorizationContext | None = None,
+        client_manager: MCPClientManager | None = None,
         max_concurrent_discoveries: int = 8,
     ) -> None:
         if not servers:
@@ -197,6 +225,7 @@ class MCPToolsShim(Shim):
         self._authorization_context = authorization_context or MCPAuthorizationContext(
             key="anonymous"
         )
+        self._client_manager = client_manager
         self._max_concurrent_discoveries = max_concurrent_discoveries
 
     @property
@@ -214,6 +243,7 @@ class MCPToolsShim(Shim):
             source=self,
             servers=self._servers,
             authorization_context=self._authorization_context,
+            client_manager=self._client_manager,
             max_concurrent_discoveries=self._max_concurrent_discoveries,
         )
 
@@ -224,6 +254,7 @@ async def _bind_mcp_tools(
     source: object,
     servers: tuple[MCPServer, ...],
     authorization_context: MCPAuthorizationContext,
+    client_manager: MCPClientManager | None,
     max_concurrent_discoveries: int,
     inherited_names: frozenset[str] | None = None,
 ) -> BoundShim:
@@ -233,7 +264,8 @@ async def _bind_mcp_tools(
         source=source,
         servers=servers,
         authorization_context=authorization_context,
-        manager=MCPClientManager(),
+        manager=client_manager if client_manager is not None else MCPClientManager(),
+        owns_manager=client_manager is None,
         max_concurrent_discoveries=max_concurrent_discoveries,
         inherited_names=inherited_names,
     )

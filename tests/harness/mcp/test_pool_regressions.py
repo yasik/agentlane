@@ -1,4 +1,4 @@
-"""Connection replacement and bounded shutdown for per-run MCP sources."""
+"""Resource bounds and transport-generation regressions for the MCP pool."""
 
 import asyncio
 import json
@@ -15,13 +15,15 @@ from mcp import types
 from agentlane.harness.mcp import (
     MCPAccessToken,
     MCPAuthorizationContext,
+    MCPClientLimits,
+    MCPClientManager,
+    MCPPoolCapacityError,
     MCPServer,
     MCPShutdownTimeoutError,
     MCPStdioTransport,
     MCPStreamableHTTPTransport,
 )
 from agentlane.harness.mcp import _connection as mcp_connection
-from agentlane.harness.mcp._client import MCPClientManager
 from agentlane.harness.mcp._connection import MCPConnection
 from agentlane.harness.mcp._sdk import load_mcp_dependencies
 from agentlane.models import ToolFailure
@@ -98,13 +100,162 @@ def _server() -> MCPServer:
     return MCPServer(name="peer", transport=MCPStdioTransport(command="fixture"))
 
 
+def _pool_size(manager: MCPClientManager) -> int:
+    connections = manager._connections  # pyright: ignore[reportPrivateUsage]
+    retiring = manager._retiring  # pyright: ignore[reportPrivateUsage]
+    return len(connections) + len(retiring)
+
+
 @pytest.mark.asyncio
-async def test_cancelled_reconnect_waiter_preserves_concurrent_discovery(
+async def test_pool_evicts_idle_identities_before_opening_replacements(
+    peer: _Peer,
+) -> None:
+    async with MCPClientManager(MCPClientLimits(max_connections=2)) as manager:
+        for index in range(8):
+            lease = await acquire_lease(
+                manager, _server(), MCPAuthorizationContext(key=str(index))
+            )
+            assert _pool_size(manager) <= 2
+            assert sum(not item.closing for item in peer.opened) <= 2
+            await lease.release()
+        assert len(peer.opened) == 8
+        assert _pool_size(manager) == 2
+    assert all(
+        item.owner_task is not None and item.owner_task.done() for item in peer.opened
+    )
+    assert _pool_size(manager) == 0
+
+
+@pytest.mark.asyncio
+async def test_pool_rejects_capacity_without_evicting_active_lease(peer: _Peer) -> None:
+    async with MCPClientManager(MCPClientLimits(max_connections=1)) as manager:
+        active = await acquire_lease(
+            manager, _server(), MCPAuthorizationContext(key="active")
+        )
+        with pytest.raises(MCPPoolCapacityError) as caught:
+            await acquire_lease(
+                manager, _server(), MCPAuthorizationContext(key="other")
+            )
+        assert caught.value.retryable
+        assert not peer.opened[0].closing
+        assert len(await active.tools()) == 1
+        await active.release()
+
+
+@pytest.mark.asyncio
+async def test_pool_counts_connections_while_startup_is_pending(peer: _Peer) -> None:
+    peer.opening_gate = asyncio.Event()
+    async with MCPClientManager(MCPClientLimits(max_connections=1)) as manager:
+        pending = asyncio.create_task(
+            acquire_lease(manager, _server(), MCPAuthorizationContext(key="opening"))
+        )
+        try:
+            async with asyncio.timeout(1):
+                while not peer.opened:
+                    await asyncio.sleep(0)
+            with pytest.raises(MCPPoolCapacityError):
+                await acquire_lease(
+                    manager, _server(), MCPAuthorizationContext(key="other")
+                )
+            peer.opening_gate.set()
+            lease = await pending
+            await lease.release()
+        finally:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_pool_idle_deadline_releases_resources_without_new_acquisition(
+    peer: _Peer,
+) -> None:
+    async with MCPClientManager(MCPClientLimits(idle_timeout_seconds=0.02)) as manager:
+        lease = await acquire_lease(
+            manager, _server(), MCPAuthorizationContext(key="idle")
+        )
+        await lease.release()
+        async with asyncio.timeout(1):
+            while _pool_size(manager):
+                await asyncio.sleep(0.005)
+        assert peer.opened[0].owner_task is not None
+        assert peer.opened[0].owner_task.done()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_still_returns_its_pool_capacity(peer: _Peer) -> None:
+    async with MCPClientManager(MCPClientLimits(max_connections=1)) as manager:
+        lease = await acquire_lease(
+            manager, _server(), MCPAuthorizationContext(key="first")
+        )
+        async with manager._lock:  # pyright: ignore[reportPrivateUsage]
+            releasing = asyncio.create_task(lease.release())
+            await asyncio.sleep(0)
+            releasing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await releasing
+        await lease.release()
+        replacement = await acquire_lease(
+            manager, _server(), MCPAuthorizationContext(key="second")
+        )
+        assert len(peer.opened) == 2
+        assert peer.opened[0].closing
+        await replacement.release()
+
+
+@pytest.mark.asyncio
+async def test_pool_does_not_retire_a_call_after_its_lease_is_released(
+    peer: _Peer,
+) -> None:
+    peer.call_gate = asyncio.Event()
+    async with MCPClientManager(
+        MCPClientLimits(max_connections=1, idle_timeout_seconds=0.01)
+    ) as manager:
+        lease = await acquire_lease(
+            manager, _server(), MCPAuthorizationContext(key="active")
+        )
+        tool = (await lease.tools())[0]
+        call = asyncio.create_task(tool.run(tool.args_type()(), CancellationToken()))
+        await peer.call_started.wait()
+        await lease.release()
+        await asyncio.sleep(0.03)
+        assert not peer.opened[0].closing
+        with pytest.raises(MCPPoolCapacityError):
+            await acquire_lease(
+                manager, _server(), MCPAuthorizationContext(key="other")
+            )
+        peer.call_gate.set()
+        assert not isinstance(await call, ToolFailure)
+        async with asyncio.timeout(1):
+            while _pool_size(manager):
+                await asyncio.sleep(0.005)
+
+
+@pytest.mark.asyncio
+async def test_stale_catalog_dispatches_once_on_live_replacement(peer: _Peer) -> None:
+    async with MCPClientManager() as manager:
+        lease = await acquire_lease(
+            manager, _server(), MCPAuthorizationContext(key="identity")
+        )
+        await lease.tools()
+        peer.opened[0].failed = True
+        peer.fail_refresh = True
+        tool = (await lease.tools())[0]
+        assert len(peer.opened) == 2
+        result = await tool.run(tool.args_type()(), CancellationToken())
+        assert not isinstance(result, ToolFailure)
+        assert peer.calls == [1]
+        assert peer.opened[0].closing
+        await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_reconnect_waiter_does_not_cancel_shared_startup(
     peer: _Peer,
 ) -> None:
     async with MCPClientManager() as manager:
         context = MCPAuthorizationContext(key="identity")
         first = await acquire_lease(manager, _server(), context)
+        second = await acquire_lease(manager, _server(), context)
         tool = (await first.tools())[0]
         peer.opened[0].failed = True
         peer.opening_gate = asyncio.Event()
@@ -113,7 +264,7 @@ async def test_cancelled_reconnect_waiter_preserves_concurrent_discovery(
         async with asyncio.timeout(1):
             while len(peer.opened) < 2:
                 await asyncio.sleep(0)
-        other_discovery = asyncio.create_task(first.tools())
+        other_discovery = asyncio.create_task(second.tools())
         token.cancel()
         result = await asyncio.wait_for(call, timeout=0.2)
         assert isinstance(result, ToolFailure)
@@ -123,10 +274,11 @@ async def test_cancelled_reconnect_waiter_preserves_concurrent_discovery(
         peer.opening_gate.set()
         assert len(await asyncio.wait_for(other_discovery, timeout=1)) == 1
         await first.release()
+        await second.release()
 
 
 @pytest.mark.asyncio
-async def test_tool_timeout_includes_reconnect_without_cancelling_owner(
+async def test_tool_timeout_includes_reconnect_without_cancelling_shared_owner(
     peer: _Peer,
 ) -> None:
     async with MCPClientManager() as manager:
@@ -221,7 +373,7 @@ async def test_official_sdk_shutdown_bounds_blocked_cleanup_authorization(
         ),
     )
     monkeypatch.setattr(mcp_connection, "load_mcp_dependencies", lambda: sdk)
-    manager = MCPClientManager(shutdown_timeout_seconds=0.05)
+    manager = MCPClientManager(MCPClientLimits(shutdown_timeout_seconds=0.05))
     lease = await acquire_lease(
         manager,
         MCPServer(
@@ -231,6 +383,7 @@ async def test_official_sdk_shutdown_bounds_blocked_cleanup_authorization(
         ),
         MCPAuthorizationContext(key="identity"),
     )
+    await lease.release()
     provider.closing = True
     try:
         await asyncio.wait_for(manager.aclose(), timeout=1)
@@ -241,5 +394,4 @@ async def test_official_sdk_shutdown_bounds_blocked_cleanup_authorization(
     assert provider.blocked.is_set()
     assert provider.cancelled.is_set()
     assert clients and all(client.is_closed for client in clients)
-    await lease.release()
-    assert manager.closed
+    assert _pool_size(manager) == 0

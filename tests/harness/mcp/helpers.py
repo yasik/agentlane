@@ -10,64 +10,15 @@ from starlette.types import ASGIApp
 
 from agentlane.harness.mcp import (
     MCPAuthorizationContext,
+    MCPClientManager,
     MCPError,
     MCPServer,
-    MCPToolsShim,
 )
 from agentlane.harness.mcp import (
     _client as mcp_client,  # pyright: ignore[reportPrivateUsage]
 )
-from agentlane.harness.mcp._client import MCPClientLease, MCPClientManager
+from agentlane.harness.mcp._client import MCPClientLease
 from agentlane.harness.mcp._connection import MCPConnection
-from agentlane.harness.mcp._shim import (
-    _BoundMCPToolsShim,  # pyright: ignore[reportPrivateUsage]
-)
-from agentlane.harness.shims import BoundShim, ShimBindingContext
-
-
-class _RunTestManager(MCPClientManager):
-    """Give each bound run its own lifetime over shared fake source behavior."""
-
-    def __init__(self, source: MCPClientManager) -> None:
-        super().__init__()
-        self._source = source
-        self._leases: list[MCPClientLease] = []
-
-    async def _acquire(
-        self, server: MCPServer, context: MCPAuthorizationContext
-    ) -> MCPClientLease:
-        lease = await self._source._acquire(server, context)
-        self._leases.append(lease)
-        return lease
-
-    async def aclose(self) -> None:
-        leases, self._leases = self._leases, []
-        try:
-            await asyncio.gather(*(lease.release() for lease in leases))
-        finally:
-            await super().aclose()
-
-
-class ManagedMCPToolsShim(MCPToolsShim):
-    """Bind fake source behavior without adding manager injection to the API."""
-
-    def __init__(
-        self,
-        *,
-        servers: tuple[MCPServer, ...],
-        client_manager: MCPClientManager | None = None,
-        max_concurrent_discoveries: int = 8,
-    ) -> None:
-        super().__init__(
-            servers=servers, max_concurrent_discoveries=max_concurrent_discoveries
-        )
-        self._test_manager = client_manager
-
-    async def bind(self, context: ShimBindingContext) -> BoundShim:
-        bound = await super().bind(context)
-        if isinstance(bound, _BoundMCPToolsShim) and self._test_manager is not None:
-            bound.manager = _RunTestManager(self._test_manager)
-        return bound
 
 
 async def acquire_lease(

@@ -1,6 +1,7 @@
 """Typed lazy boundary for the optional official MCP SDK."""
 
-from contextlib import AbstractContextManager
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, AbstractContextManager
 from dataclasses import dataclass
 from functools import cache
 from importlib import import_module
@@ -24,6 +25,10 @@ class MCPClientProtocol(Protocol):
         self, name: str, arguments: dict[str, Any], *, read_timeout_seconds: float
     ) -> object: ...
 
+    def listen(
+        self, *, tools_list_changed: bool
+    ) -> AbstractAsyncContextManager[AsyncIterator[object]]: ...
+
 
 class MCPShutdownScope(Protocol):
     deadline: float
@@ -42,6 +47,7 @@ def shutdown_scope() -> AbstractContextManager[MCPShutdownScope]:
 class _ToolPage:
     tools: tuple[MCPRemoteTool, ...]
     next_cursor: str | None
+    ttl_ms: int | None
 
 
 class _SDKTool(Protocol):
@@ -53,6 +59,8 @@ class _SDKTool(Protocol):
 class _SDKToolPage(Protocol):
     tools: list[_SDKTool]
     next_cursor: str | None
+    ttl_ms: int
+    model_fields_set: set[str]
 
 
 def read_tool_page(raw_result: object) -> _ToolPage:
@@ -68,6 +76,7 @@ def read_tool_page(raw_result: object) -> _ToolPage:
             for tool in result.tools
         ),
         next_cursor=result.next_cursor,
+        ttl_ms=result.ttl_ms if "ttl_ms" in result.model_fields_set else None,
     )
 
 
@@ -78,8 +87,10 @@ class MCPDependencies:
     client: Any
     stdio: Any
     streamable_http: Any
+    subscriptions: Any
     http: Any
     types: Any
+    modern_protocol_versions: tuple[str, ...]
 
 
 @cache
@@ -90,8 +101,12 @@ def load_mcp_dependencies() -> MCPDependencies:
             client=import_module("mcp").Client,
             stdio=import_module("mcp.client.stdio"),
             streamable_http=import_module("mcp.client.streamable_http"),
+            subscriptions=import_module("mcp.client.subscriptions"),
             http=import_module("httpx2"),
             types=import_module("mcp.types"),
+            modern_protocol_versions=import_module(
+                "mcp_types.version"
+            ).MODERN_PROTOCOL_VERSIONS,
         )
     except ModuleNotFoundError as exc:
         raise MCPDependencyError(
@@ -131,7 +146,12 @@ def exception_kind(exc: BaseException) -> MCPFailureKind:
     if type(exc).__module__.startswith(("httpx2", "anyio")) or isinstance(exc, OSError):
         return MCPFailureKind.TRANSPORT
     if type(exc).__module__.startswith("mcp"):
-        types = load_mcp_dependencies().types
+        sdk = load_mcp_dependencies()
+        # A lost subscription requires a fresh catalog and notification stream.
+        if isinstance(exc, sdk.subscriptions.SubscriptionLost):
+            return MCPFailureKind.TRANSPORT
+
+        types = sdk.types
         code = getattr(exc, "code", None)
         if code == types.CONNECTION_CLOSED:
             return MCPFailureKind.TRANSPORT

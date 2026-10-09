@@ -10,11 +10,12 @@ import pytest
 
 from agentlane.harness.mcp import (
     MCPAuthorizationContext,
+    MCPClientLimits,
+    MCPClientManager,
     MCPServer,
     MCPShutdownTimeoutError,
     MCPStdioTransport,
 )
-from agentlane.harness.mcp._client import MCPClientManager
 
 from .helpers import acquire_lease
 
@@ -31,7 +32,7 @@ async def test_shutdown_deadline_preserves_sdk_process_kill(tmp_path: Path) -> N
             env={"MCP_TEST_PID": str(pid_file)},
         ),
     )
-    manager = MCPClientManager(shutdown_timeout_seconds=0.05)
+    manager = MCPClientManager(MCPClientLimits(shutdown_timeout_seconds=0.05))
     try:
         lease = await acquire_lease(
             manager, server, MCPAuthorizationContext(key="test")

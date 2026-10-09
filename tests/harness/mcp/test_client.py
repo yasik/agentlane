@@ -1,12 +1,9 @@
 """MCP transport, authorization, and native tool integration."""
 
-import asyncio
-import inspect
 import json
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
 
 import httpx2
 import pytest
@@ -14,10 +11,10 @@ from mcp import types
 from mcp.server import MCPServer as SDKServer
 
 from agentlane.harness import RunState, Task
-from agentlane.harness import mcp as mcp_api
 from agentlane.harness.mcp import (
     MCPAccessToken,
     MCPAuthorizationContext,
+    MCPClientManager,
     MCPResultPolicy,
     MCPServer,
     MCPStdioTransport,
@@ -26,10 +23,9 @@ from agentlane.harness.mcp import (
     MCPToolsShim,
 )
 from agentlane.harness.mcp._auth import product_bearer_auth
-from agentlane.harness.mcp._client import MCPClientLease, MCPClientManager
 from agentlane.harness.mcp._result import render_mcp_result
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
-from agentlane.models import Tool, ToolFailure
+from agentlane.models import ToolFailure
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
@@ -83,20 +79,6 @@ def test_tool_filter_applies_include_then_exclude() -> None:
     assert tool_filter.allows("meeting_list") is True
     assert tool_filter.allows("meeting_delete") is False
     assert tool_filter.allows("account_info") is False
-
-
-def test_public_mcp_api_exposes_run_owned_connections_only() -> None:
-    assert "client_manager" not in inspect.signature(MCPToolsShim).parameters
-    assert "catalog_ttl_seconds" not in inspect.signature(MCPServer).parameters
-    assert tuple(inspect.signature(MCPServer).parameters)[:5] == (
-        "name",
-        "transport",
-        "authorization",
-        "tools",
-        "result_policy",
-    )
-    for name in ("MCPClientManager", "MCPClientLimits", "MCPPoolCapacityError"):
-        assert not hasattr(mcp_api, name)
 
 
 def test_result_policy_omits_binary_and_marks_server_errors() -> None:
@@ -262,59 +244,6 @@ async def test_local_shim_manager_can_run_twice_without_persisting_runtime_state
         await bound.on_run_end(None, transient)
 
     assert dict(state.shim_state) == {}
-
-
-@pytest.mark.asyncio
-async def test_bound_runs_own_independent_stdio_processes_and_cleanup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fixture = Path(__file__).parent / "fixtures/math_server.py"
-    shim = MCPToolsShim(
-        servers=(
-            MCPServer(
-                name="math",
-                transport=MCPStdioTransport(
-                    command=sys.executable, args=(str(fixture),)
-                ),
-            ),
-        )
-    )
-    context = ShimBindingContext(task=Task(engine=SingleThreadedRuntimeEngine()))
-    first, second = await shim.bind(context), await shim.bind(context)
-    state = RunState(instructions=None, history=[], responses=[])
-    transient = DefaultRunContext()
-    release_called = False
-
-    async def hanging_release(self: MCPClientLease) -> None:
-        nonlocal release_called
-        del self
-        release_called = True
-        await asyncio.Event().wait()
-
-    try:
-        await asyncio.gather(
-            first.on_run_start(state, transient),
-            second.on_run_start(state, transient),
-        )
-        monkeypatch.setattr(MCPClientLease, "release", hanging_release)
-        await asyncio.wait_for(first.on_run_end(None, transient), 3)
-        turn = PreparedTurn(run_state=state, tools=None, model_args=None)
-        await second.prepare_turn(turn)
-        assert turn.tools is not None
-        tool = turn.tools.normalized_tools[0]
-        assert isinstance(tool, Tool)
-        tool = cast(Tool[Any, object], tool)
-        result = await tool.run(
-            tool.args_type().model_validate({"left": 2, "right": 5}),
-            CancellationToken(),
-        )
-        assert json.loads(str(result))["structuredContent"]["result"] == 7
-        assert not release_called
-    finally:
-        await asyncio.gather(
-            first.on_run_end(None, transient),
-            second.on_run_end(None, transient),
-        )
 
 
 @pytest.mark.asyncio

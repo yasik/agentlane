@@ -3,7 +3,7 @@
 import asyncio
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,12 +14,14 @@ from mcp import types
 from agentlane.harness.mcp import (
     MCPAuthorizationContext,
     MCPAuthorizationError,
+    MCPClientManager,
     MCPDiscoveryError,
     MCPError,
+    MCPResultPolicy,
     MCPServer,
     MCPStdioTransport,
+    MCPToolFilter,
 )
-from agentlane.harness.mcp._client import MCPClientManager
 from agentlane.runtime import CancellationToken
 
 from .helpers import ConnectionInstaller, acquire_lease
@@ -34,18 +36,15 @@ class _FakeState:
     )
     list_error: Exception | None = None
     list_calls: int = 0
-    cache_modes: list[object] = field(default_factory=list[object])
     opened: list[Any] = field(default_factory=list[Any])
     gate: asyncio.Event | None = None
 
     async def list_tools(self, **kwargs: object) -> types.ListToolsResult:
-        self.cache_modes.append(kwargs.get("cache_mode"))
+        del kwargs
         self.list_calls += 1
         if self.list_error is not None:
             raise self.list_error
-        return types.ListToolsResult(
-            tools=self.tools, ttl_ms=300_000, cache_scope="public"
-        )
+        return types.ListToolsResult(tools=self.tools)
 
 
 @pytest.fixture(name="fake_mcp")
@@ -106,7 +105,7 @@ async def test_long_tool_aliases_fit_provider_limits_and_call_original_names(
 
 
 @pytest.mark.asyncio
-async def test_acquire_same_server_creates_independent_connections(
+async def test_acquire_concurrent_runs_share_one_connection(
     fake_mcp: _FakeState,
 ) -> None:
     async with MCPClientManager() as manager:
@@ -116,17 +115,43 @@ async def test_acquire_same_server_creates_independent_connections(
             acquire_lease(manager, server, context),
             acquire_lease(manager, server, context),
         )
-        assert len(fake_mcp.opened) == 2
+        assert len(fake_mcp.opened) == 1
         await first.release()
         await first.release()
         assert [tool.name for tool in await second.tools()] == ["notes__read"]
-        assert fake_mcp.opened[0].closing
-        assert not fake_mcp.opened[1].closing
+        assert not fake_mcp.opened[0].closing
+        await second.release()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"tools": MCPToolFilter(exclude=("read",))},
+        {"result_policy": MCPResultPolicy(max_text_chars=128)},
+        {"required": False},
+        {"connect_timeout_seconds": 1},
+        {"discovery_timeout_seconds": 1},
+        {"tool_timeout_seconds": 1},
+        {"catalog_ttl_seconds": 1},
+    ],
+)
+@pytest.mark.asyncio
+async def test_acquire_different_policies_have_separate_entries(
+    fake_mcp: _FakeState, change: dict[str, Any]
+) -> None:
+    async with MCPClientManager() as manager:
+        server = _server()
+        context = MCPAuthorizationContext(key="user")
+        first = await acquire_lease(manager, server, context)
+        second = await acquire_lease(manager, replace(server, **change), context)
+        assert len(fake_mcp.opened) == 2
+        assert second.server == replace(server, **change)
+        await first.release()
         await second.release()
 
 
 @pytest.mark.asyncio
-async def test_acquire_cancellation_preserves_independent_source(
+async def test_acquire_cancel_one_waiter_preserves_other_waiter(
     fake_mcp: _FakeState,
 ) -> None:
     fake_mcp.gate = asyncio.Event()
@@ -143,7 +168,7 @@ async def test_acquire_cancellation_preserves_independent_source(
         assert not fake_mcp.opened[0].ready.cancelled()
         fake_mcp.gate.set()
         lease = await asyncio.wait_for(second, 1)
-        assert len(fake_mcp.opened) == 2
+        assert len(fake_mcp.opened) == 1
         await lease.release()
 
 
@@ -163,7 +188,7 @@ async def test_acquire_cancel_only_waiter_stops_owner(fake_mcp: _FakeState) -> N
 
 
 @pytest.mark.asyncio
-async def test_catalog_empty_result_is_refetched(fake_mcp: _FakeState) -> None:
+async def test_catalog_empty_result_is_cached(fake_mcp: _FakeState) -> None:
     fake_mcp.tools = []
     async with MCPClientManager() as manager:
         lease = await acquire_lease(
@@ -171,37 +196,58 @@ async def test_catalog_empty_result_is_refetched(fake_mcp: _FakeState) -> None:
         )
         assert await lease.tools() == ()
         assert await lease.tools() == ()
-        assert fake_mcp.list_calls == 2
+        assert fake_mcp.list_calls == 1
         await lease.release()
 
 
 @pytest.mark.asyncio
-async def test_catalog_changes_are_refetched_on_the_same_lease(
-    fake_mcp: _FakeState,
-) -> None:
+async def test_catalog_invalidation_refreshes_same_lease(fake_mcp: _FakeState) -> None:
     async with MCPClientManager() as manager:
         lease = await acquire_lease(
             manager, _server(), MCPAuthorizationContext(key="u")
         )
         assert [tool.name for tool in await lease.tools()] == ["notes__read"]
         fake_mcp.tools = [types.Tool(name="updated", input_schema={"type": "object"})]
+        fake_mcp.opened[0].catalog_revision += 1
         assert [tool.name for tool in await lease.tools()] == ["notes__updated"]
         assert fake_mcp.list_calls == 2
-        assert fake_mcp.cache_modes == ["bypass", "bypass"]
         await lease.release()
 
 
 @pytest.mark.asyncio
-async def test_catalog_transport_failure_never_reuses_previous_tools(
+async def test_catalog_notification_during_refresh_remains_invalidated(
+    fake_mcp: _FakeState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async with MCPClientManager() as manager:
+        lease = await acquire_lease(
+            manager, _server(), MCPAuthorizationContext(key="u")
+        )
+        connection = fake_mcp.opened[0]
+        original = fake_mcp.list_tools
+
+        async def changing_list(**kwargs: object) -> types.ListToolsResult:
+            result = await original(**kwargs)
+            connection.catalog_revision += 1
+            return result
+
+        monkeypatch.setattr(connection.client, "list_tools", changing_list)
+        await lease.tools()
+        await lease.tools()
+        assert fake_mcp.list_calls == 2
+        await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_catalog_transient_fallback_belongs_only_to_existing_lease(
     fake_mcp: _FakeState,
 ) -> None:
     async with MCPClientManager() as manager:
         server, context = _server(), MCPAuthorizationContext(key="u")
         first = await acquire_lease(manager, server, context)
         await first.tools()
+        fake_mcp.opened[0].catalog_revision += 1
         fake_mcp.list_error = OSError("disconnected")
-        with pytest.raises(MCPDiscoveryError):
-            await first.tools()
+        assert [tool.name for tool in await first.tools()] == ["notes__read"]
         second = await acquire_lease(manager, server, context)
         with pytest.raises(MCPDiscoveryError):
             await second.tools()
@@ -218,6 +264,7 @@ async def test_catalog_authorization_failure_does_not_reuse_stale_tools(
             manager, _server(), MCPAuthorizationContext(key="u")
         )
         await lease.tools()
+        fake_mcp.opened[0].catalog_revision += 1
         fake_mcp.list_error = MCPAuthorizationError("revoked")
         with pytest.raises(MCPAuthorizationError):
             await lease.tools()
@@ -346,7 +393,7 @@ async def test_tool_timeout_and_cancellation_stop_one_call(
         await lease.release()
 
 
-def test_stdio_environment_is_copied_before_process_start() -> None:
+def test_stdio_environment_is_copied_before_pool_identity() -> None:
     environment = {"APP": "original"}
     config = MCPStdioTransport(command="fixture", env=environment)
     environment["APP"] = "mutated"

@@ -15,6 +15,7 @@ from agentlane_litellm import Client
 from agentlane.harness import AgentDescriptor, RunnerHooks, Task
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.mcp import (
+    MCPClientManager,
     MCPServer,
     MCPStdioTransport,
     MCPToolsShim,
@@ -95,6 +96,7 @@ class MeetingEvidence(RunnerHooks):
 def create_agent(
     model: Model[ModelResponse],
     evidence: MeetingEvidence,
+    manager: MCPClientManager,
 ) -> DefaultAgent:
     """Use the standard harness loop and runtime MCP discovery."""
     return DefaultAgent(
@@ -126,6 +128,7 @@ def create_agent(
                             ),
                         ),
                     ),
+                    client_manager=manager,
                 ),
             ),
         ),
@@ -134,17 +137,19 @@ def create_agent(
 
 
 async def run_example(model: Model[ModelResponse]) -> dict[str, object]:
-    """Return verified evidence after the agent closes its MCP connections."""
+    """Return verified evidence only after the agent and MCP manager close."""
     evidence = MeetingEvidence()
-    agent = create_agent(model, evidence)
-    async with asyncio.timeout(120):
-        result = await agent.run(PROMPT)
+    async with MCPClientManager() as manager:
+        agent = create_agent(model, evidence, manager)
+        async with asyncio.timeout(120):
+            result = await agent.run(PROMPT)
     answer = evidence.verify(result.final_output)
     return {
         "verified": True,
         "prompt": PROMPT,
         "tool_calls": [asdict(call) for call in evidence.calls],
         "model_turns": result.turn_count,
+        "manager_closed": manager.closed,
         "answer": answer,
     }
 

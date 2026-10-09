@@ -9,6 +9,7 @@ class MCPFailureKind(LowercaseStrEnum):
     AUTHORIZATION = "authorization"
     TRANSPORT = "transport"
     TIMEOUT = "timeout"
+    CAPACITY = "capacity"
     PROTOCOL = "protocol"
 
 
@@ -39,7 +40,17 @@ class MCPDiscoveryError(MCPError):
         return self.failure_kind in {
             MCPFailureKind.TRANSPORT,
             MCPFailureKind.TIMEOUT,
+            MCPFailureKind.CAPACITY,
         }
+
+
+class MCPPoolCapacityError(MCPDiscoveryError):
+    """All connection capacity is held by active or closing connections."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "MCP connection capacity is in use.", failure_kind=MCPFailureKind.CAPACITY
+        )
 
 
 class MCPAuthorizationError(MCPError):

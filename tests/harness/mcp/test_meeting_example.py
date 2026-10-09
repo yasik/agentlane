@@ -66,6 +66,7 @@ async def test_meeting_example_discovers_calls_and_verifies_real_mcp(
     report = await example["run_example"](model)
 
     assert report["verified"] is True
+    assert report["manager_closed"] is True
     assert report["model_turns"] == 3
     assert [call["tool"] for call in report["tool_calls"]] == [
         "meetings__search_meetings",
