@@ -31,3 +31,26 @@ Use relative Markdown links in source files so they also work on GitHub.
 
 The website workflow runs on public docs changes. Deployment uses the website's
 normal release process. A local rebuild does not publish the site.
+
+## Navigation contract
+
+Apply these rules to all public documentation on every rebuild:
+
+- Discover every public Markdown file under `docs/` recursively. Folder paths
+  define section membership and nesting depth. Exclude `docs/plans/`.
+- Keep `docs/README.md` as the documentation home. Use each top-level folder
+  as a section, with its README page first if present.
+- Use a nested folder's README title and route for its group. Show that page
+  once. A folder without a README has a label without a link; do not create
+  a page or route for it.
+- Derive the sidebar, breadcrumbs, and previous/next links from the same tree.
+  Every public page must appear once in navigation and remain in search.
+- Use `docs/README.md` to order siblings. Top-level label and order overrides
+  can remain, but must not select pages or limit nesting. Do not add manual
+  hierarchy lists for specific sections or providers.
+- Include added folders and pages automatically, even when the documentation
+  index does not list them. When moving sources, repair incoming links because
+  folder paths also determine routes.
+
+Check the generated structure against every public source path. Verify folder
+ancestry, README placement, page coverage, and links across the documentation.

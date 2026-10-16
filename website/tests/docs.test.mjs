@@ -85,6 +85,84 @@ test("portal links and heading fragments resolve in generated HTML", () => {
   }
 });
 
+test("every public page follows its source folders in navigation and breadcrumbs", () => {
+  for (const source of sources) {
+    const href = docsRoute(source);
+    const $ = documents.get(href);
+    const navigation = $('nav[aria-label="Documentation"]');
+    const current = navigation.find(`a[href="${href}"]`);
+    assert.equal(current.length, 1, `${source} appears once`);
+
+    const directories = source.split("/").slice(0, -1);
+    const folders = directories
+      .slice(1)
+      .map((_, i) => directories.slice(0, i + 2).join("/"));
+    // The README is the folder's own link, not a child of itself.
+    if (source.endsWith("/README.md")) folders.pop();
+    const parents = current.parents("li").slice(1).toArray().reverse();
+    assert.equal(parents.length, folders.length, `folder depth for ${source}`);
+
+    const group = current.closest(".docs-nav-group");
+    const sectionOf = (file) => (file.includes("/") ? file.split("/")[0] : "");
+    assert.deepEqual(
+      group
+        .find("a")
+        .map((_, el) => $(el).attr("href"))
+        .get()
+        .sort(),
+      sources
+        .filter((file) => sectionOf(file) === sectionOf(source))
+        .map(docsRoute)
+        .sort(),
+      `section membership for ${source}`,
+    );
+
+    const trail = ["Docs", group.children("p").text()];
+    folders.forEach((folder, i) => {
+      const label = $(parents[i]).children("a, .docs-nav-label");
+      const overview = `${folder}/README.md`;
+      if (sources.includes(overview)) {
+        assert.equal(
+          label.attr("href"),
+          docsRoute(overview),
+          `${source} parent link`,
+        );
+        assert.equal(
+          label.text(),
+          documents.get(docsRoute(overview))("h1").text(),
+        );
+      } else {
+        assert.equal(label.is("a"), false, `${folder} has no synthetic page`);
+        assert.ok(label.text().trim(), `${folder} has a label`);
+      }
+      trail.push(label.text());
+    });
+    trail.push($("h1").text());
+    assert.equal(navigation.find('[aria-current="page"]').attr("href"), href);
+    assert.deepEqual(
+      $('nav[aria-label="Breadcrumb"]')
+        .children()
+        .filter((_, el) => $(el).attr("aria-hidden") !== "true")
+        .map((_, el) => $(el).text())
+        .get(),
+      href === "/docs/" ? ["Docs"] : trail,
+      `breadcrumb for ${source}`,
+    );
+  }
+});
+
+test("previous and next links follow the complete sidebar order", () => {
+  const $ = documents.get("/docs/");
+  const order = $('nav[aria-label="Documentation"] a')
+    .map((_, el) => $(el).attr("href"))
+    .get();
+  order.forEach((href, i) => {
+    const page = documents.get(href);
+    assert.equal(page('a[rel="prev"]').attr("href"), order[i - 1], href);
+    assert.equal(page('a[rel="next"]').attr("href"), order[i + 1], href);
+  });
+});
+
 test("search finds body symbols, ranks titles, and handles empty and missing queries", () => {
   const prepared = prepareSearchIndex(index);
   assert.equal(searchDocs(prepared, "  ").length, 0);

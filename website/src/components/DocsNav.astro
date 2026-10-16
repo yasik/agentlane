@@ -1,0 +1,32 @@
+---
+import type { DocNavigationItem } from "../lib/docs";
+
+type Props = {
+  items: DocNavigationItem[];
+  currentHref: string;
+};
+
+const { items, currentHref } = Astro.props;
+---
+
+<ul>
+  {
+    items.map((item) => (
+      <li class:list={{ "docs-nav-parent": item.children.length > 0 }}>
+        {item.page ? (
+          <a
+            href={item.page.href}
+            aria-current={item.page.href === currentHref ? "page" : undefined}
+          >
+            {item.title}
+          </a>
+        ) : (
+          <span class="docs-nav-label">{item.title}</span>
+        )}
+        {item.children.length > 0 && (
+          <Astro.self items={item.children} currentHref={currentHref} />
+        )}
+      </li>
+    ))
+  }
+</ul>

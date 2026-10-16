@@ -59,13 +59,21 @@
   padding: 0;
   margin: 0;
 }
-.docs-nav-group a {
+.docs-nav-group a,
+.docs-nav-label {
   display: block;
   padding: 5px 12px;
   border-left: 1px solid var(--line);
   color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
+}
+.docs-nav-parent > a,
+.docs-nav-label {
+  color: var(--bright);
+}
+.docs-nav-group ul ul {
+  margin-left: 12px;
 }
 .docs-nav-group a:hover,
 .docs-toc a:hover {
@@ -82,6 +90,7 @@
 }
 .docs-breadcrumb {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   color: var(--muted);
   font-size: 12px;

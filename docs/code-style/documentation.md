@@ -48,6 +48,23 @@ Keep relative Markdown links in the source. Do not add portal URLs to replace
 links that repository readers use. Do not copy docs into `website/src/content/`
 or commit generated files from `website/dist/`.
 
+## Navigation rules
+
+Folders directly under `docs/` define navigation sections. Nested folders define
+nested groups at every depth. The build includes all public Markdown files
+automatically. Put related pages in a shared folder; no portal registration is
+required.
+
+A nested `README.md` supplies the group title and page link, without a duplicate
+child page. A folder without a README has a label without a link. A top-level
+folder's README is its first page.
+
+The sidebar, breadcrumbs, and previous/next links follow the same tree. The
+documentation index sets sibling order; source folders determine membership
+and depth. Repair incoming links when you move a page or folder because its
+route changes. The repository's `docs-portal` skill maintains the complete
+navigation contract and verification steps.
+
 ## Build checks
 
 The website workflow checks public documentation changes in pull requests and

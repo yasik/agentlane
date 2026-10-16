@@ -3,7 +3,8 @@ import { render } from "astro:content";
 import Page from "../../layouts/Page.astro";
 import ThemeSwitcher from "../../components/ThemeSwitcher.astro";
 import DocsSearch from "../../components/DocsSearch.astro";
-import { getDocs } from "../../lib/docs";
+import DocsNav from "../../components/DocsNav.astro";
+import { getDocs, getDocsNavigation, getDocTrail } from "../../lib/docs";
 import { repositoryUrl } from "../../lib/docs-paths.mjs";
 import "../../styles/docs.css";
 
@@ -19,7 +20,8 @@ export async function getStaticPaths() {
 
 const { doc, docs, index } = Astro.props;
 const { Content, headings } = await render(doc.entry);
-const sections = [...new Set(docs.map((item) => item.group))];
+const sections = getDocsNavigation(docs);
+const trail = getDocTrail(sections, doc.href);
 const contents = headings.filter(
   (heading) => heading.depth === 2 || heading.depth === 3,
 );
@@ -57,25 +59,10 @@ const next = docs[index + 1];
           <summary>Documentation</summary>
           <nav aria-label="Documentation">
             {
-              sections.map((group) => (
+              sections.map((section) => (
                 <div class="docs-nav-group">
-                  <p>{group}</p>
-                  <ul>
-                    {docs
-                      .filter((item) => item.group === group)
-                      .map((item) => (
-                        <li>
-                          <a
-                            href={item.href}
-                            aria-current={
-                              item.href === doc.href ? "page" : undefined
-                            }
-                          >
-                            {item.title}
-                          </a>
-                        </li>
-                      ))}
-                  </ul>
+                  <p>{section.title}</p>
+                  <DocsNav items={section.children} currentHref={doc.href} />
                 </div>
               ))
             }
@@ -83,11 +70,28 @@ const next = docs[index + 1];
         </details>
       </aside>
       <main id="top" class="docs-main" tabindex="-1">
-        <div class="docs-breadcrumb">
-          <a href="/docs/">Docs</a><span aria-hidden="true">/</span><span
-            >{doc.group}</span
-          >
-        </div>
+        <nav class="docs-breadcrumb" aria-label="Breadcrumb">
+          <a href="/docs/">Docs</a>
+          {
+            doc.href !== "/docs/" &&
+              trail.map((item) => (
+                <>
+                  <span aria-hidden="true">/</span>
+                  {item.page && item.page.href !== doc.href ? (
+                    <a href={item.page.href}>{item.title}</a>
+                  ) : (
+                    <span
+                      aria-current={
+                        item.page?.href === doc.href ? "page" : undefined
+                      }
+                    >
+                      {item.title}
+                    </span>
+                  )}
+                </>
+              ))
+          }
+        </nav>
         {
           contents.length > 0 && (
             <details class="docs-mobile-toc">

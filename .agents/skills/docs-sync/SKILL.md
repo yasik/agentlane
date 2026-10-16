@@ -54,16 +54,16 @@ Capture lightweight evidence:
 
 Use the current docs tree as the source of structure.
 
-Start with:
-
-1. `docs/README.md`
-2. the relevant page under `docs/runtime/`, `docs/messaging/`, `docs/harness/`,
-   or `docs/transport/`
+Start with `docs/README.md`, then inspect the relevant folders and pages.
+Follow the [portal navigation contract](../docs-portal/SKILL.md#navigation-contract)
+for every section and nesting depth. Put related pages in their shared folder;
+the portal derives the hierarchy from these paths during each rebuild.
 
 When reviewing, prefer updating an existing page over creating a new one unless
 the topic clearly has no home.
 
 If you add, remove, or rename a public docs page, update `docs/README.md`.
+If you move a page or folder, repair incoming links because its route changes.
 
 ### 4. Compare docs against code
 
