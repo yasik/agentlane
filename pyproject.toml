@@ -94,6 +94,7 @@ packages = [
   "packages/litellm/src/agentlane_litellm",
   "packages/openai/src/agentlane_openai",
   "packages/process_bridge/src/agentlane_process_bridge",
+  "packages/space/src/agentlane_space",
 ]
 
 [tool.hatch.build.targets.wheel.sources]
@@ -103,6 +104,7 @@ packages = [
 "packages/litellm/src" = ""
 "packages/openai/src" = ""
 "packages/process_bridge/src" = ""
+"packages/space/src" = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages"]

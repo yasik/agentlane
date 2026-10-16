@@ -85,6 +85,13 @@ Build agent loops and extend their behavior:
 - [Distributed Agents](./harness/distributed-agents.md)
 - [File I/O Interfaces](./harness/filesystem.md)
 
+#### Sandboxes
+
+Run environment tools in a sandbox managed by your app:
+
+- [Introduction](./harness/sandboxes/README.md)
+- [SPACE](./harness/sandboxes/space.md)
+
 ### Process bridge
 
 Connect a TypeScript app to a Python backend:

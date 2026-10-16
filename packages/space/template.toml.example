@@ -1,0 +1,26 @@
+# Adapt this recipe in the application that owns the SPACE deployment.
+# First build an OCI image with Python 3.12, the same AgentLane wheel as the
+# host, /bin/bash, rg, and tee. Pin that image by digest below.
+# This file does not create, start, or delete a sandbox.
+
+[metadata]
+name = "agentlane"
+description = "AgentLane tools in an application-prepared guest image"
+from = "oci-image"
+base = "seed"
+image = "registry.example.com/app/agentlane@sha256:REPLACE_WITH_IMAGE_DIGEST"
+vcpu = 2
+memory_mib = 2048
+disk_size_mb = 4096
+
+[[steps]]
+name = "Prepare the tool working directory"
+type = "run"
+command = """
+set -eu
+command -v python3
+test -x /bin/bash
+command -v rg
+command -v tee
+install -d -m 0755 -o user -g user /workspace
+"""

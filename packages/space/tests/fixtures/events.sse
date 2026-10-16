@@ -1,0 +1,25 @@
+: heartbeat
+
+event: attached
+data: {"type":"attached","session_id":"proc_example","route_generation":1,"current_node_id":"node_example"}
+
+id: 1
+event: process_started
+data: {"type":"process_started","process_id":"proc_example","pid":123}
+
+id: 2
+event: stdout
+data: {"type":"stdout","seq":1,"data_base64":"SGVsbG8g"}
+
+id: 3
+event: stderr
+data: {"type":"stderr","seq":2,"data_base64":"d2FybmluZwo="}
+
+id: 4
+event: stdout
+data: {"type":"stdout","seq":3,"data_base64":"U1BBQ0UK"}
+
+id: 5
+event: process_exited
+data: {"type":"process_exited","process_id":"proc_example","exit_code":0,"status":"exited"}
+

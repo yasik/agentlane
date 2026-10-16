@@ -17,6 +17,8 @@ Core docs:
    `bash` boundaries.
 3. [File I/O interfaces](./filesystem.md): injected storage for native file
    tools and skill loading.
+4. [Sandboxes](./sandboxes/README.md): run environment tools in a sandbox
+   managed by your app.
 
 Tool reference:
 
@@ -108,6 +110,13 @@ cwd; activation of a skill does not change it. Grep uses `cwd` in the harness pr
 filesystem. Bash uses `cwd` in its executor filesystem, which can be different
 with a custom executor. Logical mounts do not become process mounts.
 See [File I/O interfaces](./filesystem.md) for construction and path rules.
+
+For a SPACE sandbox, pass `space_harness_tools(sandbox, cwd=guest_cwd)` to
+`HarnessToolsShim` in place of the base bundle. The extension reuses the core
+tools and routes all six environment tools to the guest. `write_plan` and
+`agent` stay on the host. Setting only `bash_executor=` changes only Bash;
+it does not move the file tools. See
+[SPACE: How it works](./sandboxes/space.md#how-it-works).
 
 Pass `include=` or `exclude=` when an application needs the standard set with
 only selected tools. Selectors use the model-visible tool names above, and
