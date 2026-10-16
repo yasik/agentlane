@@ -6,20 +6,25 @@ Your app creates, manages, and deletes the sandbox.
 
 ## How it works
 
-`space_harness_tools()` builds a sandbox version of the
-[`base_harness_tools()` bundle](../tools.md#standard-set). It keeps
-the standard tool names and argument schemas and changes where the
-environment tools run:
+When you register `space_harness_tools()` with `HarnessToolsShim`, the agent
+reads and writes files and runs code inside the same SPACE sandbox. File
+paths used by these tools refer to the sandbox filesystem:
 
-| Tools | Execution |
+| Tools | What they do |
 | --- | --- |
-| `read`, `find`, `grep`, `patch`, `write` | A guest Python worker runs the original AgentLane file handlers |
-| `bash` | The core Bash tool uses `SpaceBashExecutor` to run commands in the guest |
-| `write_plan`, `agent` | The host harness retains the core definitions |
+| `read`, `find`, `grep` | Read and search files inside the sandbox |
+| `write`, `patch` | Create and edit files inside the sandbox |
+| `bash` | Run shell commands and code inside the sandbox, using the programs installed there |
+| `write_plan`, `agent` | Manage plan state and delegation on the host |
 
-Pass this bundle to `HarnessToolsShim` in place of the local base bundle.
-The shim registers the tools; their handlers determine where execution
-occurs. Registering both bundles causes duplicate tool names. Passing
+For example, with `cwd="/workspace"`, the agent can use `write` to create
+`script.py`, then use `bash` to run `python3 script.py`. Both tools use the
+file at `/workspace/script.py` inside the sandbox.
+
+The SPACE bundle keeps the standard tool names and argument schemas from
+[`base_harness_tools()`](../tools.md#standard-set). Register it in place of
+the local base bundle; registering both causes duplicate tool names.
+Creating a `SpaceSandbox` handle alone does not redirect tools. Passing
 `SpaceBashExecutor` through `base_harness_tools(bash_executor=...)` changes
 only Bash execution.
 
