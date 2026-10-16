@@ -1,4 +1,4 @@
-# Harness Markdown Agent Definitions
+# Markdown agent definitions
 
 `agents.definitions` lets you define an agent in a Claude-Code-style markdown file — YAML
 frontmatter plus a system-prompt body — and turn it into an

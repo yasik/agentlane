@@ -1,4 +1,4 @@
-# Harness Shims
+# Shims
 
 Shims are the harness extension point for behavior that needs to change what a
 run actually does.
@@ -15,7 +15,7 @@ This is the mechanism intended for features such as first-party tools, skills,
 memory, and context compaction. Those features should build on this seam instead
 of adding new special-case fields to the core harness types.
 
-First-party examples include [Harness Tools](./tools.md) and
+First-party examples include [Tools](./tools/README.md) and
 [Harness Skills](./skills.md). For the history-rewrite pattern used by
 conversation compaction, see [Harness Compaction](./compaction.md).
 

@@ -1,4 +1,4 @@
-# Harness Skills
+# Skills
 
 Skills are a first-party capability built on top of
 [Harness Shims](./shims.md).

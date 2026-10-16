@@ -1,4 +1,4 @@
-# Imports and Typing
+# Imports and typing
 
 Use these rules for imports, annotations, and type definitions.
 

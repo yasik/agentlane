@@ -55,6 +55,13 @@ nested groups at every depth. The build includes all public Markdown files
 automatically. Put related pages in a shared folder; no portal registration is
 required.
 
+Keep page titles concise within their groups. Omit repeated parent names:
+use `Architecture` under Harness and `Prompt templating` under Models.
+Put harness tool references under `docs/harness/tools/` and use the exact
+tool name as the title, such as `bash` or `write_plan`. Use sentence case
+for other titles. Change the Markdown title so the page, navigation, and
+search use the same text.
+
 A nested `README.md` supplies the group title and page link, without a duplicate
 child page. A folder without a README has a label without a link. A top-level
 folder's README is its first page.

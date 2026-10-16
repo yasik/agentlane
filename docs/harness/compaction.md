@@ -1,4 +1,4 @@
-# Harness Compaction
+# Compaction
 
 Conversation compaction is the harness-level pattern for replacing older
 conversation history with a concise summary while keeping recent history

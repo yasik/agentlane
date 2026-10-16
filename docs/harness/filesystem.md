@@ -1,4 +1,4 @@
-# File I/O Interfaces
+# File I/O interfaces
 
 File tools depend on interfaces. AgentLane supplies a local filesystem by
 default. Applications can supply their own implementations for object stores,
@@ -238,7 +238,7 @@ Read checks `READ_FILE`, find checks `SEARCH_FILES`, and patch checks
 `MODIFY_FILE` before accessing data. Write inspects metadata to distinguish
 creation from overwrite, then checks permissions before opening a writer.
 Grep and bash retain their process-tool permission behavior. See
-[Tool permissions](tools-permissions.md).
+[Tool permissions](tools/permissions.md).
 
 Skill loading calls the adapter directly. Tool policies do not govern skill
 loader access; restrict it through the adapter and configured roots.

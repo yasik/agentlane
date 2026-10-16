@@ -1,4 +1,4 @@
-# Python Code Style
+# Python
 
 These pages hold the Python conventions referenced by `AGENTS.md`. Read the
 page that matches the work you are doing instead of treating `AGENTS.md` as a
@@ -8,7 +8,7 @@ long-form style manual.
 
 1. [Imports and typing](./imports.md): import paths, annotation rules, and type
    boundary constraints.
-2. [Python conventions](./python.md): Python style, docstrings, async patterns,
+2. [Conventions](./python.md): Python style, docstrings, async patterns,
    error handling, and framework-specific rules.
 3. [Comments](./comments.md): comment, docstring, and field comment
    expectations.

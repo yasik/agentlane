@@ -1,4 +1,4 @@
-# Harness Tasks
+# Tasks
 
 Tasks are the smallest harness abstraction. They are useful when you want a
 clear place for application orchestration logic, but you do not want to opt

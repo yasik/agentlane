@@ -1,4 +1,4 @@
-# Process Bridge Development
+# Development
 
 Use this page when extending the bridge protocol itself. Application developers
 building a TypeScript shell usually need only the

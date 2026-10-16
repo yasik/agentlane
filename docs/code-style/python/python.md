@@ -1,4 +1,4 @@
-# Python Conventions
+# Conventions
 
 These rules apply to Python code across the repository.
 

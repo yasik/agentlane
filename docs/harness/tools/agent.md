@@ -1,4 +1,4 @@
-# agent Tool
+# agent
 
 `agent_tool()` exposes an `agent` tool for generic spawned helpers.
 

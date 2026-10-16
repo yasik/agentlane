@@ -1,4 +1,4 @@
-# Harness Tool Design
+# Design
 
 `agentlane.harness.tools` provides first-party harness tool definitions for
 common local workspace actions. Each helper returns a `HarnessToolDefinition`,
@@ -14,7 +14,7 @@ lets higher-level agents spend fewer turns rediscovering local shell behavior
 and gives application code a predictable contract to test.
 
 Use these tools with
-[`DefaultAgent`](./default-agents.md) when you want the smallest local starting
+[`DefaultAgent`](../default-agents.md) when you want the smallest local starting
 point for a high-level agent. `DefaultAgent` owns the local runtime, runner, run
 state, tool loop, and shim binding. `HarnessToolsShim` adds the tools and the
 model guidance that tells the agent how to use them. As the application grows,
@@ -67,7 +67,7 @@ output-limit constants (`TEXT_MAX_BYTES`, `TEXT_MAX_LINES`, `BASH_MAX_BYTES`,
 `FIND_DEFAULT_LIMIT`, `LS_DEFAULT_LIMIT`) plus `TruncatedOutput` and
 `truncate_output`, and the bash-executor contract types (`BashExecutor`,
 `LocalBashExecutor`, `BashExecutionRequest`, `BashExecutionResult`,
-`BashShellConfig`, `resolve_bash_shell`). See [bash](./tools-bash.md) for the
+`BashShellConfig`, `resolve_bash_shell`). See [bash](./bash.md) for the
 executor contracts.
 
 ## Tool Definitions
@@ -90,7 +90,7 @@ include `ls`.
 `base_harness_tools()` returns the standard set. By default each local tool
 captures `Path.cwd()` at construction time and remains permissive. Filesystem
 tools with local storage resolve relative paths through `ToolPathResolver`; see
-[Tool permissions](./tools-permissions.md) for path boundaries and approval
+[Tool permissions](./permissions.md) for path boundaries and approval
 behavior. Pass `cwd=`, `permissions=`, and optionally `approval_callback=`
 when an agent should operate inside a specific workspace boundary:
 
@@ -109,7 +109,7 @@ POSIX paths. Mounted backends accept rooted virtual paths and resolve relative
 arguments from each tool's captured cwd. In
 `base_harness_tools()`, set `storage_cwd` for these tools and `cwd` for the
 process workspace used by grep and bash. Process tools do not use storage
-adapters. See [File I/O interfaces](./filesystem.md).
+adapters. See [File I/O interfaces](../filesystem.md).
 
 Use `include=` or `exclude=` to derive a smaller set without manually
 constructing each tool. Selectors are the model-visible names from the standard

@@ -1,4 +1,4 @@
-# patch Tool
+# patch
 
 `patch_tool()` exposes a `patch` tool for precise edits to existing UTF-8 text
 files. It is backed by
@@ -77,4 +77,4 @@ on failure. One tool instance serializes the complete read-edit-write operation.
 Separate tool instances and external writers require application coordination
 of the whole operation; serialized commits alone do not prevent lost updates.
 Started writes settle before cancellation propagates and the lock is released.
-See [File I/O interfaces](./filesystem.md).
+See [File I/O interfaces](../filesystem.md).

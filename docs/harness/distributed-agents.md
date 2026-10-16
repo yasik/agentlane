@@ -1,4 +1,4 @@
-# Distributed Agents
+# Distributed agents
 
 AgentLane lets a high-level harness agent coordinate distributed workers without
 giving up the simple `DefaultAgent` developer surface. The same application can

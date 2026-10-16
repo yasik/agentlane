@@ -1,4 +1,4 @@
-# Runtime: Engine and Execution
+# Engine and execution
 
 The runtime is where AgentLane decides what delivery means. It is responsible
 for creating handlers, preserving ordering, and defining what a caller can

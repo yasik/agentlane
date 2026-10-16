@@ -40,5 +40,5 @@ uv run --extra mcp --extra litellm \
   pytest tests/harness/mcp/test_meeting_example.py -s
 ```
 
-See [Harness MCP Tools](../../../docs/harness/mcp.md) for remote servers,
+See [MCP tools](../../../docs/harness/tools/mcp.md) for remote servers,
 authorization, and connection lifecycle.

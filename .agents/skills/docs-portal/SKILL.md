@@ -45,6 +45,10 @@ Apply these rules to all public documentation on every rebuild:
   a page or route for it.
 - Derive the sidebar, breadcrumbs, and previous/next links from the same tree.
   Every public page must appear once in navigation and remain in search.
+- Use concise Markdown page titles. Omit parent names that the hierarchy
+  already supplies. Group tool references under Harness > Tools and use
+  each exact tool name as its title, without a "Tool" suffix. Apply title
+  changes in source Markdown so pages, navigation, and search agree.
 - Use `docs/README.md` to order siblings. Top-level label and order overrides
   can remain, but must not select pages or limit nesting. Do not add manual
   hierarchy lists for specific sections or providers.

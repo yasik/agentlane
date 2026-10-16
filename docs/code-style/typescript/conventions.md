@@ -1,4 +1,4 @@
-# TypeScript Conventions
+# Conventions
 
 Use these rules for TypeScript across repository packages.
 

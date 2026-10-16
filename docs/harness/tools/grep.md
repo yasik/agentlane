@@ -1,4 +1,4 @@
-# grep Tool
+# grep
 
 `grep_tool()` exposes a `grep` tool for searching UTF-8 text files. It is
 backed by `ripgrepy`, so the `rg` executable from ripgrep must be available on
@@ -138,4 +138,4 @@ Pass `cwd=` for that workspace. When running in a sandbox, run the tool handler
 there and supply the sandbox workspace directory. Grep does not consume a
 filesystem reader or copy remote storage. Host applications must expose any
 required remote data through the process filesystem. See
-[File I/O interfaces](./filesystem.md#paths-and-workspace).
+[File I/O interfaces](../filesystem.md#paths-and-workspace).

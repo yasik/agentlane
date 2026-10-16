@@ -1,4 +1,4 @@
-# Code Commenting Best Practices
+# Comments
 
 Thoughtful comments explain why code exists, how to use it, and capture non-obvious decisions; they do not restate what the code already says.
 

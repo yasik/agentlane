@@ -58,6 +58,8 @@ Start with `docs/README.md`, then inspect the relevant folders and pages.
 Follow the [portal navigation contract](../docs-portal/SKILL.md#navigation-contract)
 for every section and nesting depth. Put related pages in their shared folder;
 the portal derives the hierarchy from these paths during each rebuild.
+Keep page titles concise within that hierarchy. Remove repeated parent names
+and use exact tool names for individual tool reference pages.
 
 When reviewing, prefer updating an existing page over creating a new one unless
 the topic clearly has no home.

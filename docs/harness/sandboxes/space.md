@@ -22,7 +22,7 @@ For example, with `cwd="/workspace"`, the agent can use `write` to create
 file at `/workspace/script.py` inside the sandbox.
 
 The SPACE bundle keeps the standard tool names and argument schemas from
-[`base_harness_tools()`](../tools.md#standard-set). Register it in place of
+[`base_harness_tools()`](../tools/README.md#standard-set). Register it in place of
 the local base bundle; registering both causes duplicate tool names.
 Creating a `SpaceSandbox` handle alone does not redirect tools. Passing
 `SpaceBashExecutor` through `base_harness_tools(bash_executor=...)` changes

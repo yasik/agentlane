@@ -1,4 +1,4 @@
-# Testing and Tooling
+# Testing and tooling
 
 Use this page for TypeScript test conventions, type checking, and the commands
 that gate a change.

@@ -1,4 +1,4 @@
-# Harness Agents
+# Agents
 
 This page documents the lower-level addressed
 [`agentlane.harness.Agent`](../../src/agentlane/harness/_agent.py).

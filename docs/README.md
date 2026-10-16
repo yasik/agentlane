@@ -43,28 +43,28 @@ Use the following references to explore each part of AgentLane.
 
 Create local runtimes and distribute work across hosts:
 
-- [Runtime: Engine and Execution](./runtime/engine-and-execution.md)
-- [Runtime: Distributed Runtime Usage](./runtime/distributed-runtime-usage.md)
-- [Runtime: Distributed Runtime Architecture](./runtime/distributed-runtime-architecture.md)
+- [Engine and execution](./runtime/engine-and-execution.md)
+- [Distributed usage](./runtime/distributed-runtime-usage.md)
+- [Distributed architecture](./runtime/distributed-runtime-architecture.md)
 
 ### Messaging
 
 Route messages and track delivery:
 
-- [Messaging: Routing and Delivery](./messaging/routing-and-delivery.md)
+- [Routing and delivery](./messaging/routing-and-delivery.md)
 
 ### Transport
 
 Serialize payloads for transport:
 
-- [Transport Serialization](./transport/serialization.md)
+- [Serialization](./transport/serialization.md)
 
 ### Models
 
 Configure model calls and prompts:
 
-- [Models Overview](./models/overview.md)
-- [Models: Prompt Templating](./models/prompt-templating.md)
+- [Overview](./models/overview.md)
+- [Prompt templating](./models/prompt-templating.md)
 
 ### Harness
 
@@ -73,17 +73,27 @@ Build agent loops and extend their behavior:
 - [Architecture](./harness/architecture.md)
 - [Tasks](./harness/tasks.md)
 - [Agents](./harness/agents.md)
-- [Default Agents](./harness/default-agents.md)
+- [Default agents](./harness/default-agents.md)
 - [Shims](./harness/shims.md)
 - [Compaction](./harness/compaction.md)
-- [Tools](./harness/tools.md)
-- [MCP Tools](./harness/mcp.md)
+- [Tools](./harness/tools/README.md)
+    - [Design](./harness/tools/design.md)
+    - [Permissions](./harness/tools/permissions.md)
+    - [MCP](./harness/tools/mcp.md)
+    - [agent](./harness/tools/agent.md)
+    - [bash](./harness/tools/bash.md)
+    - [find](./harness/tools/find.md)
+    - [grep](./harness/tools/grep.md)
+    - [patch](./harness/tools/patch.md)
+    - [read](./harness/tools/read.md)
+    - [write](./harness/tools/write.md)
+    - [write_plan](./harness/tools/write-plan.md)
 - [Skills](./harness/skills.md)
-- [Markdown Agent Definitions](./harness/agent-definitions.md)
+- [Markdown agent definitions](./harness/agent-definitions.md)
 - [Runner](./harness/runner.md)
-- [Run Event Serialization](./harness/event-serialization.md)
-- [Distributed Agents](./harness/distributed-agents.md)
-- [File I/O Interfaces](./harness/filesystem.md)
+- [Run event serialization](./harness/event-serialization.md)
+- [Distributed agents](./harness/distributed-agents.md)
+- [File I/O interfaces](./harness/filesystem.md)
 
 #### Sandboxes
 
@@ -97,15 +107,15 @@ Run environment tools in a sandbox managed by your app:
 Connect a TypeScript app to a Python backend:
 
 - [Overview](./process-bridge/README.md)
-- [Runtime Configuration](./process-bridge/runtime-configuration.md)
-- [Protocol and Lifecycle](./process-bridge/protocol.md)
+- [Runtime configuration](./process-bridge/runtime-configuration.md)
+- [Protocol and lifecycle](./process-bridge/protocol.md)
 - [Development](./process-bridge/development.md)
 
 ### Tracing
 
 Inspect execution with tracing:
 
-- [Tracing Overview](./tracing/overview.md)
+- [Overview](./tracing/overview.md)
 
 ### Project
 

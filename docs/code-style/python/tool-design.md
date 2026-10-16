@@ -1,4 +1,4 @@
-# Tool Design
+# Tool design
 
 Use this page when adding or changing first-party tools, especially tools under
 `agentlane.harness.tools`.
@@ -162,9 +162,9 @@ Use this page when adding or changing first-party tools, especially tools under
 ## Documentation and examples
 
 - Update the focused harness tool docs when public tool behavior changes:
-  `docs/harness/tools.md` for the index, `docs/harness/tools-design.md` for
-  shared design, `docs/harness/tools-permissions.md` for permission behavior,
-  and `docs/harness/tools-<tool>.md` for individual tool contracts.
+  `docs/harness/tools/README.md` for the index, `docs/harness/tools/design.md` for
+  shared design, `docs/harness/tools/permissions.md` for permission behavior,
+  and `docs/harness/tools/<tool>.md` for individual tool contracts.
 - Each local tool doc should include a short `Permissions` section that names
   the emitted `ToolOperation`, shows the denied result shape, and states when
   approval can be requested.

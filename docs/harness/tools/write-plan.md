@@ -1,4 +1,4 @@
-# write_plan Tool
+# write_plan
 
 `plan_tool()` exposes a `write_plan` tool for creating or replacing the current
 task plan.
@@ -31,7 +31,7 @@ Plan updated
 The tool name and success message are exported as the public constants
 `PLAN_TOOL_NAME` and `PLAN_UPDATED_MESSAGE` from `agentlane.harness.tools`, so
 consumers need not mirror the literals. On a successful update the runner emits
-a [`RunPlanUpdatedEvent`](runner.md#plan-updated-events) carrying the structured
+a [`RunPlanUpdatedEvent`](../runner.md#plan-updated-events) carrying the structured
 plan (`RunPlanItem` tuples plus the optional `explanation`); consumers render
 plan UX from that typed event instead of string-matching the success message.
 

@@ -1,4 +1,4 @@
-# Harness Architecture
+# Architecture
 
 The harness is the layer you use when explicit message delivery is not enough
 and you want a reusable agent loop on top of the runtime. It does not replace
@@ -167,7 +167,7 @@ without adding a second approval path to the runner.
 Start with [Harness Tasks](./tasks.md) if you need orchestration without an LLM
 loop. Read [Harness Default Agents](./default-agents.md) for the smallest local
 developer surface. Read [Harness Shims](./shims.md) if you need to extend run
-behavior without changing the core harness types. Read [Harness Tools](./tools.md)
+behavior without changing the core harness types. Read [Tools](./tools/README.md)
 for first-party tool definitions and shim integration. Read
 [Harness Compaction](./compaction.md) for persisted history rewrite contracts.
 Read [Harness Agents](./agents.md) to understand the lower-level addressed agent type. Read

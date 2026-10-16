@@ -1,4 +1,4 @@
-# Testing and Pull Requests
+# Testing and pull requests
 
 Use this page for test conventions and review-ready change expectations.
 

@@ -1,4 +1,4 @@
-# TypeScript Code Style
+# TypeScript
 
 These pages hold the TypeScript conventions referenced by `AGENTS.md`.
 AgentLane's TypeScript currently lives in repository packages such as

@@ -1,4 +1,4 @@
-# Harness Tools
+# Tools
 
 `agentlane.harness.tools` provides first-party harness tool definitions for
 common workspace actions. File tools also support application storage.
@@ -10,27 +10,28 @@ plus optional prompt metadata for `HarnessToolsShim`.
 
 Core docs:
 
-1. [Tool design](./tools-design.md): construction model, imports,
+1. [Design](./design.md): construction model, imports,
    `HarnessToolsShim`, base tool sets, and shared output limits.
-2. [Tool permissions](./tools-permissions.md): permissive defaults, path
+2. [Permissions](./permissions.md): permissive defaults, path
    policy, bundled permission policies, approval callbacks and brokers, and
    `bash` boundaries.
-3. [File I/O interfaces](./filesystem.md): injected storage for native file
+3. [File I/O interfaces](../filesystem.md): injected storage for native file
    tools and skill loading.
-4. [Sandboxes](./sandboxes/README.md): run environment tools in a sandbox
+4. [Sandboxes](../sandboxes/README.md): run environment tools in a sandbox
    managed by your app.
+5. [MCP](./mcp.md): use tools from Model Context Protocol servers.
 
 Tool reference:
 
-1. [agent](./tools-agent.md): delegate focused work to a fresh helper agent.
-2. [read](./tools-read.md): read UTF-8 text files with deterministic truncation.
-3. [find](./tools-find.md): walk directories with gitignore-aware pattern
+1. [agent](./agent.md): delegate focused work to a fresh helper agent.
+2. [read](./read.md): read UTF-8 text files with deterministic truncation.
+3. [find](./find.md): walk directories with gitignore-aware pattern
    matching.
-4. [grep](./tools-grep.md): search file contents with ripgrep-backed results.
-5. [patch](./tools-patch.md): apply minimal SEARCH/REPLACE edits.
-6. [write](./tools-write.md): create or overwrite UTF-8 files.
-7. [write_plan](./tools-write-plan.md): update the visible task plan.
-8. [bash](./tools-bash.md): run bounded non-interactive shell commands.
+4. [grep](./grep.md): search file contents with ripgrep-backed results.
+5. [patch](./patch.md): apply minimal SEARCH/REPLACE edits.
+6. [write](./write.md): create or overwrite UTF-8 files.
+7. [write_plan](./write-plan.md): update the visible task plan.
+8. [bash](./bash.md): run bounded non-interactive shell commands.
 
 ## Quick Start
 
@@ -82,13 +83,13 @@ shims = (
 ```
 
 For approval workflows, broader path scopes, operation grants, and `bash`
-behavior, see [Tool permissions](./tools-permissions.md).
+behavior, see [Tool permissions](./permissions.md).
 
 For application storage, use `HarnessToolsShim` with injected storage
-tools as shown in [File I/O interfaces](./filesystem.md#paths-and-workspace).
+tools as shown in [File I/O interfaces](../filesystem.md#paths-and-workspace).
 `WorkspaceToolsShim` configures local tools and does not accept storage adapters.
 
-Use [MountedReader](./filesystem.md#mixed-local-and-remote-filesystems) when one
+Use [MountedReader](../filesystem.md#mixed-local-and-remote-filesystems) when one
 read tool must access both local and remote files. The skill loader can share
 that reader so activation returns paths that the read tool can use.
 Use `MountedFileSystem` to add writes to capable mounts and share paths across
@@ -109,14 +110,14 @@ resolve bare file names within that mounted directory. Each tool captures its
 cwd; activation of a skill does not change it. Grep uses `cwd` in the harness process
 filesystem. Bash uses `cwd` in its executor filesystem, which can be different
 with a custom executor. Logical mounts do not become process mounts.
-See [File I/O interfaces](./filesystem.md) for construction and path rules.
+See [File I/O interfaces](../filesystem.md) for construction and path rules.
 
 For a SPACE sandbox, pass `space_harness_tools(sandbox, cwd=guest_cwd)` to
 `HarnessToolsShim` in place of the base bundle. The extension reuses the core
 tools and routes all six environment tools to the guest. `write_plan` and
 `agent` stay on the host. Setting only `bash_executor=` changes only Bash;
 it does not move the file tools. See
-[SPACE: How it works](./sandboxes/space.md#how-it-works).
+[SPACE: How it works](../sandboxes/space.md#how-it-works).
 
 Pass `include=` or `exclude=` when an application needs the standard set with
 only selected tools. Selectors use the model-visible tool names above, and

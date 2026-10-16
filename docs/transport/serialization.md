@@ -1,4 +1,4 @@
-# Transport Serialization
+# Serialization
 
 For harness run-event payloads in a custom transport, see
 [Run Event Serialization](../harness/event-serialization.md). This page describes

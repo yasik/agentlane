@@ -1,4 +1,4 @@
-# Runtime: Distributed Runtime Usage
+# Distributed usage
 
 Distributed runtime support is easiest to approach in two modes:
 

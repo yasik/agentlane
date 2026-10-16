@@ -1,4 +1,4 @@
-# Tracing Overview
+# Overview
 
 Tracing is the shared observability layer for AgentLane. It gives runtime code,
 model code, and application code a common trace and span model so the whole

@@ -1,4 +1,4 @@
-# Run Event Serialization
+# Run event serialization
 
 Every concrete run event exposes `to_dict()` and `dumps()`. These methods are part
 of the core package and do not require the process bridge.

@@ -1,4 +1,4 @@
-# Harness Tool Permissions
+# Permissions
 
 ## Path Policy
 
@@ -16,7 +16,7 @@ mounted roots with `normalize_virtual_path` before containment checks.
 `WorkspaceToolPermissionPolicy` and
 `PathScopeToolPermissionPolicy` deny these non-local paths. Use a custom policy
 for the adapter's storage namespace; operation grants and approval callbacks
-remain available. See [File I/O interfaces](filesystem.md).
+remain available. See [File I/O interfaces](../filesystem.md).
 
 AgentLane is a framework, so first-party helpers stay permissive unless an
 application passes an explicit policy. With no `permissions=` argument,

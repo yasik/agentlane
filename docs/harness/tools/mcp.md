@@ -1,4 +1,4 @@
-# Harness MCP Tools
+# MCP
 
 `MCPToolsShim` discovers tools from Model Context Protocol (MCP) servers and
 adds them to an agent as native AgentLane tools. It supports Streamable HTTP
@@ -47,7 +47,7 @@ print(result.final_output)
 The shim opens and closes its connections for each run.
 
 For a runnable example with a local server, see the
-[MCP Meeting Assistant](../../examples/harness/mcp_meeting_assistant/README.md).
+[MCP Meeting Assistant](../../../examples/harness/mcp_meeting_assistant/README.md).
 
 ## Tool names and context
 
@@ -81,7 +81,7 @@ notes = MCPServer(
 
 MCP tools preserve the server's input schema with `strict=False`. They set
 `retry_on_timeout=False` to prevent automatic repeats after a tool timeout.
-See [model tool policy](../models/overview.md#schema-and-timeout-policy).
+See [model tool policy](../../models/overview.md#schema-and-timeout-policy).
 
 ## Authorization
 
@@ -283,12 +283,12 @@ again and gets fresh wrapper state. The restricted source binding selects
 the permitted servers and tool names before it creates the child session.
 The original MCP configuration cannot broaden that inherited set. Custom
 wrappers must pass the complete `ShimBindingContext` to the inner `bind(...)`
-method. See [dynamic source inheritance](./shims.md#advanced-bound-sessions)
+method. See [dynamic source inheritance](../shims.md#advanced-bound-sessions)
 for the `ToolSourceBinding` contract.
 
 Place `MCPToolsShim` before `SkillsShim` when skill `tools` or
 `disallowed-tools` rules must cover MCP tools. `ExcludeToolsShim` works in
-either order. See [shims](./shims.md) for preparation and inheritance callbacks.
+either order. See [shims](../shims.md) for preparation and inheritance callbacks.
 
 ## Results and data handling
 

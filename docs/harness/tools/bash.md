@@ -1,4 +1,4 @@
-# bash Tool
+# bash
 
 `bash_tool()` exposes a `bash` tool for bounded non-interactive shell commands.
 
@@ -62,7 +62,7 @@ before failure
 ```
 
 For timed-out, cancelled, and non-zero-exit outcomes the tool returns a
-[`ToolFailure`](runner.md#tool-success-and-failure) instead of a plain string.
+[`ToolFailure`](../runner.md#tool-success-and-failure) instead of a plain string.
 `ToolFailure` is a `str` subclass, so the model-facing text is unchanged, while
 the runner reads the attached `ToolError` and reports `ok=False` (with a stable
 `kind` of `timeout`, `cancelled`, or `nonzero_exit`) on the `RunToolEndEvent`.
@@ -96,4 +96,4 @@ Filesystem readers and logical mounts are independent of process mounts.
 Bash never obtains remote access through a reader or writer. The host must
 expose data to the process when commands need it. Grep runs in the harness
 process environment, so run both tool handlers there when they must share a
-sandbox workspace. See [File I/O interfaces](./filesystem.md).
+sandbox workspace. See [File I/O interfaces](../filesystem.md).

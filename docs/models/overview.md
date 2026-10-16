@@ -1,4 +1,4 @@
-# Models Overview
+# Overview
 
 The models layer gives the rest of AgentLane a stable way to describe an LLM
 interaction without baking provider details into application code. This is
@@ -73,7 +73,7 @@ unchanged; adapters receive the strictness setting with the tool definition.
 
 `Tool.retry_on_timeout` defaults to `True`. Set it to `False` to disable
 automatic timeout retries in `ToolExecutor`, even when
-`Tools.tool_call_max_retries` allows retries. [MCP tools](../harness/mcp.md)
+`Tools.tool_call_max_retries` allows retries. [MCP tools](../harness/tools/mcp.md)
 use `strict=False` and `retry_on_timeout=False`.
 
 ### Wrapping And Copying Tools

@@ -1,4 +1,4 @@
-# Default Agents
+# Default agents
 
 `agentlane.harness.agents.DefaultAgent` is the high-level local harness entry
 point for straightforward agent usage.

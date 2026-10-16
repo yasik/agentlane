@@ -1,4 +1,4 @@
-# Workspace Packages
+# Workspace packages
 
 Follow this process when adding a new utility package to the workspace.
 

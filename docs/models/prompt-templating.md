@@ -1,4 +1,4 @@
-# Models: Prompt Templating
+# Prompt templating
 
 Prompt code gets hard to maintain when message strings, runtime data, and
 expected output shape are all mixed together. AgentLane keeps those concerns

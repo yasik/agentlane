@@ -1,4 +1,4 @@
-# write Tool
+# write
 
 `write_tool()` exposes a `write` tool for creating or overwriting UTF-8 text
 files.
@@ -13,7 +13,7 @@ schema and result format stay the same. The writer receives logical paths and
 opens a byte writer; `cwd` defaults to the storage root. Mounted writers accept
 rooted virtual paths and resolve relative paths from `cwd`. Plain injected
 writers retain relative POSIX paths. Omit `writer` for local files: a bare
-`notes.md` then writes under the process cwd captured at construction. See [File I/O interfaces](filesystem.md) for metadata,
+`notes.md` then writes under the process cwd captured at construction. See [File I/O interfaces](../filesystem.md) for metadata,
 replacement, and cancellation requirements.
 
 ## Permissions

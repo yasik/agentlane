@@ -1,4 +1,4 @@
-# Harness Runner
+# Runner
 
 Once a run has been accepted and a working
 [`RunState`](../../src/agentlane/harness/_run.py) exists, the runner takes

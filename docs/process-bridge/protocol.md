@@ -1,4 +1,4 @@
-# Protocol and Lifecycle
+# Protocol and lifecycle
 
 The session API uses a strict stdio protocol internally. Every command and
 event is one JSON object followed by `\n`.

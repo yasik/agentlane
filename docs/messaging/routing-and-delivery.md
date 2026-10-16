@@ -1,4 +1,4 @@
-# Messaging: Routing and Delivery
+# Routing and delivery
 
 Messaging is the vocabulary the rest of AgentLane builds on. Before there are
 tools, handoffs, or runs, there are only recipients, topics, envelopes, and

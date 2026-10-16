@@ -1,4 +1,4 @@
-# Module Layout and Exports
+# Module layout and exports
 
 Use this page for file naming, package layout, `__init__.py`, and export rules.
 

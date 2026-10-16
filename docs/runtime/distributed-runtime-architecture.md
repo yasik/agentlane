@@ -1,4 +1,4 @@
-# Runtime: Distributed Runtime Architecture
+# Distributed architecture
 
 The distributed runtime keeps the same delivery model as the in-process runtime,
 but separates routing from execution. A host knows which worker owns which

@@ -1,4 +1,4 @@
-# Runtime Configuration
+# Runtime configuration
 
 Runtime configuration is for state owned by the Python agent instance, starting
 with model settings. The app sends desired-state patches through

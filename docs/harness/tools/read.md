@@ -1,4 +1,4 @@
-# read Tool
+# read
 
 `read_tool()` exposes a `read` tool for UTF-8 text files.
 
@@ -13,7 +13,7 @@ schema, text limits, and result format stay the same. The reader receives
 paths in its logical namespace; `cwd` defaults to the storage root. Mounted
 readers accept rooted virtual paths and resolve relative paths from `cwd`.
 Plain injected readers retain relative POSIX paths. Omit `reader` for local
-files and the process cwd captured at construction. See [File I/O adapters](filesystem.md) for the stream contract and example.
+files and the process cwd captured at construction. See [File I/O adapters](../filesystem.md) for the stream contract and example.
 
 ## Permissions
 
