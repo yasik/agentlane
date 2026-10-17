@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -54,7 +54,8 @@ async def _subscription_peer(
     graceful_close: bool = False,
     delayed_ack: bool = False,
     hold_first_page: bool = False,
-) -> AsyncIterator[MCPServer]:
+) -> AsyncGenerator[MCPServer, None]:
+    # Open each gate unless the test needs to control that protocol step.
     if not delayed_ack:
         peer.allow_ack.set()
     if not hold_first_page:
@@ -71,6 +72,7 @@ async def _subscription_peer(
         )
         peer.list_started.set()
         await peer.allow_list.wait()
+
         return result
 
     async def listen(
@@ -92,6 +94,7 @@ async def _subscription_peer(
         )
         peer.acknowledged.set()
 
+        # End the first subscription so the client must establish a replacement.
         if attempt == 1:
             await peer.drop.wait()
             if graceful_close:
@@ -99,6 +102,7 @@ async def _subscription_peer(
 
             raise MCPError(types.CONNECTION_CLOSED, "Subscription transport closed.")
 
+        # Deliver catalog changes only through the recovered subscription.
         await peer.changed.wait()
         await context.session.send_notification(
             types.ToolListChangedNotification(
@@ -107,6 +111,7 @@ async def _subscription_peer(
             related_request_id=context.request_id,
         )
         await peer.finish.wait()
+
         return types.SubscriptionsListenResult(_meta=meta)
 
     sdk_server = Server(
@@ -121,12 +126,14 @@ async def _subscription_peer(
             await inner(scope, receive, send)
             return
 
+        # Reject discovery for legacy peers while forwarding other requests to the SDK.
         buffered: list[Message] = []
         while True:
             message = await receive()
             buffered.append(message)
             if not message.get("more_body", False):
                 break
+
         payload = json.loads(b"".join(message.get("body", b"") for message in buffered))
         if payload.get("method") == "server/discover":
             await send({"type": "http.response.start", "status": 404, "headers": []})
@@ -147,6 +154,7 @@ async def _subscription_peer(
                 ),
             )
         finally:
+            # Release all waiters so fixture shutdown cannot depend on test success.
             peer.allow_ack.set()
             peer.allow_list.set()
             peer.drop.set()

@@ -138,7 +138,12 @@
           "reasoning": null,
           "reasoning_signature": null,
           "response": null,
-          "error": null
+          "error": null,
+          "continuation": null,
+          "async_tool_call": null,
+          "required_tool_call_ids": [],
+          "input_messages": null,
+          "steering": null
         },
         "kind": "model_stream"
       }
@@ -175,6 +180,8 @@
           "created": 1,
           "model": "scripted",
           "object": "chat.completion",
+          "metadata": null,
+          "moderation": null,
           "service_tier": null,
           "system_fingerprint": null,
           "usage": null,
@@ -2350,6 +2357,8 @@
               "created": 1,
               "model": "scripted",
               "object": "chat.completion",
+              "metadata": null,
+              "moderation": null,
               "service_tier": null,
               "system_fingerprint": null,
               "usage": null,
@@ -2408,6 +2417,8 @@
                 "created": 1,
                 "model": "scripted",
                 "object": "chat.completion",
+                "metadata": null,
+                "moderation": null,
                 "service_tier": null,
                 "system_fingerprint": null,
                 "usage": null,
@@ -2439,6 +2450,8 @@
                 "created": 1,
                 "model": "scripted",
                 "object": "chat.completion",
+                "metadata": null,
+                "moderation": null,
                 "service_tier": null,
                 "system_fingerprint": null,
                 "usage": null,
@@ -3554,6 +3567,8 @@
               "created": 1,
               "model": "scripted",
               "object": "chat.completion",
+              "metadata": null,
+              "moderation": null,
               "service_tier": null,
               "system_fingerprint": null,
               "usage": null,
@@ -3612,6 +3627,8 @@
                 "created": 1,
                 "model": "scripted",
                 "object": "chat.completion",
+                "metadata": null,
+                "moderation": null,
                 "service_tier": null,
                 "system_fingerprint": null,
                 "usage": null,
@@ -3643,6 +3660,8 @@
                 "created": 1,
                 "model": "scripted",
                 "object": "chat.completion",
+                "metadata": null,
+                "moderation": null,
                 "service_tier": null,
                 "system_fingerprint": null,
                 "usage": null,
@@ -4719,6 +4738,8 @@
             "created": 1,
             "model": "scripted",
             "object": "chat.completion",
+            "metadata": null,
+            "moderation": null,
             "service_tier": null,
             "system_fingerprint": null,
             "usage": null,
@@ -4726,7 +4747,12 @@
               "kept": null
             }
           },
-          "error": null
+          "error": null,
+          "continuation": null,
+          "async_tool_call": null,
+          "required_tool_call_ids": [],
+          "input_messages": null,
+          "steering": null
         },
         "kind": "model_stream"
       }
@@ -4783,6 +4809,8 @@
             "created": 1,
             "model": "scripted",
             "object": "chat.completion",
+            "metadata": null,
+            "moderation": null,
             "service_tier": null,
             "system_fingerprint": null,
             "usage": null,
@@ -4790,7 +4818,12 @@
               "kept": null
             }
           },
-          "error": null
+          "error": null,
+          "continuation": null,
+          "async_tool_call": null,
+          "required_tool_call_ids": [],
+          "input_messages": null,
+          "steering": null
         },
         "kind": "model_stream"
       }
@@ -4847,6 +4880,8 @@
             "created": 1,
             "model": "scripted",
             "object": "chat.completion",
+            "metadata": null,
+            "moderation": null,
             "service_tier": null,
             "system_fingerprint": null,
             "usage": null,
@@ -4854,7 +4889,12 @@
               "kept": null
             }
           },
-          "error": null
+          "error": null,
+          "continuation": null,
+          "async_tool_call": null,
+          "required_tool_call_ids": [],
+          "input_messages": null,
+          "steering": null
         },
         "kind": "model_stream"
       }
@@ -4911,6 +4951,8 @@
             "created": 1,
             "model": "scripted",
             "object": "chat.completion",
+            "metadata": null,
+            "moderation": null,
             "service_tier": null,
             "system_fingerprint": null,
             "usage": null,
@@ -4918,7 +4960,12 @@
               "kept": null
             }
           },
-          "error": null
+          "error": null,
+          "continuation": null,
+          "async_tool_call": null,
+          "required_tool_call_ids": [],
+          "input_messages": null,
+          "steering": null
         },
         "kind": "model_stream"
       }
@@ -4975,6 +5022,8 @@
             "created": 1,
             "model": "scripted",
             "object": "chat.completion",
+            "metadata": null,
+            "moderation": null,
             "service_tier": null,
             "system_fingerprint": null,
             "usage": null,
@@ -4982,7 +5031,12 @@
               "kept": null
             }
           },
-          "error": null
+          "error": null,
+          "continuation": null,
+          "async_tool_call": null,
+          "required_tool_call_ids": [],
+          "input_messages": null,
+          "steering": null
         },
         "kind": "model_stream"
       }
@@ -5039,6 +5093,8 @@
             "created": 1,
             "model": "scripted",
             "object": "chat.completion",
+            "metadata": null,
+            "moderation": null,
             "service_tier": null,
             "system_fingerprint": null,
             "usage": null,
@@ -5049,7 +5105,12 @@
           "error": {
             "type": "RuntimeError",
             "message": "model failed"
-          }
+          },
+          "continuation": null,
+          "async_tool_call": null,
+          "required_tool_call_ids": [],
+          "input_messages": null,
+          "steering": null
         },
         "kind": "model_stream"
       }

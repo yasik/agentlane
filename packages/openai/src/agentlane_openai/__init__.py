@@ -14,6 +14,7 @@ Types:
 """
 
 from ._embeddings import EmbeddingResult, EmbeddingsClient
+from ._response_adapter import ResponseError
 from ._responses_client import ResponsesClient, ResponsesFactory
 from ._tool_output_adapter import ResponsesApiOutputAdapter
 
@@ -21,6 +22,7 @@ __all__ = [
     "EmbeddingResult",
     "EmbeddingsClient",
     "ResponsesClient",
+    "ResponseError",
     "ResponsesFactory",
     "ResponsesApiOutputAdapter",
 ]

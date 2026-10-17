@@ -1,7 +1,7 @@
 """Shared cancellation helpers for harness streaming and lifecycle."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Never, cast
 
@@ -11,7 +11,7 @@ from agentlane.runtime import CancellationToken
 @asynccontextmanager
 async def cancellation_scope(
     cancellation_token: CancellationToken | None,
-) -> AsyncIterator[None]:
+) -> AsyncGenerator[None, None]:
     """Cancel the current operation while preserving its task and context.
 
     The observer is stopped before leaving the scope so a cancelled token
@@ -33,6 +33,7 @@ async def cancellation_scope(
         yield
     finally:
         observer.cancel()
+
         # Join the observer without suppressing a new cancellation of the owner.
         await asyncio.gather(observer, return_exceptions=True)
 

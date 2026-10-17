@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -524,7 +524,7 @@ class _HTTPFixture:
 
 
 @asynccontextmanager
-async def _http_server(port: int) -> AsyncIterator[_HTTPFixture]:
+async def _http_server(port: int) -> AsyncGenerator[_HTTPFixture, None]:
     sdk_server = SDKServer("security-fixture")
 
     @sdk_server.tool()
@@ -554,12 +554,15 @@ async def _http_server(port: int) -> AsyncIterator[_HTTPFixture]:
         if scope["type"] != "http" or scope["method"] != "POST":
             await inner(scope, receive, send)
             return
+
+        # Inspect tool arguments to reject the designated call at the HTTP boundary.
         buffered: list[Message] = []
         while True:
             message = await receive()
             buffered.append(message)
             if not message.get("more_body", False):
                 break
+
         payload = json.loads(b"".join(message.get("body", b"") for message in buffered))
         if (
             payload.get("method") == "tools/call"
@@ -570,6 +573,7 @@ async def _http_server(port: int) -> AsyncIterator[_HTTPFixture]:
             await send({"type": "http.response.body", "body": b"Unauthorized"})
             return
 
+        # Replay allowed requests through the real SDK server.
         async def replay() -> Message:
             return buffered.pop(0) if buffered else await receive()
 

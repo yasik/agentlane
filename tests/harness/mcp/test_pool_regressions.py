@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from types import SimpleNamespace
@@ -72,7 +72,7 @@ class _Client:
     @asynccontextmanager
     async def listen(
         self, *, tools_list_changed: bool
-    ) -> AsyncIterator[AsyncIterator[object]]:
+    ) -> AsyncGenerator[AsyncIterator[object], None]:
         del tools_list_changed
 
         async def events() -> AsyncIterator[object]:

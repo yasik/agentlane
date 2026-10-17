@@ -6,10 +6,29 @@ from dataclasses import asdict, is_dataclass
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+from strenum import LowercaseStrEnum
 
 from agentlane.messaging import AgentId, DeliveryOutcome, DeliveryStatus
 
+from ._constants import (
+    AGENT_TOOL_DESCRIPTION_TEMPLATE,
+    DEFAULT_AGENT_TOOL_INSTRUCTIONS,
+    DEFAULT_DELEGATION_TOOL_NAME,
+    DEFAULT_HANDOFF_TASK_MESSAGE,
+    HANDOFF_DESCRIPTION_TEMPLATE,
+    HANDOFF_TOOL_RESULT_TEMPLATE,
+)
 from ._run import RunResult
+
+
+class DelegationKind(LowercaseStrEnum):
+    """Child agent families used in delegated runtime addresses."""
+
+    HANDOFF = "handoff"
+    """Used in child addresses when delegation transfers control of the conversation."""
+
+    TOOL = "tool"
+    """Used in child addresses when a helper returns a tool result to its parent."""
 
 
 class DelegatedTaskInput(BaseModel):
@@ -46,7 +65,8 @@ def normalize_delegation_tool_name(value: str) -> str:
     normalized = re.sub(r"[^0-9A-Za-z_]+", "_", value.strip()).strip("_").lower()
     if normalized:
         return normalized
-    return "delegate"
+
+    return DEFAULT_DELEGATION_TOOL_NAME
 
 
 def agent_tool_description(
@@ -56,7 +76,8 @@ def agent_tool_description(
     """Return the default description for one agent-as-tool wrapper."""
     if description:
         return description
-    return f"Delegate a focused task to {agent_name} and continue with the result."
+
+    return AGENT_TOOL_DESCRIPTION_TEMPLATE.format(agent_name=agent_name)
 
 
 def handoff_description(
@@ -66,43 +87,34 @@ def handoff_description(
     """Return the default description for one first-class handoff tool."""
     if description:
         return description
-    return f"Transfer the conversation to {agent_name}."
+
+    return HANDOFF_DESCRIPTION_TEMPLATE.format(agent_name=agent_name)
 
 
 def default_handoff_task_message() -> str:
     """Return the fallback user-side delegation message for handoff transfer."""
-    return (
-        "You are being delegated this conversation. Continue from the "
-        "transferred history and take over from here."
-    )
+    return DEFAULT_HANDOFF_TASK_MESSAGE
 
 
 def default_handoff_tool_result(tool_name: str) -> str:
     """Return the synthetic tool result recorded for an intercepted handoff."""
-    return f"Handoff accepted by {tool_name}. Control transfers now."
+    return HANDOFF_TOOL_RESULT_TEMPLATE.format(tool_name=tool_name)
 
 
 def default_agent_tool_instructions() -> str:
     """Return the default prompt for one generic spawned agent-as-tool call."""
-    return (
-        "You are a newly spawned agent in a team of agents collaborating to "
-        "complete a task. You can spawn sub-agents to handle subtasks, and "
-        "those sub-agents can spawn their own sub-agents. Return the response "
-        "to your assigned task directly; that response will be delivered back "
-        "to your parent agent. Treat the next user message as your assigned "
-        "task, and use any available prior history only as background context."
-    )
+    return DEFAULT_AGENT_TOOL_INSTRUCTIONS
 
 
 def delegated_agent_type(
     owner_id: AgentId,
     tool_name: str,
     *,
-    kind: str,
+    kind: DelegationKind,
 ) -> str:
     """Return the runtime type shared by one delegated agent family."""
     return (
-        f"{owner_id.type.value}.{owner_id.key.value}.{kind}."
+        f"{owner_id.type.value}.{owner_id.key.value}.{kind.value}."
         f"{normalize_delegation_tool_name(tool_name)}"
     )
 
@@ -111,7 +123,7 @@ def delegated_agent_id(
     owner_id: AgentId,
     tool_name: str,
     *,
-    kind: str,
+    kind: DelegationKind,
 ) -> AgentId:
     """Return one fresh delegated child id for the given tool invocation."""
     return AgentId.from_values(

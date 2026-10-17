@@ -610,6 +610,9 @@ class DefaultAgent(AgentBase):
             input,
             cancellation_token=cancellation_token,
         )
+
+        # Forward controls and closure to the active runtime stream.
+        stream.bind_steering(low_level_stream.steer)
         stream.add_cleanup(close_stream_callback(low_level_stream))
 
         try:
@@ -620,6 +623,7 @@ class DefaultAgent(AgentBase):
         finally:
             await low_level_stream.aclose()
 
+        # Keep a handoff's final state; otherwise use the local runtime state.
         if result.run_state is not None:
             return result
 
@@ -660,10 +664,10 @@ class DefaultAgent(AgentBase):
         if self._state_store is None or self._run_state is None:
             return run_input, None
 
+        # Use the persisted revision when a resumed run later saves its state.
         resumed_state = copy_run_state(run_input)
-        if resumed_state is None:
-            raise AssertionError("RunState copy unexpectedly returned None.")
         resumed_state.revision = self._run_state.revision
+
         return resumed_state, None
 
     async def _run_events_once(
@@ -692,6 +696,9 @@ class DefaultAgent(AgentBase):
             approval_events=approval_events,
             cancellation_token=cancellation_token,
         )
+
+        # Forward controls and closure to the active runtime stream.
+        stream.bind_steering(low_level_stream.steer)
         stream.add_cleanup(close_stream_callback(low_level_stream))
 
         try:
@@ -702,6 +709,7 @@ class DefaultAgent(AgentBase):
         finally:
             await low_level_stream.aclose()
 
+        # Keep a handoff's final state; otherwise use the local runtime state.
         if result.run_state is not None:
             return result
 

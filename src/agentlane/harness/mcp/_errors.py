@@ -13,6 +13,16 @@ class MCPFailureKind(LowercaseStrEnum):
     PROTOCOL = "protocol"
 
 
+MCP_TRANSPORT_TOOL_ERROR_KIND = f"mcp_{MCPFailureKind.TRANSPORT.value}"
+"""Identifies tool failures caused by an unavailable MCP transport."""
+
+MCP_AUTHORIZATION_TOOL_ERROR_KIND = f"mcp_{MCPFailureKind.AUTHORIZATION.value}"
+"""Identifies tool failures caused by invalid or changed MCP authorization."""
+
+MCP_SERVER_TOOL_ERROR_KIND = "mcp_server"
+"""Identifies tool results that the MCP server marks as errors."""
+
+
 class MCPError(RuntimeError):
     """Base error for MCP discovery and lifecycle failures."""
 

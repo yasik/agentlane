@@ -11,6 +11,8 @@ from agentlane.io import read_all
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
+from .._constants import EMPTY_PATH_ERROR
+from ._constants import NULL_BYTE_PATH_ERROR, PATCH_TOOL_NAME
 from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
     ToolApprovalCallback,
@@ -22,7 +24,6 @@ from ._permissions import (
 from ._storage_write import write_content
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "patch"
 _TOOL_DESCRIPTION = (
     "Apply precise SEARCH/REPLACE edits to an existing text file. "
     "The path is provided as a structured argument; edits must contain one or "
@@ -113,7 +114,7 @@ def patch_tool(
 
     return HarnessToolDefinition(
         tool=Tool[_ToolArgs, str](
-            name=_TOOL_NAME,
+            name=PATCH_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
             handler=run_patch,
@@ -143,7 +144,7 @@ async def _patch_file(
     resolved_path = resolver.resolve(args.path)
     permission_error = await evaluate_tool_permission(
         ToolPermissionRequest(
-            tool_name=_TOOL_NAME,
+            tool_name=PATCH_TOOL_NAME,
             operation=ToolOperation.MODIFY_FILE,
             cwd=resolver.cwd,
             path=resolved_path,
@@ -256,9 +257,9 @@ def _prepare_storage_patch(
 def _validate_args(args: _ToolArgs) -> str | None:
     """Return a model-facing validation error when arguments are invalid."""
     if args.path.strip() == "":
-        return "path must not be empty"
+        return EMPTY_PATH_ERROR
     if "\x00" in args.path:
-        return "path contains a null byte"
+        return NULL_BYTE_PATH_ERROR
     try:
         args.edits.encode("utf-8")
     except UnicodeEncodeError:

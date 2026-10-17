@@ -2,6 +2,7 @@
 
 from collections.abc import Iterable
 
+from .._constants import DEFAULT_EXCLUDE_TOOLS_SHIM_NAME
 from ._base import Shim
 from ._types import PreparedTurn
 
@@ -27,7 +28,7 @@ class ExcludeToolsShim(Shim):
         self,
         *,
         names: Iterable[str],
-        name: str = "exclude-tools",
+        name: str = DEFAULT_EXCLUDE_TOOLS_SHIM_NAME,
     ) -> None:
         """Initialize one exclusion shim.
 

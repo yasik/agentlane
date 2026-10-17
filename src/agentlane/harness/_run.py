@@ -7,7 +7,7 @@ lifecycle and the runner.
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, TypedDict, cast
+from typing import Any, TypedDict, cast, overload
 
 from pydantic import BaseModel, JsonValue
 
@@ -164,6 +164,14 @@ class RunResult:
         rendering errors propagate unchanged, even in fields a host does not show.
         """
         return cast(RunResultRecord, serialize_value(self))
+
+
+@overload
+def copy_run_state(run_state: RunState) -> RunState: ...
+
+
+@overload
+def copy_run_state(run_state: None) -> None: ...
 
 
 def copy_run_state(run_state: RunState | None) -> RunState | None:

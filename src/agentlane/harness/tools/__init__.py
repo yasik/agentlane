@@ -16,6 +16,7 @@ from ._bash_executor import (
     LocalBashExecutor,
     resolve_bash_shell,
 )
+from ._constants import PLAN_TOOL_NAME
 from ._find import find_tool
 from ._gitignore import GitignoreMatcher
 from ._grep import grep_tool
@@ -52,7 +53,6 @@ from ._permissions import (
     workspace_tool_policy,
 )
 from ._plan import (
-    PLAN_TOOL_NAME,
     PLAN_UPDATED_MESSAGE,
     PlanUpdate,
     plan_tool,

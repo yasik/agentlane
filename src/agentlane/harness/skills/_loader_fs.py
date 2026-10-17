@@ -13,6 +13,7 @@ from agentlane.harness.filesystem import (
 )
 from agentlane.io import read_all
 
+from .._constants import INVALID_DIRECTORY_ENTRY
 from ._discovery import default_skill_roots
 from ._loader import SkillLoader
 from ._parser import ParsedSkillFile, parse_skill_text
@@ -139,7 +140,7 @@ class FilesystemSkillLoader(SkillLoader):
             for entry in entries:
                 normalized = normalize_relative_path(entry.name)
                 if len(normalized.parts) != 1 or str(normalized) != entry.name:
-                    raise ValueError("Directory entries must contain one child name")
+                    raise ValueError(INVALID_DIRECTORY_ENTRY)
 
         return tuple(sorted(entries, key=lambda entry: entry.name))
 

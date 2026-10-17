@@ -445,6 +445,8 @@ async def test_all_excluded_tools_drop_required_choice_before_model(
     exclude = ExcludeToolsShim(names=("remote__read", "remote__write"))
     mcp = _mcp(manager)
     model = SequenceModel([make_assistant_response("done")])
+
+    # Exercise both shim orders so final tool visibility determines the choice.
     await DefaultAgent(
         descriptor=AgentDescriptor(
             name="empty-tools",
@@ -453,7 +455,11 @@ async def test_all_excluded_tools_drop_required_choice_before_model(
             shims=(exclude, mcp) if exclude_first else (mcp, exclude),
         )
     ).run("test")
-    assert model.call_tools[0] is None
+    limited = model.call_tools[0]
+
+    assert limited is not None
+    assert limited.normalized_tools == ()
+    assert limited.tool_choice == "none"
 
 
 class _ChangeCatalog(Shim):

@@ -18,6 +18,42 @@ packages then implement the shared
 [`Config`](../../src/agentlane/models/_interface.py) boundary instead of
 inventing a different request shape for every integration.
 
+## Message roles
+
+Use `MessageRole` from `agentlane.models` for shared message roles. It defines
+`SYSTEM`, `DEVELOPER`, `USER`, `ASSISTANT`, and `TOOL` with the string values
+`system`, `developer`, `user`, `assistant`, and `tool`. The harness and model
+adapters use these values for message construction and role checks.
+
+Use `.value` to construct a message with a plain string role:
+
+```python
+from agentlane.models import MessageRole
+
+message = {"role": MessageRole.USER.value, "content": "Hello"}
+```
+
+Plain string roles remain valid inputs. Message serialization keeps the same
+string values, and each provider retains its supported roles and conversion
+rules.
+
+The models package also exports shared values for tool and stream contracts:
+
+| Enum | Values |
+| --- | --- |
+| `ToolChoice` | `auto`, `required`, `none` |
+| `ToolErrorKind` | `error`, `timeout`, `cancelled`, `nonzero_exit` |
+| `PlanStepState` | `pending`, `in_progress`, `completed` |
+| `SteeringStatus` | `submitted`, `accepted`, `applied`, `failed`, `unknown` |
+| `ModelContinuation` | `automatic`, `explicit` |
+
+Use each member's `.value` in existing string fields. `ToolError.kind` also
+accepts custom strings. The `PlanStepStatus` type and the string types for
+tool choice, steering status, and continuation remain unchanged.
+
+Provider adapters share `ESCAPE_SEQUENCE_RETRY_MESSAGE` and
+`SCHEMA_NORMALIZATION_ERROR` for model validation feedback.
+
 ## Prompts, Tools, And Output
 
 The three pieces fit together:
@@ -109,6 +145,164 @@ the framework. Install LiteLLM support with `agentlane[litellm]`.
 That is why `Config` stays narrow. It covers shared networking and control-plane
 concerns. Model-specific options are passed through per-call arguments instead
 of being forced into one large global settings object.
+
+### OpenAI Responses adapter
+
+`agentlane_openai.ResponsesClient` delegates requests to the native OpenAI SDK.
+Pass SDK request options as client keyword arguments or in `extra_call_args`.
+The SDK and service validate model IDs, reasoning settings, and service tiers.
+The adapter retains the `max_tokens`, `reasoning_effort`, and `verbosity`
+aliases. Structured-output schemas merge with your `text` settings.
+
+The result retains the canonical `ModelResponse` interface. Its
+`model_extra["openai_response"]` contains the SDK response serialized as JSON,
+including ordered output items, annotations, artifacts, detailed usage, and
+the returned service tier. Missing usage remains missing. An artifact-only
+response can have no canonical text; read its native output to get the artifact.
+
+Assistant messages carry native output in `openai_responses_input`. The
+harness renderer and version-1 snapshots preserve this field. On replay,
+`ResponsesClient` sends these native items once and skips the canonical text
+and tool-call projection for that message. Keep the field when copying history.
+LiteLLM rejects messages with this field. Convert history explicitly before
+changing providers, and decide which native information your application can
+discard.
+
+To supply native input through either the adapter or harness, use a canonical
+message with the native input field. For example, to reference a stored item:
+
+```python
+messages = [
+    {
+        "role": "user",
+        "openai_responses_input": [
+            {"type": "item_reference", "id": "ITEM_ID"},
+        ],
+    },
+]
+response = await client.get_response(messages)
+```
+
+Replace `ITEM_ID` with the provider item ID. The field accepts SDK Responses
+input dictionaries. Direct adapter calls also accept native item dictionaries
+in `messages`; use the envelope for harness history. Standard chat image and
+file parts are converted to Responses input parts.
+
+Native hosted declarations in `extra_call_args["tools"]` merge with the final
+prepared `Tools` set. Local and MCP functions retain their strictness and
+execution policies. Duplicate native/local names raise `ValueError`. When
+`Tools` is supplied, register function handlers there; raw function or custom
+declarations cannot add handlers outside the prepared set. Direct adapter calls
+without `Tools` can send native function declarations and receive canonical
+function calls for application-managed execution.
+
+An explicit native tool choice is retained when the local choice is `auto`.
+An explicit local `required` or `none` choice takes precedence. After exclusions
+or budgets remove all local tools, the harness retains an empty `Tools` policy
+with choice `none` so provider defaults cannot restore disabled functions.
+
+The supported boundaries are:
+
+| Feature | Adapter and harness behavior |
+| --- | --- |
+| Reasoning, cache, diagnostics, tier, and text options | Passed to the SDK; native response metadata is retained. |
+| Hosted search, image generation, code interpreter, and server tool search | Native declarations pass through; returned artifacts and items are retained. |
+| Direct local and MCP function calls | Run through the existing harness executor and prepared tool policies. |
+| Compaction options and items | Passed through and retained; they do not coordinate a second history owner. Select one compaction policy. |
+| Custom raw-text, computer, local shell, patch, hosted MCP approval, client tool search, and programmatic or namespaced calls | No local execution integration. Unsupported calls raise `ResponseError` with the native response attached. |
+| Steering | Set `websocket=True` and use the active run stream's `steer(...)` method. |
+| Async local and MCP function calls | Select names with `async_tools`; the harness executes complete calls while model output continues. |
+
+`ResponsesClient.handles_retries` is `True`. The adapter owns HTTP retries;
+the SDK and harness do not add retry attempts. Retries honor SDK `Retry-After`
+headers, and quota or policy failures are not retried. Streams retry setup
+only. A failure after streaming starts is reported without replay.
+HTTP SDK exceptions retain their identity. Terminal provider failures raise
+`ResponseError`; its `response` field retains the native response or event.
+Token-limit and content-filter truncation retain their canonical finish reason.
+Payload-free tracing excludes native input and output.
+
+### Steering and async tools
+
+The adapter uses OpenAI SDK `3.31.0`. The LiteLLM extras use the official
+development release `1.107.0.dev2`, which accepts SDK 3. HTTP is the default
+transport. Steering requires `websocket=True` and a model and account that
+support the provider feature.
+
+Configure the adapter and register async functions through the existing
+`Tools` interface:
+
+```python
+import os
+
+from agentlane.harness import AgentDescriptor
+from agentlane.harness.agents import DefaultAgent
+from agentlane.models import Config, Tools
+from agentlane_openai import ResponsesClient
+
+
+async def lookup(topic: str) -> str:
+    return f"Recorded topic: {topic}"
+
+
+model = ResponsesClient(
+    Config(api_key=os.environ["OPENAI_API_KEY"], model="gpt-6-astra"),
+    websocket=True,
+    async_tools=["lookup"],
+)
+agent = DefaultAgent(
+    descriptor=AgentDescriptor(
+        name="Research", model=model, tools=Tools([lookup]),
+    ),
+)
+stream = await agent.run_stream("Look up battery storage and explain the result.")
+receipt = None
+async for event in stream:
+    if event.provider_event_type == "response.created" and receipt is None:
+        receipt = await stream.steer("Focus on home use.")
+    if event.text:
+        print(event.text, end="")
+result = await stream.result()
+```
+
+Call `steer(...)` while a native response is active. The method accepts text
+or a list of SDK steering input dictionaries. It returns a live
+`SteeringReceipt`. Its status starts as `submitted`, then changes as native
+events arrive. `accepted` means the provider queued the input. `applied`
+means the provider created the successor response; the harness then adds the
+input to history. `failed` retains the provider error. `unknown` means the
+run ended before the outcome was confirmed. Event `steering` fields contain
+receipt snapshots. Inspect the receipt or events to determine the outcome.
+
+`run_events(...)` exposes the same `steer(...)` method. Both stream types
+follow successor responses within one logical run. The adapter creates one
+SDK connection per run and closes it during cleanup. Explicit continuations
+retain caller settings and submit tool outputs once. Automatic successors
+keep the inherited tool handlers; current exclusions, authorization checks,
+and budgets still apply. Connection failures stop the run without automatic
+reconnect or replay. If a steering send fails or is cancelled, the adapter
+closes the connection because delivery is uncertain. Pending receipts become
+`unknown`. After a handoff, steering controls the active child run. A handoff
+fails while a steering continuation is pending.
+
+`async_tools` selects executable local or MCP function names. It works with
+HTTP streaming or WebSocket runs. The harness dispatches a call after the SDK
+reports a complete output item, reserves its budget, and retains its call ID
+and handler. Ready results continue through the same model loop. Tools use
+the existing hooks, timeouts, authorization, and cleanup. Async calls disable
+timeout retries; a repeated call ID does not execute twice. Cancellation
+stops and joins pending calls before shim cleanup. A handoff fails while async
+results are pending. Pending work is local to the run and cannot resume from
+a saved snapshot.
+
+WebSocket mode uses harness runs or `stream_response(...)` inside
+`async with model.open_run() as active_model`. Direct `get_response(...)`
+is not supported in this mode. Live harness runs own `previous_response_id`
+and reject separate `conversation`, `context_management`, `background`,
+`stream`, and `stream_id` options. A history replacement requires a fresh
+request and is rejected while accepted steering is pending or an automatic
+successor is active. Use the native SDK for independent conversation or
+compaction control.
 
 ## Streaming
 

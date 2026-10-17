@@ -5,8 +5,13 @@ from dataclasses import dataclass
 from ._constants import (
     DEFAULT_KEEP_RECENT_MESSAGES,
     DEFAULT_KEEP_RECENT_TOKENS,
+    DEFAULT_SHIM_NAME,
     DEFAULT_SUMMARY_MAX_TOKENS,
     DEFAULT_TRIGGER_RATIO,
+    FAILURE_INJECT,
+    FAILURE_SKIP,
+    SUMMARY_AFTER_TAIL,
+    SUMMARY_BEFORE_TAIL,
 )
 from ._prompt import DEFAULT_COMPACTION_PROMPT, DEFAULT_SUMMARY_BRIDGE
 from ._types import OnFailure, SummaryPlacement
@@ -25,10 +30,10 @@ class CompactionShimConfig:
     trigger_tokens: int | None = None
     """Absolute token threshold for compaction; overrides `trigger_ratio`."""
 
-    on_failure: OnFailure = "inject"
+    on_failure: OnFailure = FAILURE_INJECT
     """Whether compaction failures inject a model note or skip silently."""
 
-    name: str = "compaction"
+    name: str = DEFAULT_SHIM_NAME
     """Stable prefix used for report and attempt-key identity."""
 
     def __post_init__(self) -> None:
@@ -44,7 +49,7 @@ class CompactionShimConfig:
             and self.trigger_tokens > self.context_window
         ):
             raise ValueError("trigger_tokens cannot exceed context_window.")
-        if self.on_failure not in {"inject", "skip"}:
+        if self.on_failure not in {FAILURE_INJECT, FAILURE_SKIP}:
             raise ValueError("on_failure must be 'inject' or 'skip'.")
         if not self.name:
             raise ValueError("name must be non-empty.")
@@ -72,7 +77,7 @@ class DefaultCompactorConfig:
     keep_recent_messages: int = DEFAULT_KEEP_RECENT_MESSAGES
     """Minimum number of newest history items retained as verbatim tail."""
 
-    summary_placement: SummaryPlacement = "before_tail"
+    summary_placement: SummaryPlacement = SUMMARY_BEFORE_TAIL
     """Where the summary item is placed relative to retained recent history."""
 
     summary_max_tokens: int | None = DEFAULT_SUMMARY_MAX_TOKENS
@@ -88,7 +93,7 @@ class DefaultCompactorConfig:
             raise ValueError("keep_recent_tokens must be positive.")
         if self.keep_recent_messages <= 0:
             raise ValueError("keep_recent_messages must be positive.")
-        if self.summary_placement not in {"before_tail", "after_tail"}:
+        if self.summary_placement not in {SUMMARY_BEFORE_TAIL, SUMMARY_AFTER_TAIL}:
             raise ValueError("summary_placement must be 'before_tail' or 'after_tail'.")
         if self.summary_max_tokens is not None and self.summary_max_tokens <= 0:
             raise ValueError("summary_max_tokens must be positive when provided.")

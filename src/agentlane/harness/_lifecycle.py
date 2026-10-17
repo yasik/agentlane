@@ -36,6 +36,13 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 
 from ._cancellation import cancel_task_callback, cancellation_relay_task
+from ._constants import (
+    DEFAULT_AGENT_NAME_WORD,
+    DEFAULT_AGENT_TOOL_DESCRIPTION,
+    DEFAULT_AGENT_TOOL_NAME,
+    DEFAULT_HANDOFF_TOOL_DESCRIPTION,
+    DEFAULT_HANDOFF_TOOL_NAME,
+)
 from ._events import RunEventStream
 from ._handoff import (
     DefaultAgentToolInput,
@@ -85,19 +92,17 @@ def _generated_agent_name() -> str:
 def _agent_name_token(value: str) -> str:
     """Normalize one generated name token for use in an agent name."""
     token = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return token or "agent"
+    return token or DEFAULT_AGENT_NAME_WORD
 
 
 @dataclass(slots=True)
 class DefaultHandoff:
     """Configuration for the generic fresh-agent handoff tool."""
 
-    name: str = "handoff"
+    name: str = DEFAULT_HANDOFF_TOOL_NAME
     """Model-facing tool name for the generic transfer path."""
 
-    description: str = (
-        "Transfer the conversation to a fresh helper agent and continue there."
-    )
+    description: str = DEFAULT_HANDOFF_TOOL_DESCRIPTION
     """Model-facing tool description for the generic transfer path."""
 
     instructions: str | PromptSpec[Any] | None = None
@@ -226,10 +231,8 @@ class DefaultAgentTool(ToolSpec[DefaultAgentToolInput]):
     def __init__(
         self,
         *,
-        name: str = "agent",
-        description: str = (
-            "Spawn a focused helper agent by name and task, then continue with the result."
-        ),
+        name: str = DEFAULT_AGENT_TOOL_NAME,
+        description: str = DEFAULT_AGENT_TOOL_DESCRIPTION,
         instructions: str | None = None,
         model: Model[ModelResponse] | None = None,
         model_args: dict[str, Any] | None = None,
@@ -318,18 +321,15 @@ class LifecycleRunner(Protocol):
 class _QueuedRunInput:
     """One pending inbound run input waiting for runner execution.
 
-    Each enqueued input gets its own ``Future`` so the caller can ``await``
-    the result of its specific turn, even if several inputs are queued ahead.
+    Each input has one completion target: a future for terminal calls or
+    a stream handle for streamed calls.
     """
 
     run_input: RunInput
     """Public run input queued for the next runner invocation."""
 
-    future: Future[RunResult] | None
-    """Future resolved with the final run result for terminal inputs."""
-
-    stream: RunStream | RunEventStream | None
-    """Live stream handle for streamed inputs."""
+    completion: Future[RunResult] | RunStream | RunEventStream
+    """Required destination for this input's result or error."""
 
     cancellation_token: CancellationToken | None
     """Optional cancellation token for the runner turn."""
@@ -415,10 +415,10 @@ class AgentLifecycle:
         active drainer will pick it up after the current turn finishes.
         """
         await self._ensure_bound_extensions(agent=agent)
+        future: Future[RunResult] = get_running_loop().create_future()
         queued_input = _QueuedRunInput(
             run_input=run_input,
-            future=get_running_loop().create_future(),
-            stream=None,
+            completion=future,
             cancellation_token=cancellation_token,
         )
         should_drain = False
@@ -435,9 +435,7 @@ class AgentLifecycle:
 
         # Every caller awaits its own future, regardless of whether it was
         # the drainer or a later arrival.
-        if queued_input.future is None:
-            raise AssertionError("Terminal queue input unexpectedly has no future.")
-        return await queued_input.future
+        return await future
 
     async def enqueue_input_stream(
         self,
@@ -449,6 +447,8 @@ class AgentLifecycle:
     ) -> RunStream:
         """Queue one streamed run input and return its live stream handle."""
         await self._ensure_bound_extensions(agent=agent)
+
+        # Give stream closure its own cancellation token and relay caller cancellation.
         internal_token = CancellationToken()
         stream = RunStream(on_close=internal_token.cancel)
         relay_task = cancellation_relay_task(
@@ -460,12 +460,12 @@ class AgentLifecycle:
 
         queued_input = _QueuedRunInput(
             run_input=run_input,
-            future=None,
-            stream=stream,
+            completion=stream,
             cancellation_token=internal_token,
         )
         should_drain = False
 
+        # Only the first enqueuer starts a drainer; later inputs share its queue.
         async with self._lock:
             self._pending_inputs.append(queued_input)
             if not self._is_running:
@@ -491,6 +491,8 @@ class AgentLifecycle:
     ) -> RunEventStream:
         """Queue one event-streamed run input and return its live stream handle."""
         await self._ensure_bound_extensions(agent=agent)
+
+        # Give stream closure its own cancellation token and relay caller cancellation.
         internal_token = CancellationToken()
         stream = RunEventStream(on_close=internal_token.cancel)
         relay_task = cancellation_relay_task(
@@ -502,13 +504,13 @@ class AgentLifecycle:
 
         queued_input = _QueuedRunInput(
             run_input=run_input,
-            future=None,
-            stream=stream,
+            completion=stream,
             cancellation_token=internal_token,
             approval_events=approval_events,
         )
         should_drain = False
 
+        # Only the first enqueuer starts a drainer; later inputs share its queue.
         async with self._lock:
             self._pending_inputs.append(queued_input)
             if not self._is_running:
@@ -571,6 +573,7 @@ class AgentLifecycle:
                     if not self._pending_inputs:
                         self._is_running = False
                         return
+
                     active_input = self._pending_inputs.popleft()
 
                 # Build working state (outside lock)
@@ -584,6 +587,7 @@ class AgentLifecycle:
                     active_input.cancellation_token is not None
                     and active_input.cancellation_token.is_cancelled
                 ):
+                    # Skip cancelled queued input before opening a model session.
                     exc = asyncio.CancelledError()
                     _fail_queued_input(active_input, exc)
                     active_input = None
@@ -591,14 +595,14 @@ class AgentLifecycle:
 
                 # Execute one runner turn
                 try:
-                    if active_input.stream is None:
+                    if isinstance(active_input.completion, Future):
                         result = await runner.run(
                             agent=agent,
                             state=working_state,
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
-                    elif isinstance(active_input.stream, RunEventStream):
+                    elif isinstance(active_input.completion, RunEventStream):
                         event_stream = runner.run_events(
                             agent=agent,
                             state=working_state,
@@ -606,12 +610,17 @@ class AgentLifecycle:
                             approval_events=active_input.approval_events,
                             cancellation_token=active_input.cancellation_token,
                         )
-                        active_input.stream.add_cleanup(
+
+                        # Relay controls and cleanup to the runner stream that owns
+                        # execution.
+                        active_input.completion.bind_steering(event_stream.steer)
+                        active_input.completion.add_cleanup(
                             close_stream_callback(event_stream)
                         )
                         try:
                             async for run_event in event_stream:
-                                active_input.stream.emit(run_event)
+                                active_input.completion.emit(run_event)
+
                             result = await event_stream.result()
                         finally:
                             await event_stream.aclose()
@@ -622,12 +631,17 @@ class AgentLifecycle:
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
-                        active_input.stream.add_cleanup(
+
+                        # Relay controls and cleanup to the runner stream that owns
+                        # execution.
+                        active_input.completion.bind_steering(model_stream.steer)
+                        active_input.completion.add_cleanup(
                             close_stream_callback(model_stream)
                         )
                         try:
                             async for model_event in model_stream:
-                                active_input.stream.emit(model_event)
+                                active_input.completion.emit(model_event)
+
                             result = await model_stream.result()
                         finally:
                             await model_stream.aclose()
@@ -666,6 +680,7 @@ class AgentLifecycle:
 
             for queued_input in pending_inputs:
                 _fail_queued_input(queued_input, exc)
+
             raise
 
 
@@ -686,6 +701,7 @@ def _next_run_state(
     Resuming into an agent that already has a baseline is an error — the
     caller should create a fresh agent instance instead.
     """
+
     # Case 1: resume from a serialized RunState
     if isinstance(run_input, RunState):
         if current_state is not None:
@@ -693,11 +709,7 @@ def _next_run_state(
                 "Cannot resume a `RunState` when the agent already has persisted run state."
             )
 
-        resumed_state = copy_run_state(run_input)
-        if resumed_state is None:
-            raise AssertionError("RunState copy unexpectedly returned None.")
-
-        return resumed_state
+        return copy_run_state(run_input)
 
     # Case 2: first input — initialize a new conversation
     if current_state is None:
@@ -710,10 +722,8 @@ def _next_run_state(
 
     # Case 3: continuation — fork from the current baseline
     next_state = copy_run_state(current_state)
-    if next_state is None:
-        raise AssertionError("Current run state copy unexpectedly returned None.")
-
     _append_run_input(next_state.history, run_input)
+
     return next_state
 
 
@@ -763,14 +773,10 @@ def _set_future_exception(
 
 def _resolve_queued_input(queued_input: _QueuedRunInput, result: RunResult) -> None:
     """Resolve one queued terminal or streaming input successfully."""
-    if queued_input.stream is not None:
-        queued_input.stream.finish(result)
-        return
-
-    if queued_input.future is None:
-        raise AssertionError("Queued terminal input unexpectedly has no future.")
-
-    _set_future_result(queued_input.future, result)
+    if isinstance(queued_input.completion, Future):
+        _set_future_result(queued_input.completion, result)
+    else:
+        queued_input.completion.finish(result)
 
 
 def _fail_queued_input(
@@ -778,14 +784,10 @@ def _fail_queued_input(
     exc: BaseException,
 ) -> None:
     """Fail one queued terminal or streaming input."""
-    if queued_input.stream is not None:
-        queued_input.stream.fail(exc)
-        return
-
-    if queued_input.future is None:
-        raise AssertionError("Queued terminal input unexpectedly has no future.")
-
-    _set_future_exception(queued_input.future, exc)
+    if isinstance(queued_input.completion, Future):
+        _set_future_exception(queued_input.completion, exc)
+    else:
+        queued_input.completion.fail(exc)
 
 
 def _consume_drain_task_result(task: asyncio.Task[None]) -> None:

@@ -5,18 +5,15 @@ from typing import Any, Self
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import PlanStepStatus, Tool, ToolExecutionContext
+from agentlane.models import PlanStepState, PlanStepStatus, Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
+from ._constants import PLAN_TOOL_NAME
 from ._types import HarnessToolDefinition
-
-PLAN_TOOL_NAME = "write_plan"
-"""Public, stable name of the first-party plan tool."""
 
 PLAN_UPDATED_MESSAGE = "Plan updated"
 """Public, stable model-facing success message returned by the plan tool."""
 
-_TOOL_NAME = PLAN_TOOL_NAME
 _TOOL_DESCRIPTION = """Writes or updates the task plan.
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
@@ -217,7 +214,7 @@ def _validate_plan(args: _ToolArgs) -> str | None:
     for item in args.plan:
         if item.step.strip() == "":
             return "plan steps must not be empty"
-        if item.status == "in_progress":
+        if item.status == PlanStepState.IN_PROGRESS.value:
             in_progress_count += 1
 
     if in_progress_count > 1:
@@ -242,7 +239,7 @@ def _build_plan_tool(
 ) -> Tool[_ToolArgs, str]:
     """Build a concrete executable plan tool."""
     return Tool(
-        name=_TOOL_NAME,
+        name=PLAN_TOOL_NAME,
         description=_TOOL_DESCRIPTION,
         args_model=_ToolArgs,
         handler=handler,

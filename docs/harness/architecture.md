@@ -18,8 +18,9 @@ provides the smaller high-level `run(...)`, `run_stream(...)`, and
 [`agentlane.harness.shims`](../../src/agentlane/harness/shims/__init__.py)
 package provides the mutating extension seam for instructions, tools,
 conversation history, and per-run context shaping. The
-[`Runner`](../../src/agentlane/harness/_runner.py) then conducts the actual
-model loop and produces a
+[`Runner`](../../src/agentlane/harness/_runner.py) starts a
+[`RunLoop`](../../src/agentlane/harness/_run_loop.py) for each run. The loop
+executes model and tool turns and produces a
 [`RunResult`](../../src/agentlane/harness/_run.py).
 
 ## What The Harness Adds

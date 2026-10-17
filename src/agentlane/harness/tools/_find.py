@@ -16,6 +16,8 @@ from agentlane.harness.filesystem import (
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
+from .._constants import EMPTY_PATH_ERROR, INVALID_DIRECTORY_ENTRY
+from ._constants import EMPTY_PATTERN_ERROR, FIND_TOOL_NAME, INVALID_LIMIT_ERROR
 from ._gitignore import GitignoreMatcher
 from ._output import FIND_DEFAULT_LIMIT, TEXT_MAX_BYTES
 from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
@@ -28,7 +30,6 @@ from ._permissions import (
 )
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "find"
 _TOOL_DESCRIPTION = (
     "Searches files by glob pattern. Returns paths relative to the "
     "search directory, sorted by modification time (newest first), with ties "
@@ -141,7 +142,7 @@ def find_tool(
 
     return HarnessToolDefinition(
         tool=Tool[_ToolArgs, str](
-            name=_TOOL_NAME,
+            name=FIND_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
             handler=run_find,
@@ -168,16 +169,16 @@ async def _find_files(
     """Find files and render a plain-text tool result."""
     pattern = args.pattern.strip()
     if pattern == "":
-        return "pattern must not be empty"
+        return EMPTY_PATTERN_ERROR
     if args.path is not None and args.path.strip() == "":
-        return "path must not be empty"
+        return EMPTY_PATH_ERROR
     if args.limit < 1:
-        return "limit must be greater than zero"
+        return INVALID_LIMIT_ERROR
 
     search_dir = resolver.cwd if args.path is None else resolver.resolve(args.path)
     permission_error = await evaluate_tool_permission(
         ToolPermissionRequest(
-            tool_name=_TOOL_NAME,
+            tool_name=FIND_TOOL_NAME,
             operation=ToolOperation.SEARCH_FILES,
             cwd=resolver.cwd,
             path=search_dir,
@@ -277,7 +278,7 @@ def _matching_paths(
                 # A provider entry must not redirect traversal to another path.
                 name = normalize_relative_path(entry.name)
                 if len(name.parts) != 1 or name.as_posix() != entry.name:
-                    raise ValueError("Directory entries must contain one child name")
+                    raise ValueError(INVALID_DIRECTORY_ENTRY)
 
             path = root_path / entry.name
             if matcher.is_ignored(path, is_dir=entry.is_directory):

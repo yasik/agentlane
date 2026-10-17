@@ -9,6 +9,7 @@ from agentlane.models import Tool, ToolExecutionContext, Tools
 from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
+from .._constants import DEFAULT_SKILLS_SHIM_NAME
 from .._run import ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX, RunState, ShimState
 from .._tooling import exclude_tools, filter_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
@@ -17,6 +18,7 @@ from ._loader import SkillLoader
 from ._loader_fs import FilesystemSkillLoader
 from ._prompt import (
     ACTIVATE_SKILL_TOOL_DESCRIPTION,
+    ACTIVATE_SKILL_TOOL_NAME,
     DEFAULT_SKILLS_SYSTEM_PROMPT,
     SkillsSystemPromptContext,
     render_loaded_skill,
@@ -137,8 +139,8 @@ class SkillsShim(Shim):
         loader: SkillLoader | None = None,
         catalog: SkillCatalog | None = None,
         system_prompt: str | None = None,
-        tool_name: str = "activate_skill",
-        name: str = "skills",
+        tool_name: str = ACTIVATE_SKILL_TOOL_NAME,
+        name: str = DEFAULT_SKILLS_SHIM_NAME,
     ) -> None:
         """Initialize one skills shim definition.
 

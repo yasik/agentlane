@@ -72,7 +72,10 @@ async def test_meeting_example_discovers_calls_and_verifies_real_mcp(
         "meetings__search_meetings",
         "meetings__get_meeting",
     ]
+
+    # Check that the visible catalog shrinks as each tool budget is used.
     initial_tools = model.call_tools[0]
+
     assert initial_tools is not None
     assert {tool.name for tool in initial_tools.normalized_tools} == {
         "meetings__search_meetings",
@@ -80,23 +83,35 @@ async def test_meeting_example_discovers_calls_and_verifies_real_mcp(
     }
     assert all(tool.strict is False for tool in initial_tools.normalized_tools)
     second_tools = model.call_tools[1]
+
     assert second_tools is not None
     assert [tool.name for tool in second_tools.normalized_tools] == [
         "meetings__get_meeting"
     ]
-    assert model.call_tools[2] is None
+    limited = model.call_tools[2]
+
+    assert limited is not None
+    assert limited.normalized_tools == ()
+    assert limited.tool_choice == "none"
+
+    # Verify that private meeting details enter history only through the read result.
     assert "Maya Chen" not in json.dumps(model.calls[0])
     search_result = next(
         message for message in model.calls[1] if message.get("role") == "tool"
     )
+
     assert "atlas-launch" in str(search_result["content"])
     assert "Maya Chen" not in str(search_result["content"])
     read_result = [
         message for message in model.calls[2] if message.get("role") == "tool"
     ][-1]
+
     assert "Maya Chen" in str(read_result["content"])
     assert "2026-10-09" in str(read_result["content"])
+
+    # Allow scheduled cleanup to finish before checking for leaked tasks.
     await asyncio.sleep(0)
+
     assert not [task for task in asyncio.all_tasks() - initial_tasks if not task.done()]
     print(json.dumps({"mode": "deterministic-test-model", **report}, indent=2))
 

@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -322,10 +322,11 @@ class _HTTPPeer:
 
 
 @asynccontextmanager
-async def _http_peer(port: int, peer: _HTTPPeer) -> AsyncIterator[MCPServer]:
+async def _http_peer(port: int, peer: _HTTPPeer) -> AsyncGenerator[MCPServer, None]:
     async def list_tools(
         context: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
+        # Return a distinct catalog for each credential so cache reuse is observable.
         headers = cast(Request, context.request).headers
         identity = (
             "initial"
@@ -339,9 +340,11 @@ async def _http_peer(port: int, peer: _HTTPPeer) -> AsyncIterator[MCPServer]:
             peer.list_started = None
             started.set()
             await release.wait()
+
         name = f"read_{identity}"
         if peer.paginated:
             name = f"{'first' if cursor is None else 'second'}_{identity}"
+
         return types.ListToolsResult(
             tools=[types.Tool(name=name, input_schema={"type": "object"})],
             next_cursor="next" if peer.paginated and cursor is None else None,
@@ -353,6 +356,7 @@ async def _http_peer(port: int, peer: _HTTPPeer) -> AsyncIterator[MCPServer]:
         context: ServerRequestContext[Any], params: types.CallToolRequestParams
     ) -> types.CallToolResult:
         del context, params
+
         return types.CallToolResult(content=[types.TextContent(text="done")])
 
     sdk_server = Server("cache-auth", on_list_tools=list_tools, on_call_tool=call_tool)
@@ -362,16 +366,20 @@ async def _http_peer(port: int, peer: _HTTPPeer) -> AsyncIterator[MCPServer]:
         if scope["type"] != "http" or scope["method"] != "POST":
             await inner(scope, receive, send)
             return
+
+        # Inspect the request before replaying its body to the native SDK server.
         buffered: list[Message] = []
         while True:
             message = await receive()
             buffered.append(message)
             if not message.get("more_body", False):
                 break
+
         payload = json.loads(b"".join(message.get("body", b"") for message in buffered))
         method = payload.get("method")
         if method == "tools/call":
             peer.calls += 1
+
         initial = (
             dict(scope.get("headers", [])).get(b"authorization")
             == f"Bearer {_token('initial')}".encode()
@@ -384,6 +392,8 @@ async def _http_peer(port: int, peer: _HTTPPeer) -> AsyncIterator[MCPServer]:
                 and payload.get("params", {}).get("cursor") == "next"
             )
         )
+
+        # Inject transport failures independently from authorization rejection.
         status = None
         if method == "tools/list" and peer.list_failure:
             status = 503

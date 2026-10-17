@@ -9,6 +9,8 @@ from agentlane.harness.filesystem import FileInfo, LocalFileSystem, WritableFile
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
+from .._constants import EMPTY_PATH_ERROR
+from ._constants import NULL_BYTE_PATH_ERROR, WRITE_TOOL_NAME
 from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
     ToolApprovalCallback,
@@ -20,7 +22,6 @@ from ._permissions import (
 from ._storage_write import write_content
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "write"
 _TOOL_DESCRIPTION = (
     "Write content to a file. Creates the file if it does not exist, overwrites "
     "it if it does, and automatically creates parent directories."
@@ -87,7 +88,7 @@ def write_tool(
 
     return HarnessToolDefinition(
         tool=Tool[_ToolArgs, str](
-            name=_TOOL_NAME,
+            name=WRITE_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
             handler=run_write,
@@ -109,9 +110,9 @@ async def _write_file(
 ) -> str:
     """Write text content and return a model-facing status message."""
     if args.path.strip() == "":
-        return "path must not be empty"
+        return EMPTY_PATH_ERROR
     if "\x00" in args.path:
-        return "path contains a null byte"
+        return NULL_BYTE_PATH_ERROR
 
     try:
         encoded_content = args.content.encode("utf-8")
@@ -187,7 +188,7 @@ async def _check_write_permissions(
     if parent_info is None:
         requests.append(
             ToolPermissionRequest(
-                tool_name=_TOOL_NAME,
+                tool_name=WRITE_TOOL_NAME,
                 operation=ToolOperation.CREATE_DIRECTORY,
                 cwd=resolver.cwd,
                 path=path.parent,
@@ -201,7 +202,7 @@ async def _check_write_permissions(
     )
     requests.append(
         ToolPermissionRequest(
-            tool_name=_TOOL_NAME,
+            tool_name=WRITE_TOOL_NAME,
             operation=operation,
             cwd=resolver.cwd,
             path=path,

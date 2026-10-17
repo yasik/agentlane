@@ -8,7 +8,8 @@ from typing import Any, cast
 import structlog
 
 from ._connection import MCPConnection
-from ._errors import MCPAuthorizationError, MCPDiscoveryError
+from ._constants import AUTHORIZATION_CHANGED_DURING_DISCOVERY, STATUS_OK
+from ._errors import MCPAuthorizationError, MCPDiscoveryError, MCPFailureKind
 from ._operation import MCPOperation, mcp_operation
 from ._redaction import contains_secret_key, redact_known_secrets
 from ._sdk import exception_kind, load_mcp_dependencies, read_tool_page
@@ -44,18 +45,16 @@ async def get_catalog(
                     snapshot.authorization_generation
                     != connection.authorization.generation
                 ):
-                    raise MCPAuthorizationError(
-                        "MCP authorization changed during discovery."
-                    )
+                    raise MCPAuthorizationError(AUTHORIZATION_CHANGED_DURING_DISCOVERY)
                 connection.catalog = snapshot
         except Exception as exc:
             failure_kind = operation.failure_kind or exception_kind(exc)
-            if failure_kind == "authorization":
+            if failure_kind == MCPFailureKind.AUTHORIZATION.value:
                 connection.authorization.reject()
                 raise MCPAuthorizationError(
                     f"Authorization failed for MCP server {connection.server.name!r}."
                 ) from None
-            if failure_kind == "transport":
+            if failure_kind == MCPFailureKind.TRANSPORT.value:
                 connection.failed = True
                 raise ConnectionError("MCP discovery transport failed.") from None
             raise
@@ -67,7 +66,7 @@ async def get_catalog(
         tool_count=len(snapshot.tools),
         duration=time.monotonic() - started_at,
         protocol_version=connection.protocol_version,
-        status="ok",
+        status=STATUS_OK,
     )
     return snapshot
 
@@ -99,7 +98,7 @@ async def _discover_catalog(
             expires_at=expires_at,
             authorization_generation=generation,
         )
-    raise MCPAuthorizationError("MCP authorization changed during discovery.")
+    raise MCPAuthorizationError(AUTHORIZATION_CHANGED_DURING_DISCOVERY)
 
 
 async def _list_all_tools(

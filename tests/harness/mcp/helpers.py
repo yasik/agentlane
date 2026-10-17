@@ -1,7 +1,7 @@
 """Shared lifecycle support for MCP tests."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import pytest
@@ -61,7 +61,7 @@ class ConnectionInstaller:
 
 
 @asynccontextmanager
-async def http_server(app: ASGIApp, port: int) -> AsyncIterator[None]:
+async def http_server(app: ASGIApp, port: int) -> AsyncGenerator[None, None]:
     """Run a local ASGI peer with bounded startup and shutdown."""
     server = uvicorn.Server(
         uvicorn.Config(
@@ -70,14 +70,18 @@ async def http_server(app: ASGIApp, port: int) -> AsyncIterator[None]:
     )
     task = asyncio.create_task(server.serve())
     try:
+        # Do not expose the peer until startup succeeds; surface early server failures.
         async with asyncio.timeout(5):
             while not server.started:
                 if task.done():
                     await task
                     raise AssertionError("The local MCP HTTP peer stopped at startup.")
+
                 await asyncio.sleep(0.01)
+
         yield
     finally:
+        # Bound shutdown and join a cancelled server task before leaving the fixture.
         server.should_exit = True
         try:
             await asyncio.wait_for(task, timeout=5)

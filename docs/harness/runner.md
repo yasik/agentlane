@@ -5,7 +5,12 @@ Once a run has been accepted and a working
 over. It turns that state into one or more model calls, executes tool work, and
 decides whether control stays local or moves to another agent.
 
-That behavior lives in [`Runner`](../../src/agentlane/harness/_runner.py).
+[`Runner`](../../src/agentlane/harness/_runner.py) validates run dependencies,
+starts execution, and completes the caller's stream.
+[`RunLoop`](../../src/agentlane/harness/_run_loop.py) owns one run's model and
+tool turns, history, and cleanup.
+[`AgentDelivery`](../../src/agentlane/harness/_agent_delivery.py) creates child
+agents, delivers delegated input, and closes child streams.
 [`RunResult`](../../src/agentlane/harness/_run.py) records what came out of the
 loop, [`RunnerHooks`](../../src/agentlane/harness/_hooks.py) exposes useful
 observation points, and

@@ -1,7 +1,7 @@
 """Scope SDK logging and failure metadata to one MCP operation."""
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -66,7 +66,7 @@ _SDK_LOG_NAMES = (
 @contextmanager
 def mcp_operation(
     *, authorization_context: MCPAuthorizationContext | None = None
-) -> Iterator[MCPOperation]:
+) -> Generator[MCPOperation, None, None]:
     """Scope SDK logs and error metadata to one Agent Lane operation.
 
     The SDK carries the sender's context into its HTTP worker tasks. Each call

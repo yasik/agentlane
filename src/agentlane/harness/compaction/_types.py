@@ -17,6 +17,12 @@ type TokenEstimator = Callable[[Sequence[MessageDict]], int]
 type OnFailure = Literal["inject", "skip"]
 """Compaction failure policy: add a model-visible notice or skip silently."""
 
+type ContextSource = Literal["server_usage", "estimate", "mixed"]
+"""Source of the effective token estimate."""
+
+type CompactionTrigger = Literal["auto", "manual"]
+"""Whether accounting or an explicit request triggered compaction."""
+
 type OnCompact = Callable[["CompactionReport"], Awaitable[None] | None]
 """Observer callback invoked after each compaction attempt report is created."""
 
@@ -40,7 +46,7 @@ class ContextSignal:
     trigger_tokens: int
     """Token count at which compaction fires."""
 
-    source: Literal["server_usage", "estimate", "mixed"]
+    source: ContextSource
     """How `estimated_tokens` was derived."""
 
     turn_count: int
@@ -84,7 +90,7 @@ class CompactionRequest:
     estimator: TokenEstimator
     """Estimator used for compactor-local budget and shrink decisions."""
 
-    reason: Literal["auto", "manual"]
+    reason: CompactionTrigger
     """Whether the attempt was triggered by accounting or explicit request."""
 
 
@@ -119,7 +125,7 @@ class CompactionReport:
     signal: ContextSignal
     """Trigger signal observed before the compactor ran."""
 
-    reason: Literal["auto", "manual"]
+    reason: CompactionTrigger
     """Whether this attempt was automatic or manually requested."""
 
     compacted: bool

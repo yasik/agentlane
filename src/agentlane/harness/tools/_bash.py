@@ -4,7 +4,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool, ToolError, ToolExecutionContext, ToolFailure
+from agentlane.models import (
+    Tool,
+    ToolError,
+    ToolErrorKind,
+    ToolExecutionContext,
+    ToolFailure,
+)
 from agentlane.runtime import CancellationToken
 
 from ._bash_executor import (
@@ -13,6 +19,7 @@ from ._bash_executor import (
     BashExecutor,
     LocalBashExecutor,
 )
+from ._constants import BASH_TOOL_NAME
 from ._output import BASH_MAX_BYTES, BASH_MAX_LINES, TruncatedOutput
 from ._paths import ToolPathResolver
 from ._permissions import (
@@ -24,7 +31,6 @@ from ._permissions import (
 )
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "bash"
 _TOOL_DESCRIPTION = (
     "Execute a non-interactive command with `bash -lc` in the current working "
     "directory. Returns combined stdout and stderr. Output is tail-truncated "
@@ -120,7 +126,9 @@ def bash_tool(
             # returning a plain string the runner would read as success.
             return ToolFailure(
                 text=_GENERIC_BASH_ERROR,
-                error=ToolError(message=_GENERIC_BASH_ERROR, kind="error"),
+                error=ToolError(
+                    message=_GENERIC_BASH_ERROR, kind=ToolErrorKind.ERROR.value
+                ),
             )
 
     return HarnessToolDefinition(
@@ -128,7 +136,7 @@ def bash_tool(
         # it as its model-facing text unchanged while the runner reads the
         # structured outcome off the same result.
         tool=Tool[_ToolArgs, str | ToolFailure](
-            name=_TOOL_NAME,
+            name=BASH_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
             handler=run_bash,
@@ -176,7 +184,7 @@ async def _run_bash(
     )
     permission_error = await evaluate_tool_permission(
         ToolPermissionRequest(
-            tool_name=_TOOL_NAME,
+            tool_name=BASH_TOOL_NAME,
             operation=ToolOperation.EXECUTE_COMMAND,
             cwd=cwd,
             command=args.command,
@@ -245,13 +253,15 @@ def _format_bash_output(result: BashExecutionResult) -> str | ToolFailure:
 def _bash_failure(result: BashExecutionResult) -> ToolError | None:
     """Map a bash execution result to a typed failure, or ``None`` on success."""
     if result.timed_out:
-        return ToolError(message="Command timed out", kind="timeout")
+        return ToolError(message="Command timed out", kind=ToolErrorKind.TIMEOUT.value)
     if result.cancelled:
-        return ToolError(message="Command cancelled", kind="cancelled")
+        return ToolError(
+            message="Command cancelled", kind=ToolErrorKind.CANCELLED.value
+        )
     if result.exit_code is not None and result.exit_code != 0:
         return ToolError(
             message=f"Command exited with code {result.exit_code}",
-            kind="nonzero_exit",
+            kind=ToolErrorKind.NONZERO_EXIT.value,
         )
     return None
 

@@ -1,5 +1,34 @@
 """Named constants for harness conversation compaction."""
 
+from typing import Final
+
+SUMMARY_BEFORE_TAIL: Final = "before_tail"
+"""Selects placement of the generated summary before the retained recent history."""
+
+SUMMARY_AFTER_TAIL: Final = "after_tail"
+"""Selects placement of the generated summary after the retained recent history."""
+
+FAILURE_INJECT: Final = "inject"
+"""Selects a model-visible notice when compaction fails."""
+
+FAILURE_SKIP: Final = "skip"
+"""Selects continuation with the original history and no compaction failure notice."""
+
+SOURCE_SERVER_USAGE: Final = "server_usage"
+"""Marks token accounting that accepts the provider-reported usage."""
+
+SOURCE_ESTIMATE: Final = "estimate"
+"""Marks token accounting based only on the local estimate."""
+
+SOURCE_MIXED: Final = "mixed"
+"""Marks a local estimate retained after checking provider usage against trigger policy."""
+
+REASON_AUTO: Final = "auto"
+"""Recorded when token accounting triggers compaction automatically."""
+
+DEFAULT_SHIM_NAME = "compaction"
+"""Used as the default prefix for compaction reports and attempt keys."""
+
 DEFAULT_TRIGGER_RATIO = 0.9
 """Default automatic trigger point as a fraction of the configured context window."""
 

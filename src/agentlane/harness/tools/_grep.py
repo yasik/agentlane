@@ -15,6 +15,8 @@ from ripgrepy import RipGrepNotFound, Ripgrepy
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
+from .._constants import EMPTY_PATH_ERROR
+from ._constants import EMPTY_PATTERN_ERROR, GREP_TOOL_NAME
 from ._gitignore import GitignoreMatcher
 from ._output import (
     GREP_DEFAULT_LIMIT,
@@ -32,7 +34,6 @@ from ._permissions import (
 )
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "grep"
 _TOOL_DESCRIPTION = (
     "Searches local text files for a pattern using ripgrep. Supports regex or "
     "literal matching, multiline patterns, file-type and glob filtering, and "
@@ -205,7 +206,7 @@ def grep_tool(
 
     return HarnessToolDefinition(
         tool=Tool[_ToolArgs, str](
-            name=_TOOL_NAME,
+            name=GREP_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
             handler=run_grep,
@@ -234,7 +235,7 @@ async def _search_files(
     )
     permission_error = await evaluate_tool_permission(
         ToolPermissionRequest(
-            tool_name=_TOOL_NAME,
+            tool_name=GREP_TOOL_NAME,
             operation=operation,
             cwd=resolver.cwd,
             path=search_path,
@@ -256,9 +257,9 @@ async def _search_files(
 def _validate_args(args: _ToolArgs) -> str | None:
     """Return one model-facing validation error when arguments are invalid."""
     if args.pattern == "":
-        return "pattern must not be empty"
+        return EMPTY_PATTERN_ERROR
     if args.path is not None and args.path.strip() == "":
-        return "path must not be empty"
+        return EMPTY_PATH_ERROR
     if args.glob is not None and args.glob.strip() == "":
         return "glob must not be empty"
     if args.file_type is not None and args.file_type.strip() == "":

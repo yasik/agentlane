@@ -8,6 +8,7 @@ from typing import Any, TypeVar, cast
 
 from jinja2 import Template
 
+from ._message_role import MessageRole
 from ._output_schema import OutputSchema
 
 CtxT = TypeVar("CtxT")
@@ -69,7 +70,7 @@ def render_instruction_text(spec: PromptSpec[Any]) -> str:
     messages = [
         message
         for message in spec.template.render_messages(spec.values)
-        if message.get("role") == "system"
+        if message.get("role") == MessageRole.SYSTEM.value
     ]
     if not messages:
         raise ValueError("PromptSpec must render at least one system-role message.")
@@ -126,7 +127,7 @@ class PromptTemplate(PromptTemplateBase[CtxT, OutT]):
         if self._system_template:
             msgs.append(
                 {
-                    "role": "system",
+                    "role": MessageRole.SYSTEM.value,
                     "content": (
                         self._system_template.render()
                         if ctx is None
@@ -137,7 +138,7 @@ class PromptTemplate(PromptTemplateBase[CtxT, OutT]):
         if self._user_template:
             msgs.append(
                 {
-                    "role": "user",
+                    "role": MessageRole.USER.value,
                     "content": (
                         self._user_template.render()
                         if ctx is None
@@ -253,14 +254,14 @@ class MultiPartPromptTemplate(PromptTemplateBase[CtxT, OutT]):
         if self._system_parts:
             msgs.append(
                 {
-                    "role": "system",
+                    "role": MessageRole.SYSTEM.value,
                     "content": [part.render(ctx) for part in self._system_parts],
                 }
             )
         if self._user_parts:
             msgs.append(
                 {
-                    "role": "user",
+                    "role": MessageRole.USER.value,
                     "content": [part.render(ctx) for part in self._user_parts],
                 }
             )

@@ -2,11 +2,58 @@
 
 import enum
 from dataclasses import asdict, dataclass, is_dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel
+from strenum import LowercaseStrEnum
 
-from ._types import ModelResponse
+from ._types import ModelResponse, ToolCall
+
+type SteeringInput = str | list[dict[str, Any]]
+"""Native user input submitted to an active response."""
+
+
+class SteeringStatus(LowercaseStrEnum):
+    """Local steering receipt states; acceptance precedes application."""
+
+    SUBMITTED = "submitted"
+    """Marks a steering submission awaiting provider acceptance or failure."""
+
+    ACCEPTED = "accepted"
+    """Marks provider-accepted steering that has not yet been committed to history."""
+
+    APPLIED = "applied"
+    """Marks steering committed to history after a matching successor starts."""
+
+    FAILED = "failed"
+    """Marks steering rejected by the provider with an attached error."""
+
+    UNKNOWN = "unknown"
+    """Marks steering whose send outcome cannot be determined safely."""
+
+
+class ModelContinuation(LowercaseStrEnum):
+    """How a completed model turn continues."""
+
+    AUTOMATIC = "automatic"
+    """Signals that the provider has already started the next response."""
+
+    EXPLICIT = "explicit"
+    """Signals that required tool results must be submitted to continue the response."""
+
+
+@dataclass(slots=True)
+class SteeringReceipt:
+    """Live steering outcome; acceptance is not a committed history change."""
+
+    input: SteeringInput
+    previous_response_id: str
+    status: Literal["submitted", "accepted", "applied", "failed", "unknown"] = (
+        SteeringStatus.SUBMITTED.value
+    )
+    id: str | None = None
+    response_id: str | None = None
+    error: object | None = None
 
 
 class ModelStreamEventKind(enum.StrEnum):
@@ -62,6 +109,11 @@ class ModelStreamEvent:
     reasoning_signature: str | None = None
     response: ModelResponse | None = None
     error: Exception | None = None
+    continuation: Literal["automatic", "explicit"] | None = None
+    async_tool_call: ToolCall | None = None
+    required_tool_call_ids: tuple[str, ...] = ()
+    input_messages: list[dict[str, Any]] | None = None
+    steering: list[SteeringReceipt] | None = None
 
     def to_trace_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
         """Export one event into a trace-safe dictionary.
@@ -97,6 +149,21 @@ class ModelStreamEvent:
             payload["response"] = self.response.model_dump(mode="json")
         if self.error is not None:
             payload["error"] = str(self.error)
+
+        # Include lifecycle metadata needed to follow steering and async tool delivery.
+        if self.continuation:
+            payload["continuation"] = self.continuation
+        if self.async_tool_call is not None:
+            payload["async_tool_call"] = self.async_tool_call.model_dump(mode="json")
+        if self.required_tool_call_ids:
+            payload["required_tool_call_ids"] = list(self.required_tool_call_ids)
+        if self.input_messages is not None:
+            payload["input_messages"] = self.input_messages
+        if self.steering is not None:
+            payload["steering"] = [asdict(receipt) for receipt in self.steering]
+
+        # Include the native payload only when the caller requests it.
         if include_raw and self.raw is not None:
             payload["raw"] = _serialize_stream_value(self.raw)
+
         return payload

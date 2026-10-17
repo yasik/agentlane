@@ -9,11 +9,13 @@ from typing import cast
 import structlog
 
 from ._auth import MCPAuthorizationState, product_bearer_auth, record_http_failure
+from ._constants import STARTUP_CANCELLED, STATUS_UNAVAILABLE
 from ._errors import (
     MCPAuthorizationError,
     MCPDependencyError,
     MCPDiscoveryError,
     MCPError,
+    MCPFailureKind,
 )
 from ._operation import MCPOperation, mcp_operation
 from ._sdk import (
@@ -105,7 +107,7 @@ async def _own_connection(
                         connection.catalog_revision += 1
                     elif (
                         isinstance(message, Exception)
-                        and exception_kind(message) == "transport"
+                        and exception_kind(message) == MCPFailureKind.TRANSPORT.value
                     ):
                         connection.failed = True
 
@@ -171,9 +173,7 @@ async def _own_connection(
         connection.failed = True
         if not connection.ready.done():
             if isinstance(exc, asyncio.CancelledError):
-                connection.ready.set_exception(
-                    MCPError("MCP connection startup was cancelled.")
-                )
+                connection.ready.set_exception(MCPError(STARTUP_CANCELLED))
             elif isinstance(exc, MCPDependencyError):
                 connection.ready.set_exception(exc)
             else:
@@ -181,13 +181,13 @@ async def _own_connection(
                     operation.failure_kind if operation is not None else None
                 ) or exception_kind(exc)
                 error: Exception
-                if kind == "authorization":
+                if kind == MCPFailureKind.AUTHORIZATION.value:
                     error = MCPAuthorizationError(
                         "MCP connection authorization failed."
                     )
-                elif kind == "timeout":
+                elif kind == MCPFailureKind.TIMEOUT.value:
                     error = TimeoutError("MCP connection timed out.")
-                elif kind == "transport":
+                elif kind == MCPFailureKind.TRANSPORT.value:
                     error = ConnectionError("MCP connection transport failed.")
                 else:
                     error = MCPDiscoveryError("MCP connection protocol failed.")
@@ -231,9 +231,7 @@ async def _finish_close(connection: MCPConnection) -> None:
             owner.cancel()
         await asyncio.gather(owner, return_exceptions=True)
     if not connection.ready.done():
-        connection.ready.set_exception(
-            MCPError("MCP connection startup was cancelled.")
-        )
+        connection.ready.set_exception(MCPError(STARTUP_CANCELLED))
         connection.ready.exception()
 
 
@@ -248,13 +246,13 @@ async def _listen_for_tool_changes(connection: MCPConnection) -> None:
                 async for _event in subscription:
                     connection.catalog_revision += 1
         except Exception as exc:
-            if exception_kind(exc) == "transport":
+            if exception_kind(exc) == MCPFailureKind.TRANSPORT.value:
                 connection.failed = True
             elif type(exc).__name__ != "ListenNotSupportedError":
                 logger.debug(
                     "mcp_subscription_ended",
                     server=connection.server.name,
-                    status="unavailable",
+                    status=STATUS_UNAVAILABLE,
                 )
         else:
             # Normal completion also requires a new notification stream.

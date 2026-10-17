@@ -20,7 +20,7 @@ from ._exceptions import ModelBehaviorError
 from ._interface import ModelTracing, Tools
 from ._tool import ToolExecutionContext
 from ._tool_output_adapter import ChatCompletionsOutputAdapter, ToolOutputAdapter
-from ._tool_result import ToolError, ToolFailure
+from ._tool_result import ToolError, ToolErrorKind, ToolFailure
 from ._types import ToolCall
 
 LOGGER = structlog.get_logger("agentlane.models.tool_executor")
@@ -197,7 +197,7 @@ class ToolExecutor:
                             error=ToolError(
                                 message=f"Tool '{function_name}' timed out after "
                                 f"{timeout}s ({attempts} attempts).",
-                                kind="timeout",
+                                kind=ToolErrorKind.TIMEOUT.value,
                             ),
                         )
                         await _maybe_await(on_tool_end, call, timeout_result)

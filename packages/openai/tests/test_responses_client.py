@@ -9,11 +9,22 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx2
 import pytest
-from agentlane_openai import ResponsesClient, ResponsesFactory
+from agentlane_openai import ResponseError, ResponsesClient, ResponsesFactory
+from openai import RateLimitError
 from openai.types.responses import Response as OpenAIResponse
-from openai.types.responses import ResponseReasoningItem
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseCustomToolCall,
+    ResponseFailedEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseReasoningItem,
+    ResponseReasoningTextDeltaEvent,
+    ResponseTextDeltaEvent,
+)
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_output_item import ImageGenerationCall
 from openai.types.responses.response_output_message import ResponseOutputMessage
 from openai.types.responses.response_output_text import ResponseOutputText
 from openai.types.responses.response_usage import (
@@ -23,8 +34,12 @@ from openai.types.responses.response_usage import (
 )
 from pydantic import BaseModel, TypeAdapter
 
+from agentlane.harness import Agent, AgentDescriptor, AgentSnapshot, Runner, RunState
+from agentlane.harness.compaction import render_request_messages
+from agentlane.messaging import AgentId
 from agentlane.models import (
     Config,
+    MessageDict,
     ModelStreamEvent,
     ModelStreamEventKind,
     ModelTracing,
@@ -33,8 +48,9 @@ from agentlane.models import Tool as NativeTool
 from agentlane.models import (
     ToolExecutionContext,
     Tools,
+    extract_retry_after,
 )
-from agentlane.runtime import CancellationToken
+from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import (
     DefaultTraceProvider,
     TracingProcessor,
@@ -92,11 +108,12 @@ def _make_response(content: str) -> MagicMock:
         input_tokens=10,
         output_tokens=5,
         total_tokens=15,
-        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        input_tokens_details=InputTokensDetails(cached_tokens=0, cache_write_tokens=0),
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
     )
     response.status = "completed"
     response.model_dump.return_value = {}
+
     return response
 
 
@@ -118,11 +135,12 @@ def _make_tool_call_response() -> MagicMock:
         input_tokens=10,
         output_tokens=5,
         total_tokens=15,
-        input_tokens_details=InputTokensDetails(cached_tokens=0),
+        input_tokens_details=InputTokensDetails(cached_tokens=0, cache_write_tokens=0),
         output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
     )
     response.status = "completed"
     response.model_dump.return_value = {}
+
     return response
 
 
@@ -181,6 +199,217 @@ async def _collect_stream_events(client: ResponsesClient) -> list[ModelStreamEve
     return events
 
 
+def test_native_options_do_not_mutate_caller_values() -> None:
+    reasoning = {"summary": "auto"}
+    client = ResponsesClient(
+        Config(api_key="test-key", model="future-model"),
+        temperature=0.2,
+        reasoning_effort="high",
+        reasoning=reasoning,
+        service_tier="priority",
+    )
+    create = AsyncMock(return_value=_make_response("ok"))
+    cast(Any, client)._openai_client.responses.create = create
+
+    # Merge adapter aliases with native options without changing the caller's values.
+    asyncio.run(client.get_response([{"role": "user", "content": "hello"}]))
+
+    assert reasoning == {"summary": "auto"}
+    assert create.call_args.kwargs["reasoning"] == {"summary": "auto", "effort": "high"}
+    assert create.call_args.kwargs["model"] == "future-model"
+    assert create.call_args.kwargs["service_tier"] == "priority"
+
+
+def test_quota_failure_keeps_sdk_error_without_retry() -> None:
+    client = ResponsesClient(Config(api_key="test-key", model="test"))
+    error = RateLimitError(
+        "quota exhausted",
+        response=httpx2.Response(
+            429, request=httpx2.Request("POST", "https://example.test")
+        ),
+        body={"code": "insufficient_quota", "message": "quota exhausted"},
+    )
+    create = AsyncMock(side_effect=error)
+    cast(Any, client)._openai_client.responses.create = create
+
+    async def run() -> None:
+        runner = Runner(max_attempts=2)
+        agent = Agent(
+            SingleThreadedRuntimeEngine(),
+            runner,
+            descriptor=AgentDescriptor(name="quota", model=client),
+        )
+        await runner.run(
+            agent, RunState(instructions=None, history=["hello"], responses=[])
+        )
+
+    # Neither the adapter nor the harness may retry a quota failure.
+    with pytest.raises(RateLimitError) as caught:
+        asyncio.run(run())
+
+    assert caught.value is error
+    assert create.await_count == 1
+
+
+@pytest.mark.parametrize("delay", ["30", "Thu, 01 Jan 2099 00:00:00 GMT"])
+def test_sdk_retry_after_is_read_from_response(delay: str) -> None:
+    error = RateLimitError(
+        "rate limit",
+        response=httpx2.Response(
+            429,
+            headers={"Retry-After": delay},
+            request=httpx2.Request("POST", "https://example.test"),
+        ),
+        body={"code": "rate_limit_exceeded"},
+    )
+    seconds = extract_retry_after(error)
+
+    assert seconds is not None and seconds >= 30
+
+
+def test_failed_stream_retains_native_terminal_response() -> None:
+    client = ResponsesClient(Config(api_key="test-key", model="test"))
+    response = _make_response("partial")
+    response.status = "failed"
+    response.error = {"code": "server_error", "message": "failed"}
+    stream = _FakeAsyncStream(
+        [ResponseFailedEvent.model_construct(type="response.failed", response=response)]
+    )
+    create = AsyncMock(return_value=stream)
+    cast(Any, client)._openai_client.responses.create = create
+    with pytest.raises(RuntimeError) as caught:
+        asyncio.run(_collect_stream_events(client))
+
+    assert getattr(caught.value, "response", None) is response
+    assert stream.closed
+    assert create.await_count == 1
+
+
+def test_native_history_replays_once_after_snapshot() -> None:
+    native = OpenAIResponse.model_construct(
+        id="resp_native",
+        created_at=1,
+        model="test",
+        object="response",
+        status="completed",
+        error=None,
+        incomplete_details=None,
+        usage=None,
+        service_tier="priority",
+        output=[
+            ResponseReasoningItem(
+                id="reason_1", type="reasoning", summary=[], encrypted_content="opaque"
+            ),
+            ResponseOutputMessage(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                status="completed",
+                phase="commentary",
+                content=[
+                    ResponseOutputText(
+                        type="output_text", text="Working", annotations=[]
+                    )
+                ],
+            ),
+            ResponseFunctionToolCall(
+                id="fc_1",
+                call_id="call_1",
+                name="echo",
+                arguments='{"text":"ok"}',
+                type="function_call",
+            ),
+        ],
+    )
+    client = ResponsesClient(Config(api_key="test-key", model="test"))
+    create = AsyncMock(return_value=native)
+    cast(Any, client)._openai_client.responses.create = create
+    response = asyncio.run(client.get_response([{"role": "user", "content": "hello"}]))
+
+    # Round-trip the result through persistence before replaying native output.
+    snapshot = AgentSnapshot.capture(
+        agent_id=AgentId.from_values("test", "main"),
+        run_state=RunState(instructions=None, history=[response], responses=[response]),
+    )
+
+    # Decode in a fresh interpreter to check JSON portability without SDK object state.
+    code = "from agentlane.harness import AgentSnapshot; import sys,json; s=AgentSnapshot.from_json(json.load(sys.stdin)); print(json.dumps(s.to_json()))"
+    decoded = subprocess.run(  # noqa: S603 - fixed interpreter and inline test script
+        [sys.executable, "-c", code],
+        input=snapshot.model_dump_json(),
+        text=True,
+        check=True,
+        capture_output=True,
+    )
+    restored = AgentSnapshot.from_json(json.loads(decoded.stdout)).to_run_state()
+
+    # Resume with one tool result and verify native items appear exactly once.
+    messages = render_request_messages(
+        None,
+        [
+            *restored.history,
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        ],
+    )
+    asyncio.run(client.get_response(messages))
+    sent = create.call_args.kwargs["input"]
+
+    assert sent[:-1] == [
+        item.model_dump(mode="json", exclude_unset=True) for item in native.output
+    ]
+    assert sent[-1] == {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "ok",
+    }
+    extras = restored.responses[0].model_extra
+
+    assert extras is not None
+    assert extras["openai_response"]["service_tier"] == "priority"
+
+
+def test_native_input_and_chat_media_are_preserved() -> None:
+    native = [{"type": "configuration_update", "reasoning": {"effort": "high"}}]
+    messages: list[MessageDict] = [
+        {"role": "user", "openai_responses_input": native},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.test/image.png",
+                        "detail": "high",
+                    },
+                },
+                {"type": "input_file", "file_id": "file_1"},
+            ],
+        },
+    ]
+    client = ResponsesClient(Config(api_key="test-key", model="test"))
+    create = AsyncMock(return_value=_make_response("ok"))
+    cast(Any, client)._openai_client.responses.create = create
+
+    # Mix native input with chat media in one request to check both paths.
+    asyncio.run(client.get_response(messages))
+
+    assert create.call_args.kwargs["input"] == [
+        *native,
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.test/image.png",
+                    "detail": "high",
+                },
+                {"type": "input_file", "file_id": "file_1"},
+            ],
+        },
+    ]
+
+
 def test_responses_client_get_response_converts_and_forwards_configuration() -> None:
     """The client should convert Responses API output and forward tools/schema config."""
     client = ResponsesClient(
@@ -188,7 +417,8 @@ def test_responses_client_get_response_converts_and_forwards_configuration() -> 
             api_key="test-key",
             model="gpt-4o",
             enforce_structured_output=True,
-        )
+        ),
+        text={"verbosity": "low"},
     )
     tool: NativeTool[EchoArgs, str] = NativeTool(
         name="echo",
@@ -218,6 +448,7 @@ def test_responses_client_get_response_converts_and_forwards_configuration() -> 
     assert response.choices[0].finish_reason == "stop"
 
     await_kwargs = cast(dict[str, Any], cast(Any, create_mock.await_args).kwargs)
+
     assert await_kwargs["model"] == "gpt-4o"
     assert await_kwargs["input"][0]["role"] == "developer"
     assert await_kwargs["input"][1]["role"] == "user"
@@ -225,9 +456,74 @@ def test_responses_client_get_response_converts_and_forwards_configuration() -> 
     assert await_kwargs["parallel_tool_calls"] is True
     assert await_kwargs["tools"][0]["strict"] is True
     assert await_kwargs["text"]["format"]["type"] == "json_schema"
+    assert await_kwargs["text"]["verbosity"] == "low"
     assert await_kwargs["text"]["format"]["schema"]["properties"] == {
         "message": {"title": "Message", "type": "string"}
     }
+
+
+@pytest.mark.parametrize("repair", ["schema", "refusal"])
+def test_response_repair_preserves_request_and_appends_feedback(repair: str) -> None:
+    """Repair uses the existing request options and leaves caller history unchanged."""
+    client = ResponsesClient(
+        Config(
+            api_key="test-key",
+            model="azure/test" if repair == "refusal" else "test",
+            base_url=(
+                "https://example.openai.azure.com/" if repair == "refusal" else None
+            ),
+            enforce_structured_output=repair == "schema",
+            schema_validation_retries=1,
+        ),
+        refusal_context="Use the supplied clinical context.",
+    )
+    first = _make_response("not valid JSON")
+    if repair == "refusal":
+        first.model_dump.return_value = {
+            "content_filters": [
+                {
+                    "blocked": True,
+                    "source_type": "completion",
+                    "content_filter_results": {},
+                }
+            ]
+        }
+    responses = iter([first, _make_response('{"message":"ok"}')])
+    requests: list[dict[str, Any]] = []
+
+    # Capture each request before the next repair can extend the input list.
+    async def create(**kwargs: Any) -> OpenAIResponse:
+        requests.append(deepcopy(kwargs))
+        return next(responses)
+
+    cast(Any, client)._openai_client.responses.create = create
+    messages: list[MessageDict] = [{"role": "user", "content": "hello"}]
+    response = asyncio.run(
+        client.get_response(
+            messages,
+            schema=StructuredResponse if repair == "schema" else None,
+            extra_call_args={"max_tokens": 100, "reasoning": {"effort": "low"}},
+        )
+    )
+
+    assert response.choices[0].message.content == '{"message":"ok"}'
+    assert len(requests) == 2
+    assert len(requests[0]["input"]) == 1
+    assert requests[1]["input"][:-1] == requests[0]["input"]
+    feedback = requests[1]["input"][-1]
+    assert feedback["role"] == "user"
+    assert feedback["content"][0]["type"] == "input_text"
+    if repair == "schema":
+        assert "valid JSON" in feedback["content"][0]["text"]
+    else:
+        assert feedback["content"][0]["text"] == "Use the supplied clinical context."
+
+    assert {key: value for key, value in requests[0].items() if key != "input"} == {
+        key: value for key, value in requests[1].items() if key != "input"
+    }
+    assert requests[1]["max_output_tokens"] == 100
+    assert requests[1]["reasoning"] == {"effort": "low"}
+    assert messages == [{"role": "user", "content": "hello"}]
 
 
 def test_responses_client_preserves_non_strict_external_tool_schema() -> None:
@@ -256,13 +552,101 @@ def test_responses_client_preserves_non_strict_external_tool_schema() -> None:
 
     asyncio.run(
         client.get_response(
-            messages=[{"role": "user", "content": "echo"}], tools=Tools(tools=(tool,))
+            messages=[{"role": "user", "content": "echo"}],
+            tools=Tools(tools=(tool,)),
+            extra_call_args={
+                "tools": [{"type": "web_search", "search_context_size": "low"}],
+                "tool_choice": {"type": "web_search"},
+            },
         )
     )
 
     kwargs = cast(Any, create_mock.await_args).kwargs
-    assert kwargs["tools"][0]["strict"] is False
-    assert kwargs["tools"][0]["parameters"] == original == schema
+
+    assert kwargs["tools"][0] == {"type": "web_search", "search_context_size": "low"}
+    assert kwargs["tools"][1]["strict"] is False
+    assert kwargs["tools"][1]["parameters"] == original == schema
+    assert kwargs["tool_choice"] == {"type": "web_search"}
+
+
+@pytest.mark.parametrize("has_handler", [False, True])
+def test_native_function_declarations_cannot_override_prepared_tools(
+    has_handler: bool,
+) -> None:
+    tool: NativeTool[EchoArgs, str] = NativeTool(
+        name="echo", description="Echo", args_model=EchoArgs, handler=_echo_handler
+    )
+    client = ResponsesClient(
+        Config(api_key="test-key", model="test"),
+        tools=[{"type": "function", "name": "echo", "parameters": {}}],
+    )
+    create = AsyncMock(return_value=_make_response("done"))
+    cast(Any, client)._openai_client.responses.create = create
+
+    async def run() -> None:
+        runner = Runner()
+        agent = Agent(
+            SingleThreadedRuntimeEngine(),
+            runner,
+            descriptor=AgentDescriptor(
+                name="prepared",
+                model=client,
+                tools=Tools(
+                    tools=[tool], tool_call_limits=None if has_handler else {"echo": 0}
+                ),
+            ),
+        )
+        await runner.run(
+            agent, RunState(instructions=None, history=["hello"], responses=[])
+        )
+
+    # Reject native function declarations even when the harness exhausted that tool.
+    with pytest.raises(ValueError, match="native tool"):
+        asyncio.run(run())
+
+    create.assert_not_awaited()
+
+
+def test_native_artifact_is_preserved_and_custom_execution_fails_clearly() -> None:
+    native = OpenAIResponse.model_construct(
+        id="resp_artifact",
+        created_at=1,
+        model="test",
+        object="response",
+        status="completed",
+        error=None,
+        usage=None,
+        output=[
+            ImageGenerationCall(
+                id="image_1",
+                type="image_generation_call",
+                status="completed",
+                result="encoded-image",
+            )
+        ],
+    )
+    client = ResponsesClient(Config(api_key="test-key", model="test"))
+    create = AsyncMock(return_value=native)
+    cast(Any, client)._openai_client.responses.create = create
+    response = asyncio.run(client.get_response([{"role": "user", "content": "draw"}]))
+
+    assert response.choices[0].message.content is None
+    assert response.model_extra is not None
+    assert (
+        response.model_extra["openai_response"]["output"][0]["result"]
+        == "encoded-image"
+    )
+
+    # Hosted output is replayable, but an unsupported local call must fail clearly.
+    native.output = [
+        ResponseCustomToolCall(
+            type="custom_tool_call", call_id="call_custom", name="raw", input="unparsed"
+        )
+    ]
+    with pytest.raises(ResponseError, match="Unsupported.*custom_tool_call") as caught:
+        asyncio.run(client.get_response([{"role": "user", "content": "execute"}]))
+
+    assert caught.value.response is native
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"])
@@ -321,7 +705,13 @@ async def test_responses_client_full_history_preserves_request_content(
 
     # Inspect the SDK request without sending a live request to either provider.
     response = _make_response("Code 123 is valid.")
-    stream = _FakeAsyncStream([MagicMock(type="response.completed", response=response)])
+    stream = _FakeAsyncStream(
+        [
+            ResponseCompletedEvent.model_construct(
+                type="response.completed", response=response
+            )
+        ]
+    )
     create_mock = AsyncMock(return_value=stream if streaming else response)
     openai_client = cast(Any, client)._openai_client
     openai_client.responses.create = create_mock
@@ -430,21 +820,28 @@ def test_responses_client_empty_assistant_content_preserves_tool_calls(
     """Tool-only assistant turns must not create empty message items."""
     client = ResponsesClient(Config(api_key="test-key", model="gpt-4o"))
 
-    result = cast(Any, client)._messages_to_input(
-        [
-            {
-                "role": "assistant",
-                "content": content,
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "lookup", "arguments": "{}"},
-                    },
-                ],
-            }
-        ]
+    create = AsyncMock(return_value=_make_response("answer"))
+    cast(Any, client)._openai_client.responses.create = create
+
+    asyncio.run(
+        client.get_response(
+            [
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "lookup", "arguments": "{}"},
+                        },
+                    ],
+                }
+            ]
+        )
     )
+    assert create.await_args is not None
+    result = create.await_args.kwargs["input"]
 
     assert result == [
         {
@@ -484,7 +881,12 @@ def test_responses_client_assistant_parts_preserve_refusals_and_annotations() ->
     ]
     original_messages = deepcopy(messages)
 
-    result = cast(Any, client)._messages_to_input(messages)
+    create = AsyncMock(return_value=_make_response("answer"))
+    cast(Any, client)._openai_client.responses.create = create
+
+    asyncio.run(client.get_response(messages))
+    assert create.await_args is not None
+    result = create.await_args.kwargs["input"]
 
     assert result == [
         {
@@ -573,22 +975,24 @@ def test_responses_client_stream_response_emits_semantic_events() -> None:
     client = ResponsesClient(Config(api_key="test-key", model="gpt-4o"))
     stream = _FakeAsyncStream(
         [
-            MagicMock(
+            ResponseTextDeltaEvent.model_construct(
                 type="response.output_text.delta",
                 delta="Hel",
                 output_index=0,
             ),
-            MagicMock(
+            ResponseReasoningTextDeltaEvent.model_construct(
                 type="response.reasoning_text.delta",
                 delta="thinking",
                 output_index=0,
             ),
-            MagicMock(
+            ResponseOutputItemAddedEvent.model_construct(
                 type="response.output_item.added",
                 output_index=1,
-                item=MagicMock(type="reasoning"),
+                item=ResponseReasoningItem.model_construct(
+                    type="reasoning", id="rs_1", summary=[]
+                ),
             ),
-            MagicMock(
+            ResponseCompletedEvent.model_construct(
                 type="response.completed",
                 response=_make_response("Hello"),
             ),
@@ -635,12 +1039,12 @@ def test_responses_client_stream_response_traces_serialized_events() -> None:
     )
     stream = _FakeAsyncStream(
         [
-            MagicMock(
+            ResponseTextDeltaEvent.model_construct(
                 type="response.output_text.delta",
                 delta="Hel",
                 output_index=0,
             ),
-            MagicMock(
+            ResponseCompletedEvent.model_construct(
                 type="response.completed",
                 response=_make_response("Hello"),
             ),
@@ -663,6 +1067,7 @@ def test_responses_client_stream_response_traces_serialized_events() -> None:
     assert generation_spans[0].span_data.events is not None
     assert generation_spans[0].span_data.events[0]["kind"] == "text_delta"
     assert generation_spans[0].span_data.events[-1]["kind"] == "completed"
+    assert generation_spans[0].span_data.usage["total_tokens"] == 15
 
 
 def _assert_cold_reasoning_serialization(
@@ -718,7 +1123,11 @@ def _assert_cold_reasoning_serialization(
                 usage=tool_response.usage,
             )
             stream = _FakeAsyncStream(
-                [MagicMock(type="response.completed", response=response)]
+                [
+                    ResponseCompletedEvent.model_construct(
+                        type="response.completed", response=response
+                    )
+                ]
             )
             cast(Any, client)._openai_client.responses.create = AsyncMock(
                 return_value=stream if mode == "stream" else response

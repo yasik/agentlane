@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -77,13 +77,16 @@ class _ContextPeer:
 
 
 @asynccontextmanager
-async def _context_peer(port: int, peer: _ContextPeer) -> AsyncIterator[MCPServer]:
+async def _context_peer(
+    port: int, peer: _ContextPeer
+) -> AsyncGenerator[MCPServer, None]:
     async def list_tools(
         context: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
         del params
         credential = cast(Request, context.request).headers["authorization"]
         peer.listed.append(credential)
+
         return types.ListToolsResult(
             tools=[
                 types.Tool(
@@ -102,8 +105,10 @@ async def _context_peer(port: int, peer: _ContextPeer) -> AsyncIterator[MCPServe
         context: ServerRequestContext[Any], params: types.CallToolRequestParams
     ) -> types.CallToolResult:
         credential = cast(Request, context.request).headers["authorization"]
+
         assert params.arguments is not None
         peer.calls.append((str(params.arguments["value"]), credential))
+
         return types.CallToolResult(content=[types.TextContent(text="done")])
 
     sdk_server = Server(
@@ -117,6 +122,8 @@ async def _context_peer(port: int, peer: _ContextPeer) -> AsyncIterator[MCPServe
         if scope["type"] != "http":
             await inner(scope, receive, send)
             return
+
+        # Record the credential on each HTTP or RPC operation before injecting failures.
         method = scope["method"]
         credential = dict(scope["headers"]).get(b"authorization", b"").decode()
         buffered: list[Message] = []
@@ -126,11 +133,16 @@ async def _context_peer(port: int, peer: _ContextPeer) -> AsyncIterator[MCPServe
                 buffered.append(message)
                 if not message.get("more_body", False):
                     break
+
             payload = json.loads(
                 b"".join(message.get("body", b"") for message in buffered)
             )
             method = payload.get("method", "POST")
+
         peer.requests.append((method, credential))
+
+        # Simulate legacy discovery, credential rejection, and server failure
+        # separately.
         status = None
         if peer.legacy and method == "server/discover":
             status = 404
@@ -144,6 +156,7 @@ async def _context_peer(port: int, peer: _ContextPeer) -> AsyncIterator[MCPServe
             await send({"type": "http.response.body", "body": b"rejected"})
             return
 
+        # Replay the inspected body so successful calls still reach the SDK server.
         async def replay() -> Message:
             return buffered.pop(0) if buffered else await receive()
 

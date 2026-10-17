@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from agentlane.models import ToolError, ToolFailure
 
+from ._errors import MCP_SERVER_TOOL_ERROR_KIND
 from ._redaction import is_secret_key, redact_known_secrets
 from ._types import MCPResultPolicy
 
@@ -74,7 +75,8 @@ def render_mcp_result(
         return ToolFailure(
             text=text,
             error=ToolError(
-                message="MCP server reported a tool failure.", kind="mcp_server"
+                message="MCP server reported a tool failure.",
+                kind=MCP_SERVER_TOOL_ERROR_KIND,
             ),
         )
 

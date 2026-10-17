@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from ..shims import BoundShim, Shim, ShimBindingContext
+from ._constants import DEFAULT_WORKSPACE_TOOLS_SHIM_NAME
 from ._permissions import ToolApprovalCallback, ToolPermissionPolicy
 from ._shim import HarnessToolsShim, base_harness_tools
 
@@ -24,7 +25,7 @@ class WorkspaceToolsShim(Shim):
         approval_callback: ToolApprovalCallback | None = None,
         include: Iterable[str] | None = None,
         exclude: Iterable[str] | None = None,
-        name: str = "workspace-tools",
+        name: str = DEFAULT_WORKSPACE_TOOLS_SHIM_NAME,
     ) -> None:
         self._root = Path(root).expanduser().resolve(strict=False)
         self._name = name

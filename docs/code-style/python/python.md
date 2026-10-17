@@ -34,6 +34,11 @@ These rules apply to Python code across the repository.
   constants so renames and additions are caught in one place. If multiple
   public enums need the same event name, define the literal in exactly one
   canonical enum and derive the other enum values from that source.
+- Define shared domain values once in the owning package. Use enums for kinds
+  and states, and named constants for built-in names, descriptions, prompts,
+  and repeated messages. Reuse these definitions in producers and consumers,
+  including dispatch tables and configuration defaults. Keep string values
+  stable at SDK, serialization, and public configuration boundaries.
 - For bridge, protocol, or transport dispatch, prefer explicit handler
   registries over long `isinstance` ladders. Each handler should declare the
   command or event type it handles, own that type's processing, and make its

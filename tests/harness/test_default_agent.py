@@ -172,8 +172,6 @@ class _RecordingRunner(Runner):
         del cancellation_token
 
         copied = copy_run_state(state)
-        if copied is None:
-            raise AssertionError("Expected copied run state.")
         self.calls.append(copied)
 
         if not isinstance(agent, Agent):
@@ -184,6 +182,7 @@ class _RecordingRunner(Runner):
         response = make_assistant_response(reply_text)
         state.responses.append(response)
         state.history.append(response)
+
         return RunResult(
             final_output=reply_text,
             responses=list(state.responses),

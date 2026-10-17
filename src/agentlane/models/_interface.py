@@ -1,21 +1,41 @@
 import abc
 import enum
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal, Self, cast
 
 import httpx
 from pydantic import BaseModel
+from strenum import LowercaseStrEnum
 
 from ..runtime import CancellationToken
 from ..tracing import Span
 from ._output_schema import OutputSchema
 from ._rate_limiter import RateLimiter
-from ._streaming import ModelStreamEvent, ModelStreamEventKind
+from ._streaming import (
+    ModelStreamEvent,
+    ModelStreamEventKind,
+    SteeringInput,
+    SteeringReceipt,
+)
 from ._tool import Tool, ToolFunction, ToolSpec
 
 type MessageDict = dict[str, Any]
 """Conversation message payload shared across client interfaces."""
+
+
+class ToolChoice(LowercaseStrEnum):
+    """Shared model tool-selection policies."""
+
+    AUTO = "auto"
+    """Lets the model choose whether to call a tool."""
+
+    REQUIRED = "required"
+    """Requires the model to call a tool before producing its answer."""
+
+    NONE = "none"
+    """Disables model tool calls for the request."""
 
 
 class ModelTracing(enum.Enum):
@@ -169,7 +189,7 @@ class Tools:
     widening the internal execution contract.
     """
 
-    tool_choice: Literal["auto", "required", "none"] = "auto"
+    tool_choice: Literal["auto", "required", "none"] = ToolChoice.AUTO.value
     """Strategy that controls if and how the model may call tools."""
 
     parallel_tool_calls: bool = False
@@ -192,8 +212,8 @@ class Tools:
 
     When a tool's call count reaches its limit, the harness runner removes it
     from the next model request so the model cannot invoke it again. When all
-    tools are exhausted, tools are stripped entirely from later requests,
-    forcing the model to produce a text response.
+    tools are exhausted, later requests keep an empty tool set with
+    tool_choice="none". The remaining execution policy is retained.
     """
 
     max_tool_round_trips: int = 10
@@ -201,7 +221,7 @@ class Tools:
 
     Acts as a last resort to prevent infinite loops when
     ``tool_call_limits`` is not configured. When reached, the harness runner
-    strips all tools from the next model request.
+    sends an empty tool set with tool_choice="none" on the next request.
     """
 
     def __post_init__(self) -> None:
@@ -245,6 +265,25 @@ class Tools:
 
 class Model[TResponse](abc.ABC):
     """The base interface for calling an LLM."""
+
+    @asynccontextmanager
+    async def open_run(self) -> AsyncGenerator[Self, None]:
+        """Bind optional provider resources to one run; ordinary models reuse self."""
+        yield self
+
+    async def steer(self, input: SteeringInput) -> SteeringReceipt:
+        """Submit input through an optional active provider control channel."""
+        raise NotImplementedError("This model does not support live steering.")
+
+    @property
+    def requires_streaming(self) -> bool:
+        """Whether this model needs events even for a terminal harness call."""
+        return False
+
+    @property
+    def handles_retries(self) -> bool:
+        """Whether this model owns retries and must not receive harness retries."""
+        return False
 
     async def __call__(
         self,

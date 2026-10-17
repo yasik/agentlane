@@ -7,6 +7,9 @@ from jinja2 import Template
 
 from ._types import LoadedSkill, SkillManifest, SkillResource
 
+ACTIVATE_SKILL_TOOL_NAME = "activate_skill"
+"""Used as the default model-facing name of the skill-activation tool."""
+
 DEFAULT_SKILLS_SYSTEM_PROMPT = """
 <skills_system>
 You have access to the following skills that provide specialized instructions for specific tasks.

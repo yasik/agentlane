@@ -4,11 +4,16 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, cast
 
-from agentlane.models import MessageDict, ModelResponse, get_content_or_none
+from agentlane.models import (
+    MessageDict,
+    MessageRole,
+    ModelResponse,
+    get_content_or_none,
+)
 
 from .._run import RunHistoryItem
 from ._config import DefaultCompactorConfig
-from ._constants import MIN_BLOCKS_TO_SUMMARIZE, MIN_SHRINK_RATIO
+from ._constants import MIN_BLOCKS_TO_SUMMARIZE, MIN_SHRINK_RATIO, SUMMARY_AFTER_TAIL
 from ._errors import CompactionError, ContextOverflowError
 from ._render import render_request_messages
 from ._summary import is_summary_item, render_summary_item
@@ -56,7 +61,7 @@ class DefaultCompactor:
         )
         summarizer_messages.insert(
             0,
-            {"role": "system", "content": self._config.prompt},
+            {"role": MessageRole.SYSTEM.value, "content": self._config.prompt},
         )
         _raise_if_summarizer_request_overflows(
             messages=summarizer_messages,
@@ -252,7 +257,7 @@ def _assistant_tool_call_ids(item: RunHistoryItem) -> set[str]:
         tool_calls = item.choices[0].message.tool_calls or []
         return {tool_call.id for tool_call in tool_calls if tool_call.id}
 
-    if not isinstance(item, dict) or item.get("role") != "assistant":
+    if not isinstance(item, dict) or item.get("role") != MessageRole.ASSISTANT.value:
         return set()
 
     raw_tool_calls = item.get("tool_calls")
@@ -273,7 +278,7 @@ def _assistant_tool_call_ids(item: RunHistoryItem) -> set[str]:
 
 
 def _tool_result_call_id(item: RunHistoryItem) -> str | None:
-    if not isinstance(item, dict) or item.get("role") != "tool":
+    if not isinstance(item, dict) or item.get("role") != MessageRole.TOOL.value:
         return None
 
     tool_call_id = item.get("tool_call_id")
@@ -389,7 +394,7 @@ def _replacement_history(
     tail_history: list[RunHistoryItem],
     placement: SummaryPlacement,
 ) -> list[RunHistoryItem]:
-    if placement == "after_tail":
+    if placement == SUMMARY_AFTER_TAIL:
         return [*tail_history, summary_item]
     return [summary_item, *tail_history]
 

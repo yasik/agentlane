@@ -48,14 +48,14 @@ The static tool-exclusion shim that backs `disallowedTools` is the shared
 Everything after the closing `---` is the Markdown body and becomes the agent's
 `instructions` (its system prompt). The frontmatter maps onto descriptor fields:
 
-| Field             | Required | Maps to                  | Notes                                                                                              |
-| ----------------- | -------- | ------------------------ | -------------------------------------------------------------------------------------------------- |
-| `name`            | no       | `name`                   | Identity comes from this field, not the filename. Blank/absent → generated fallback name.          |
-| `description`     | no       | `description`            | Used as the tool/handoff description when this agent is a sub-agent.                                |
-| `model`           | no       | resolved client          | Provider/model spec (`anthropic/<m>`, `openai/<m>`, `azure/<m>`, …). `inherit`/omitted → no model.  |
-| `model_args`      | no       | `model_args`             | Free-form mapping forwarded verbatim as request kwargs (temperature, reasoning_effort, …).         |
-| `tools`           | no       | `tools` (`ToolConfig`)   | Allowlist of native AgentLane tool names. Omitted → inherit-all; `[]` → no tools.                  |
-| `disallowedTools` | no       | an `ExcludeToolsShim` in `shims` | Denylist removed from the visible tool set each turn.                                           |
+| Field             | Required | Maps to                          | Notes                                                                                              |
+| ----------------- | -------- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `name`            | no       | `name`                           | Identity comes from this field, not the filename. Blank/absent → generated fallback name.          |
+| `description`     | no       | `description`                    | Used as the tool/handoff description when this agent is a sub-agent.                               |
+| `model`           | no       | resolved client                  | Provider/model spec (`anthropic/<m>`, `openai/<m>`, `azure/<m>`, …). `inherit`/omitted → no model. |
+| `model_args`      | no       | `model_args`                     | Free-form mapping forwarded verbatim as request kwargs (temperature, reasoning_effort, …).         |
+| `tools`           | no       | `tools` (`ToolConfig`)           | Allowlist of native AgentLane tool names. Omitted → inherit-all; `[]` → no tools.                  |
+| `disallowedTools` | no       | an `ExcludeToolsShim` in `shims` | Denylist removed from the visible tool set each turn.                                              |
 
 Tool names are AgentLane's native lowercase names (`read`, `find`, `grep`,
 `patch`, `write`, `write_plan`, `bash`, `agent`); custom/MCP tool names the
@@ -85,7 +85,7 @@ section you used.
 Limits used by the parser:
 
 1. `AGENT_MAX_DESCRIPTION_LENGTH` (`1024`) — agent description limit; 
-2. an over-length description is truncated to it,
+   an over-length description is truncated to it,
 2. `AGENT_MAX_INSTRUCTIONS_LINES` (`1000`) — a longer instruction body is
    truncated to this many lines with a pointer back to the source file, rather
    than the agent being dropped,

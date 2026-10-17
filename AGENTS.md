@@ -83,6 +83,21 @@ Always talk and write documentation in ASD-STE100 Simplified Technical English.
 - Modular design with reusable components
 - Nested packages for organization (shared dependencies at common level)
 
+## Required code readability
+
+- Separate logical steps inside methods with blank lines. Keep statements that
+  perform one step together.
+- In multi-step methods, put a short comment immediately above each block whose
+  purpose, condition, or order needs context. Explain the step's role in the
+  operation so the reader can follow the method without tracing every call.
+- Put a blank line before a block comment and no blank line between the comment
+  and its code. Separate the final return from the preceding work.
+- Preserve useful block-purpose comments during simplification. A comment can
+  explain application logic; it does not need an external protocol justification.
+- Follow the examples and review checklist in
+  [`docs/code-style/README.md`](docs/code-style/README.md#logical-blocks-and-comments)
+  and [`Python comments`](docs/code-style/python/comments.md#multi-step-methods).
+
 ## Local workflow
 
 1. Format, lint and type‑check your changes:

@@ -11,6 +11,7 @@ from agentlane.harness.agents import DefaultAgent
 from agentlane.messaging import AgentId
 from agentlane.models import (
     MessageDict,
+    MessageRole,
     ModelResponse,
     PromptSpec,
     PromptTemplate,
@@ -56,7 +57,12 @@ def test_agent_snapshot_round_trip_preserves_canonical_state() -> None:
     response = make_assistant_response("First answer")
     state = RunState(
         instructions=instructions,
-        history=["First question", response, user_prompt],
+        history=[
+            "First question",
+            response,
+            user_prompt,
+            {"role": MessageRole.DEVELOPER, "content": "Keep replies brief."},
+        ],
         responses=[response],
         turn_count=2,
         revision=4,
@@ -75,6 +81,7 @@ def test_agent_snapshot_round_trip_preserves_canonical_state() -> None:
         {"role": "user", "content": "First question"},
         {"role": "assistant", "content": "First answer"},
         {"role": "user", "content": "Follow up with ops."},
+        {"role": "developer", "content": "Keep replies brief."},
     ]
     assert restored.responses == [response]
     assert restored.shim_state == {"skills:active-skill-names": ["triage"]}

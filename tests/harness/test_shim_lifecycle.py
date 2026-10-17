@@ -262,6 +262,8 @@ async def test_empty_final_tools_remove_required_choice(exclude_first: bool) -> 
     model = SequenceModel([make_assistant_response("done")])
     source = _ToolSourceShim((named_tool("source_read"),))
     exclude = ExcludeToolsShim(names=("source_read",))
+
+    # Exercise both shim orders so final tool visibility determines the choice.
     await DefaultAgent(
         descriptor=AgentDescriptor(
             name="fixture",
@@ -271,7 +273,11 @@ async def test_empty_final_tools_remove_required_choice(exclude_first: bool) -> 
         )
     ).run("test")
 
-    assert model.call_tools[0] is None
+    limited = model.call_tools[0]
+
+    assert limited is not None
+    assert limited.normalized_tools == ()
+    assert limited.tool_choice == "none"
 
 
 @pytest.mark.asyncio

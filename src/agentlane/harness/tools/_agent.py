@@ -6,10 +6,10 @@ from pydantic import BaseModel
 
 from agentlane.models import Model, ModelResponse, OutputSchema
 
+from .._constants import DEFAULT_AGENT_TOOL_NAME
 from .._lifecycle import DefaultAgentTool
 from ._types import HarnessToolDefinition
 
-_TOOL_NAME = "agent"
 _TOOL_DESCRIPTION = (
     "Spawn a fresh helper agent for one focused task, then continue with the result."
 )
@@ -38,7 +38,7 @@ def agent_tool(
     """
     return HarnessToolDefinition(
         tool=DefaultAgentTool(
-            name=_TOOL_NAME,
+            name=DEFAULT_AGENT_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             model=model,
             model_args=model_args,

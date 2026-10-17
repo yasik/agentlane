@@ -13,11 +13,22 @@ from agentlane.harness.filesystem import (
 )
 from agentlane.models.run import RunContext
 
+from .._constants import DEFAULT_AGENT_TOOL_NAME
 from .._run import RunState, ShimState
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._agent import agent_tool
 from ._bash import bash_tool
 from ._bash_executor import BashExecutor
+from ._constants import (
+    BASH_TOOL_NAME,
+    DEFAULT_HARNESS_TOOLS_SHIM_NAME,
+    FIND_TOOL_NAME,
+    GREP_TOOL_NAME,
+    PATCH_TOOL_NAME,
+    PLAN_TOOL_NAME,
+    READ_TOOL_NAME,
+    WRITE_TOOL_NAME,
+)
 from ._find import find_tool
 from ._grep import grep_tool
 from ._patch import patch_tool
@@ -29,16 +40,15 @@ from ._types import HarnessToolDefinition
 from ._write import write_tool
 
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
-_PLAN_TOOL_NAME = "write_plan"
 BASE_TOOL_NAMES: tuple[str, ...] = (
-    "read",
-    "find",
-    "grep",
-    "patch",
-    "write",
-    _PLAN_TOOL_NAME,
-    "bash",
-    "agent",
+    READ_TOOL_NAME,
+    FIND_TOOL_NAME,
+    GREP_TOOL_NAME,
+    PATCH_TOOL_NAME,
+    WRITE_TOOL_NAME,
+    PLAN_TOOL_NAME,
+    BASH_TOOL_NAME,
+    DEFAULT_AGENT_TOOL_NAME,
 )
 """Names of the first-party base harness tools, in standard selection order.
 
@@ -106,7 +116,7 @@ class _BoundHarnessToolsShim(BoundShim):
         definition: HarnessToolDefinition,
     ) -> HarnessToolDefinition:
         """Attach shim-owned state to stateful first-party tools."""
-        if definition.tool.name != _PLAN_TOOL_NAME:
+        if definition.tool.name != PLAN_TOOL_NAME:
             return definition
 
         return plan_tool(
@@ -127,7 +137,7 @@ class HarnessToolsShim(Shim):
         self,
         definitions: Sequence[HarnessToolDefinition],
         *,
-        name: str = "harness-tools",
+        name: str = DEFAULT_HARNESS_TOOLS_SHIM_NAME,
         prompt_guidelines: Sequence[str] = (),
     ) -> None:
         self._definitions = tuple(definitions)
@@ -208,15 +218,19 @@ def base_harness_tools(
     # Validate only selected tools, but never fill missing storage capabilities
     # with local defaults. That would give the same path different meanings.
     if injected:
-        if reader is None and set(selected_names) & {"read", "find", "patch"}:
+        if reader is None and set(selected_names) & {
+            READ_TOOL_NAME,
+            FIND_TOOL_NAME,
+            PATCH_TOOL_NAME,
+        }:
             raise ValueError("selected storage tools require a reader")
 
-        if search_reader is None and "find" in selected_names:
+        if search_reader is None and FIND_TOOL_NAME in selected_names:
             raise ValueError(
                 "find requires a reader with directory listings and metadata"
             )
 
-        if writer is None and set(selected_names) & {"write", "patch"}:
+        if writer is None and set(selected_names) & {WRITE_TOOL_NAME, PATCH_TOOL_NAME}:
             raise ValueError(
                 "write and patch require a writer; exclude them for read-only storage"
             )
@@ -224,44 +238,44 @@ def base_harness_tools(
     # Logical storage roots do not change the workspace of process tools.
     file_cwd = storage_cwd if injected else cwd
     factories: dict[str, _BaseToolFactory] = {
-        "read": lambda: read_tool(
+        READ_TOOL_NAME: lambda: read_tool(
             cwd=file_cwd,
             reader=reader,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        "find": lambda: find_tool(
+        FIND_TOOL_NAME: lambda: find_tool(
             cwd=file_cwd,
             reader=search_reader,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        "grep": lambda: grep_tool(
+        GREP_TOOL_NAME: lambda: grep_tool(
             cwd=cwd,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        "patch": lambda: patch_tool(
+        PATCH_TOOL_NAME: lambda: patch_tool(
             cwd=file_cwd,
             reader=reader,
             writer=writer,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        "write": lambda: write_tool(
+        WRITE_TOOL_NAME: lambda: write_tool(
             cwd=file_cwd,
             writer=writer,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        _PLAN_TOOL_NAME: plan_tool,
-        "bash": lambda: bash_tool(
+        PLAN_TOOL_NAME: plan_tool,
+        BASH_TOOL_NAME: lambda: bash_tool(
             cwd=cwd,
             executor=bash_executor,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
-        "agent": agent_tool,
+        DEFAULT_AGENT_TOOL_NAME: agent_tool,
     }
 
     definitions = tuple(factories[name]() for name in selected_names)

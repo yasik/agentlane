@@ -344,6 +344,13 @@ Important details:
 4. first-class handoff continues the outer stream because control transfers
 5. agent-as-tool stays internal in the current streaming contract
 
+With a Responses model configured for WebSocket use, call
+`await stream.steer(input)` while a native response is active. The returned
+receipt separates queued input from input applied to a successor response.
+Both `run_stream(...)` and `run_events(...)` expose this control. For
+configuration, async function execution, and receipt states, see
+[Steering and async tools](../models/overview.md#steering-and-async-tools).
+
 ## Run Events
 
 `run_events(...)` returns a

@@ -1,9 +1,11 @@
 """Shared stream-handle mechanics for harness run streams."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from typing import Any, Self, cast
+
+from agentlane.models import SteeringInput, SteeringReceipt
 
 from ._run import RunResult
 
@@ -17,6 +19,7 @@ class BaseRunStream[T](AsyncIterator[T]):
         end_sentinel: object,
         on_close: Callable[[], None] | None = None,
     ) -> None:
+        self._steer: Callable[[SteeringInput], Awaitable[SteeringReceipt]] | None = None
         self._queue: asyncio.Queue[object] = asyncio.Queue()
         self._result_future: asyncio.Future[RunResult] = (
             asyncio.get_running_loop().create_future()
@@ -26,6 +29,19 @@ class BaseRunStream[T](AsyncIterator[T]):
         self._end_sentinel = end_sentinel
         self._on_close = on_close
         self._cleanup_callbacks: list[Callable[[], None]] = []
+
+    def bind_steering(
+        self, handler: Callable[[SteeringInput], Awaitable[SteeringReceipt]]
+    ) -> None:
+        """Bind the control operation for this run or its lifecycle relay."""
+        self._steer = handler
+
+    async def steer(self, input: SteeringInput) -> SteeringReceipt:
+        """Submit native user input after response.created; inspect its live receipt."""
+        if self._closed or self._steer is None:
+            raise RuntimeError("This run has no active steering channel.")
+
+        return await self._steer(input)
 
     def __aiter__(self) -> Self:
         """Return the stream itself as the async iterator."""
@@ -89,7 +105,10 @@ class BaseRunStream[T](AsyncIterator[T]):
         """Run cleanup callbacks at most once."""
         if self._cleaned_up:
             return
+
+        # Disable controls before cleanup callbacks can close dependent streams.
         self._cleaned_up = True
+        self._steer = None
         for callback in self._cleanup_callbacks:
             with suppress(Exception):
                 callback()

@@ -12,11 +12,14 @@ from litellm import CustomStreamWrapper
 from pydantic import BaseModel
 
 from agentlane.models import (
+    ESCAPE_SEQUENCE_RETRY_MESSAGE,
+    SCHEMA_NORMALIZATION_ERROR,
     Config,
 )
 from agentlane.models import Factory as BaseFactory
 from agentlane.models import (
     MessageDict,
+    MessageRole,
     Model,
     ModelResponse,
     ModelStreamEvent,
@@ -34,6 +37,7 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span, generation_span
 
+from ._constants import NATIVE_RESPONSES_HISTORY_ERROR
 from .types import (
     APIConnectionError,
     InternalServerError,
@@ -266,6 +270,11 @@ class Client(Model[TResponseType]):
         caller (typically the harness runner) can keep that span open across
         subsequent tool dispatch and nest tool spans under it.
         """
+
+        # Reject native replay data before a chat-only path can discard it.
+        if any("openai_responses_input" in message for message in messages):
+            raise ValueError(NATIVE_RESPONSES_HISTORY_ERROR)
+
         conversation: list[MessageDict] = [*messages]
         schema_retry_count = 0
 
@@ -321,6 +330,7 @@ class Client(Model[TResponseType]):
                 assistant_message = self._extract_assistant_message(result)
                 if assistant_message is not None:
                     conversation.append(assistant_message)
+
                 model_response = self._to_model_response(result)
 
                 tool_calls = self._extract_tool_calls(result)
@@ -328,6 +338,7 @@ class Client(Model[TResponseType]):
                     # Tool calls are returned as raw model output.
                     self._record_tracing_output(span_generation, result)
                     self._record_usage(span_generation, result, retry_metrics)
+
                     return model_response
 
                 # Check for escape sequence explosion (e.g. Gemini combining char runs)
@@ -337,17 +348,17 @@ class Client(Model[TResponseType]):
                         # Remove the corrupted assistant message that was
                         # appended to avoid re-sending the escape
                         # sequence explosion to the model.
-                        if conversation and conversation[-1].get("role") == "assistant":
+                        if (
+                            conversation
+                            and conversation[-1].get("role")
+                            == MessageRole.ASSISTANT.value
+                        ):
                             conversation.pop()
+
                         conversation.append(
                             {
-                                "role": "user",
-                                "content": (
-                                    "Your previous response contained repeated Unicode "
-                                    "escape sequences and could not be processed. Please "
-                                    "regenerate your response without using repeated "
-                                    "combining diacritical marks or \\uXXXX sequences."
-                                ),
+                                "role": MessageRole.USER.value,
+                                "content": ESCAPE_SEQUENCE_RETRY_MESSAGE,
                             }
                         )
                         continue
@@ -356,9 +367,7 @@ class Client(Model[TResponseType]):
                 if schema is not None:
                     output_schema = resolve_output_schema(schema)
                     if output_schema is None:
-                        raise ValueError(
-                            "schema normalization unexpectedly returned None"
-                        )
+                        raise ValueError(SCHEMA_NORMALIZATION_ERROR)
 
                     validation_result = output_schema.validate_response_with_retry(
                         response=model_response,
@@ -371,11 +380,12 @@ class Client(Model[TResponseType]):
                         schema_retry_count += 1
                         conversation.append(
                             {
-                                "role": "user",
+                                "role": MessageRole.USER.value,
                                 "content": validation_result.error_message,
                             }
                         )
                         continue  # Retry with augmented conversation
+
                     # Fall through if valid or no more retries
 
                 # We record the tracing output and usage and return the result
@@ -405,6 +415,10 @@ class Client(Model[TResponseType]):
         """
 
         async def _stream() -> AsyncIterator[ModelStreamEvent]:
+            # Reject native replay data before a chat-only path can discard it.
+            if any("openai_responses_input" in message for message in messages):
+                raise ValueError(NATIVE_RESPONSES_HISTORY_ERROR)
+
             trace_events: list[dict[str, Any]] = []
 
             if parent_span is not None:
@@ -466,6 +480,7 @@ class Client(Model[TResponseType]):
                         ):
                             if event.kind == ModelStreamEventKind.ERROR:
                                 emitted_error = True
+
                             yield event
                 except Exception as error:
                     if not emitted_error:
@@ -475,6 +490,7 @@ class Client(Model[TResponseType]):
                         )
                         self._append_trace_event(trace_events, error_event)
                         yield error_event
+
                     raise
                 finally:
                     if self._tracing.include_data() and trace_events:

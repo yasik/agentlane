@@ -13,6 +13,8 @@ from agentlane.io import buffered_reader
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
+from .._constants import EMPTY_PATH_ERROR
+from ._constants import INVALID_LIMIT_ERROR, READ_TOOL_NAME
 from ._output import TEXT_MAX_BYTES, TEXT_MAX_LINES
 from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
@@ -25,7 +27,6 @@ from ._permissions import (
 from ._types import HarnessToolDefinition
 
 _BINARY_SAMPLE_BYTES = 4096
-_TOOL_NAME = "read"
 _TOOL_DESCRIPTION = (
     "Reads raw text file contents. Supports offset and limit for large "
     f"files. Output is truncated to {TEXT_MAX_LINES} lines or "
@@ -118,7 +119,7 @@ def read_tool(
 
     return HarnessToolDefinition(
         tool=Tool[_ToolArgs, str](
-            name=_TOOL_NAME,
+            name=READ_TOOL_NAME,
             description=_TOOL_DESCRIPTION,
             args_model=_ToolArgs,
             handler=run_read,
@@ -142,14 +143,14 @@ async def _read_file(
     if args.offset is not None and args.offset < 1:
         return "offset must be a 1-indexed line number"
     if args.limit is not None and args.limit < 1:
-        return "limit must be greater than zero"
+        return INVALID_LIMIT_ERROR
     if args.path.strip() == "":
-        return "path must not be empty"
+        return EMPTY_PATH_ERROR
 
     resolved_path = await asyncio.to_thread(resolver.resolve, args.path)
     permission_error = await evaluate_tool_permission(
         ToolPermissionRequest(
-            tool_name=_TOOL_NAME,
+            tool_name=READ_TOOL_NAME,
             operation=ToolOperation.READ_FILE,
             cwd=resolver.cwd,
             path=resolved_path,

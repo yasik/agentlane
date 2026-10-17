@@ -1,7 +1,7 @@
 """Shared catalog waits consume each lease's discovery deadline."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -37,13 +37,16 @@ class _DiscoveryPeer:
 @asynccontextmanager
 async def _discovery_peer(
     port: int, peer: _DiscoveryPeer, *, discovery_timeout_seconds: float
-) -> AsyncIterator[MCPServer]:
+) -> AsyncGenerator[MCPServer, None]:
     async def list_tools(
         context: ServerRequestContext[Any], params: types.PaginatedRequestParams | None
     ) -> types.ListToolsResult:
         del context, params
         peer.list_calls += 1
+
+        # Delay the peer response to exercise the caller's shared discovery deadline.
         await asyncio.sleep(peer.delay_seconds)
+
         return types.ListToolsResult(
             tools=[types.Tool(name=peer.tool_name, input_schema={"type": "object"})],
             ttl_ms=0,

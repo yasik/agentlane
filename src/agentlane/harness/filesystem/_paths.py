@@ -3,6 +3,9 @@
 import posixpath
 from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
+from .._constants import EMPTY_PATH_ERROR
+from ._constants import HOME_PREFIX_PATH_ERROR, INVALID_PATH_SEPARATORS
+
 
 def normalize_virtual_path(path: str, *, cwd: str = "/") -> PurePosixPath:
     """Resolve a path from a working directory in a virtual POSIX namespace.
@@ -32,16 +35,16 @@ def normalize_virtual_path(path: str, *, cwd: str = "/") -> PurePosixPath:
 
 def _virtual_parts(path: str) -> list[str]:
     if not path.strip():
-        raise ValueError("path must not be empty")
+        raise ValueError(EMPTY_PATH_ERROR)
     if "\x00" in path or "\\" in path:
-        raise ValueError("path must use POSIX separators and contain no null bytes")
+        raise ValueError(INVALID_PATH_SEPARATORS)
 
     parts = path.split("/")
     for part in parts:
         if PureWindowsPath(part).drive:
             raise ValueError("path must not contain drive prefixes")
         if part.startswith("~"):
-            raise ValueError("path must not contain home-directory prefixes")
+            raise ValueError(HOME_PREFIX_PATH_ERROR)
 
     return parts
 
@@ -84,14 +87,14 @@ def normalize_relative_path(
     root_text = str(root)
     for value in (path_text, root_text):
         if not value.strip():
-            raise ValueError("path must not be empty")
+            raise ValueError(EMPTY_PATH_ERROR)
         if "\x00" in value or "\\" in value:
-            raise ValueError("path must use POSIX separators and contain no null bytes")
+            raise ValueError(INVALID_PATH_SEPARATORS)
         if PurePosixPath(value).is_absolute() or PureWindowsPath(value).drive:
             raise ValueError("path must be relative to the storage root")
         # Mount routing can expose any component to a local backend's expanduser.
         if any(part.startswith("~") for part in PurePosixPath(value).parts):
-            raise ValueError("path must not contain home-directory prefixes")
+            raise ValueError(HOME_PREFIX_PATH_ERROR)
 
     normalized_root = posixpath.normpath(root_text)
     normalized = posixpath.normpath(posixpath.join(normalized_root, path_text))

@@ -1,22 +1,18 @@
 # pylint: disable=R0917, C0301
 
-"""OpenAI Responses API client.
-
-This module provides a native OpenAI client using the Responses API that
-conforms to the agentlane.models interfaces. The Responses API offers
-several advantages over Chat Completions:
-
-1. Unified agentic loop: Model can call multiple tools in one request
-2. Built-in tools: web_search, file_search, code_interpreter
-3. First-class reasoning: ResponseReasoningItem with summary and full content
-4. Better cache utilization: 40% to 80% better cache hit rates
-"""
+"""Adapt the native Responses SDK to the harness model and streaming contracts."""
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Collection,
+    Generator,
+)
+from copy import copy
 from dataclasses import fields, replace
-from typing import Any, Literal, cast
+from typing import Any, Self, cast
 
 import structlog
 from openai import (
@@ -24,25 +20,26 @@ from openai import (
     APITimeoutError,
     AsyncAzureOpenAI,
     AsyncOpenAI,
+    AsyncStream,
     InternalServerError,
-    RateLimitError,
 )
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
-from openai.types.chat.chat_completion_message_tool_call import (
-    ChatCompletionMessageToolCall,
-    Function,
-)
-from openai.types.completion_usage import CompletionUsage
 from openai.types.responses import Response as OpenAIResponse
+from openai.types.responses import (
+    ResponseCompletedEvent,
+    ResponseIncompleteEvent,
+    ResponseInputParam,
+    ResponseStreamEvent,
+)
 from pydantic import BaseModel
 
 from agentlane.models import (
+    ESCAPE_SEQUENCE_RETRY_MESSAGE,
     Config,
 )
 from agentlane.models import Factory as BaseFactory
 from agentlane.models import (
     MessageDict,
+    MessageRole,
     Model,
     ModelResponse,
     ModelStreamEvent,
@@ -50,8 +47,8 @@ from agentlane.models import (
     ModelTracing,
     OutputSchema,
     RetryMetrics,
-    ToolCall,
-    ToolCallFunction,
+    SteeringInput,
+    SteeringReceipt,
     Tools,
     has_escape_sequence_explosion,
     is_retryable_by_status_code,
@@ -62,14 +59,19 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span, generation_span
 
-from .types import (
-    ResponseFunctionToolCall,
-    ResponseOutputMessage,
-    ResponseReasoningItem,
+from ._constants import NO_ACTIVE_RESPONSE
+from ._event_adapter import to_stream_event
+from ._request_adapter import RequestAdapter, messages_to_input
+from ._response_adapter import (
+    response_to_model_response,
 )
+from ._responses_session import ResponsesSession
 
 LOGGER = structlog.get_logger(log_tag="agentlane.openai.responses_client")
+"""Used to report native request attempts and refusal retries."""
+
 _MAX_REFUSAL_RETRIES = 3
+"""Limit extra Azure attempts after a content-filter refusal."""
 
 
 def _is_openai_retryable(exception: BaseException) -> bool:
@@ -90,7 +92,6 @@ def _is_openai_retryable(exception: BaseException) -> bool:
             APIConnectionError,
             APITimeoutError,
             InternalServerError,
-            RateLimitError,
         ),
     ):
         return True
@@ -126,138 +127,6 @@ type TResponseType = ModelResponse
 Uses OpenAI's ChatCompletion type as our standard to maintain
 interchangeability with the LiteLLM client.
 """
-
-type ResponseInputItem = dict[str, Any]
-type ResponseContentPart = dict[str, Any]
-
-
-def _extract_message_content(item: ResponseOutputMessage) -> str | None:
-    """Extract text content from a ResponseOutputMessage."""
-    texts = [
-        content_item.text
-        for content_item in item.content
-        if content_item.type == "output_text"
-    ]
-    return "".join(texts) if texts else None
-
-
-def _convert_tool_call(item: ResponseFunctionToolCall) -> ChatCompletionMessageToolCall:
-    """Convert ResponseFunctionToolCall to ChatCompletionMessageToolCall."""
-    return ChatCompletionMessageToolCall(
-        id=item.call_id,
-        type="function",
-        function=Function(
-            name=item.name,
-            arguments=item.arguments,
-        ),
-    )
-
-
-def _append_refusal_context(
-    input_data: list[dict[str, Any]],
-    refusal_context: str,
-) -> list[dict[str, Any]]:
-    """Return a copy of input_data with a refusal-context user message appended.
-
-    Used to retry Azure content-filter blocks by providing additional context
-    that may help the model produce an acceptable response.
-
-    Args:
-        input_data: The conversation input messages (after _messages_to_input conversion).
-        refusal_context: The context message to append.
-
-    Returns:
-        A copy with a new user message containing the refusal context.
-    """
-    messages_with_context = input_data.copy()
-    messages_with_context.append(
-        {
-            "type": "message",
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": refusal_context,
-                }
-            ],
-        }
-    )
-    return messages_with_context
-
-
-def response_to_model_response(response: OpenAIResponse) -> ModelResponse:
-    """Convert OpenAI Responses API Response to Chat Completions format.
-
-    This enables interchangeability between ResponsesClient and LiteLLM client
-    by converting to our canonical ModelResponse (ChatCompletion) format.
-
-    Args:
-        response: The OpenAI Responses API Response object.
-
-    Returns:
-        ModelResponse in Chat Completions format.
-    """
-    content: str | None = None
-    tool_calls: list[ChatCompletionMessageToolCall] = []
-    reasoning_item: ResponseReasoningItem | None = None
-
-    for item in response.output:
-        if isinstance(item, ResponseOutputMessage):
-            content = _extract_message_content(item) or content
-        elif isinstance(item, ResponseFunctionToolCall):
-            tool_calls.append(_convert_tool_call(item))
-        elif isinstance(item, ResponseReasoningItem):
-            reasoning_item = item
-
-    # Determine finish reason
-    finish_reason: Literal["stop", "length", "tool_calls", "content_filter"] = "stop"
-    if tool_calls:
-        finish_reason = "tool_calls"
-    elif response.status == "incomplete":
-        finish_reason = "length"
-
-    # Build the message - cast to satisfy type checker
-    message = ChatCompletionMessage(
-        role="assistant",
-        content=content,
-        tool_calls=tool_calls if tool_calls else None,  # type: ignore[arg-type]
-    )
-
-    # Build usage
-    usage = None
-    if response.usage:
-        usage = CompletionUsage(
-            prompt_tokens=response.usage.input_tokens,
-            completion_tokens=response.usage.output_tokens,
-            total_tokens=response.usage.total_tokens,
-        )
-
-    # Build the choice
-    choice = Choice(
-        index=0,
-        message=message,
-        finish_reason=finish_reason,
-        logprobs=None,
-    )
-
-    # Create the ChatCompletion response
-    model_response = ChatCompletion(
-        id=response.id,
-        choices=[choice],
-        created=int(response.created_at),
-        model=response.model,
-        object="chat.completion",
-        usage=usage,
-    )
-
-    # Store reasoning item as an extension field if present (raw ResponseReasoningItem)
-    if reasoning_item:
-        # SDK parsing can leave this schema deferred. Build it before an outer
-        # serializer encounters the typed extra; later calls reuse the schema.
-        ResponseReasoningItem.model_rebuild()
-        cast(Any, model_response).reasoning_content = reasoning_item
-
-    return model_response
 
 
 class ResponsesFactory(BaseFactory[TResponseType]):
@@ -319,6 +188,8 @@ class ResponsesClient(Model[TResponseType]):
         self,
         config: Config,
         refusal_context: str | None = None,
+        websocket: bool = False,
+        async_tools: Collection[str] = (),
         **kwargs: Any,
     ) -> None:
         """Initialize the client.
@@ -328,12 +199,15 @@ class ResponsesClient(Model[TResponseType]):
             refusal_context: Optional message appended to retry requests when
                 Azure content filters block a response.  When ``None``, no
                 refusal-retry context is added.
+            websocket: Use a native connection within a harness run or open_run context.
+            async_tools: Local function names that can run while model output continues.
             kwargs: Default model-call arguments forwarded to the Responses API.
         """
-        if "temperature" in kwargs and "reasoning_effort" in kwargs:
-            raise ValueError(
-                "Either temperature or reasoning_effort must be provided, not both."
-            )
+        self._async_tools = frozenset(async_tools)
+        self._websocket = websocket
+
+        # The configured client has no connection until open_run binds a session.
+        self._session: ResponsesSession | None = None
 
         # Parse provider prefix from model name
         # (e.g., "azure/gpt-5.1" -> ("azure", "gpt-5.1"))
@@ -366,6 +240,7 @@ class ResponsesClient(Model[TResponseType]):
                     "base_url is required for Azure OpenAI (e.g., "
                     "'https://your-resource.openai.azure.com/')"
                 )
+
             client_kwargs["azure_endpoint"] = config.base_url
             client_kwargs["api_version"] = (
                 "2025-03-01-preview"  # Responses API requires preview
@@ -374,10 +249,51 @@ class ResponsesClient(Model[TResponseType]):
         else:
             if config.base_url:
                 client_kwargs["base_url"] = config.base_url
+
             self._openai_client = AsyncOpenAI(**client_kwargs)
 
         # Common parameters for API calls
-        self._common_params: dict[str, Any] = dict(kwargs)
+        self._request_adapter = RequestAdapter(
+            kwargs, self._enforce_structured_output, self._async_tools
+        )
+
+    @contextlib.asynccontextmanager
+    async def open_run(self) -> AsyncGenerator[Self, None]:
+        """Use one native connection per run, with no automatic request replay."""
+        if not self._websocket:
+            yield self
+            return
+
+        # Share SDK configuration, but isolate connection and steering state per run.
+        async with self._openai_client.responses.connect(max_retries=0) as connection:
+            bound = copy(self)
+            session = ResponsesSession(
+                connection, self._model, self._async_tools, self._record_stream_response
+            )
+            bound._session = session
+            try:
+                yield bound
+            finally:
+                session.settle()
+                bound._session = None
+
+    async def steer(self, input: SteeringInput) -> SteeringReceipt:
+        """Submit steering through this run's native session."""
+        session = self._session
+        if session is None:
+            raise RuntimeError(NO_ACTIVE_RESPONSE)
+
+        return await session.steer(input)
+
+    @property
+    def requires_streaming(self) -> bool:
+        """Keep native connection events available to the harness."""
+        return self._websocket or bool(self._async_tools)
+
+    @property
+    def handles_retries(self) -> bool:
+        """Keep HTTP retries in this adapter, including server delay handling."""
+        return True
 
     @property
     def tracing(self) -> ModelTracing:
@@ -411,38 +327,26 @@ class ResponsesClient(Model[TResponseType]):
         Returns:
             ModelResponse in Chat Completions format for interchangeability.
         """
-        # Convert messages to Responses API input format
-        conversation_input = self._messages_to_input(messages)
+        if self._websocket:
+            raise ValueError(
+                "WebSocket mode requires a harness run or stream_response inside open_run."
+            )
+
+        # Convert history once; repair attempts append only their feedback.
+        conversation_input = messages_to_input(messages)
         schema_retry_count = 0
 
-        if parent_span is not None:
-            parent_span.span_data.model = self._model
-            parent_span.span_data.model_config = self._trace_settings
-            span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
-                contextlib.nullcontext(parent_span)
+        with self._generation_span(parent_span, messages) as span_generation:
+            output_schema = resolve_output_schema(schema)
+            call_args = self._request_adapter.build_call_args(
+                extra_call_args=extra_call_args,
+                schema=output_schema,
+                tools=tools,
             )
-        else:
-            span_ctx = generation_span(
-                model=self._model,
-                model_config=self._trace_settings,
-                disabled=self._tracing.is_disabled(),
-            )
-
-        with span_ctx as span_generation:
-            if self._tracing.include_data():
-                span_generation.span_data.input = messages
 
             while True:
-                call_args = self._build_call_args(
-                    extra_call_args=extra_call_args,
-                    schema=schema,
-                    tools=tools,
-                )
-
                 LOGGER.debug(
                     "Responses API call started",
-                    input=conversation_input,
-                    call_args=call_args,
                 )
 
                 if self._provider == "azure":
@@ -463,81 +367,59 @@ class ResponsesClient(Model[TResponseType]):
 
                 LOGGER.debug(
                     "Responses API call finished",
-                    result=result,
                     retry_metrics=retry_metrics,
                 )
 
                 model_response = response_to_model_response(result)
-                tool_calls = self._extract_tool_calls(result)
 
-                if tool_calls:
-                    # Tool calls are returned as raw model output.
-                    self._record_tracing_output(span_generation, result)
-                    self._record_usage(span_generation, result, retry_metrics)
-                    return model_response
+                # Return tool calls to the harness before validating final-answer text.
+                if model_response.choices[0].message.tool_calls:
+                    break
 
-                # Check for escape sequence explosion (e.g. Gemini combining char runs)
+                # Retry malformed text within the same output-repair budget.
                 if has_escape_sequence_explosion(model_response):
                     schema_retry_count += 1
                     if schema_retry_count <= self._schema_validation_retries:
-                        conversation_input.append(
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": [
+                        conversation_input.extend(
+                            messages_to_input(
+                                [
                                     {
-                                        "type": "input_text",
-                                        "text": (
-                                            "Your previous response contained repeated "
-                                            "Unicode escape sequences and could not be "
-                                            "processed. Please regenerate your response "
-                                            "without using repeated combining diacritical "
-                                            "marks or \\uXXXX sequences."
-                                        ),
+                                        "role": MessageRole.USER.value,
+                                        "content": ESCAPE_SEQUENCE_RETRY_MESSAGE,
                                     }
-                                ],
-                            }
+                                ]
+                            )
                         )
                         continue
 
-                # Validate structured output if schema is provided
-                if schema is not None:
-                    output_schema = resolve_output_schema(schema)
-                    if output_schema is None:
-                        raise ValueError(
-                            "schema normalization unexpectedly returned None"
-                        )
-
+                # Preserve the shared schema validator's repair and enforcement policy.
+                if output_schema is not None:
                     validation_result = output_schema.validate_response_with_retry(
                         response=model_response,
                         retry_count=schema_retry_count,
                         max_retries=self._schema_validation_retries,
                         enforce_structured_output=self._enforce_structured_output,
                     )
-
                     if validation_result.should_retry:
                         schema_retry_count += 1
-                        # Add error feedback message in Responses API format
-                        conversation_input.append(
-                            {
-                                "type": "message",
-                                "role": "user",
-                                "content": [
+                        conversation_input.extend(
+                            messages_to_input(
+                                [
                                     {
-                                        "type": "input_text",
-                                        "text": validation_result.error_message,
+                                        "role": MessageRole.USER.value,
+                                        "content": validation_result.error_message,
                                     }
-                                ],
-                            }
+                                ]
+                            )
                         )
-                        continue  # Retry with augmented conversation
-                    # Fall through if valid or no more retries
+                        continue
 
-                # Record tracing and return
-                self._record_tracing_output(span_generation, result)
-                self._record_usage(span_generation, result, retry_metrics)
+                break
 
-                return model_response
+            # Both tool calls and final answers use the same completion bookkeeping.
+            self._record_response(span_generation, result, retry_metrics)
+
+            return model_response
 
     def stream_response(
         self,
@@ -558,30 +440,24 @@ class ResponsesClient(Model[TResponseType]):
 
         See :meth:`get_response` for ``parent_span`` semantics.
         """
-        conversation_input = self._messages_to_input(messages)
+        if self._websocket:
+            return self._stream_connection(
+                messages,
+                extra_call_args,
+                schema,
+                tools,
+                parent_span,
+            )
+
+        # Convert history once for the HTTP stream setup and its retries.
+        conversation_input = messages_to_input(messages)
 
         async def _stream() -> AsyncIterator[ModelStreamEvent]:
             trace_events: list[dict[str, Any]] = []
-            stream: object | None = None
+            stream: AsyncStream[ResponseStreamEvent] | None = None
 
-            if parent_span is not None:
-                parent_span.span_data.model = self._model
-                parent_span.span_data.model_config = self._trace_settings
-                span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
-                    contextlib.nullcontext(parent_span)
-                )
-            else:
-                span_ctx = generation_span(
-                    model=self._model,
-                    model_config=self._trace_settings,
-                    disabled=self._tracing.is_disabled(),
-                )
-
-            with span_ctx as span_generation:
-                if self._tracing.include_data():
-                    span_generation.span_data.input = messages
-
-                call_args = self._build_call_args(
+            with self._generation_span(parent_span, messages) as span_generation:
+                call_args = self._request_adapter.build_call_args(
                     extra_call_args=extra_call_args,
                     schema=schema,
                     tools=tools,
@@ -589,8 +465,6 @@ class ResponsesClient(Model[TResponseType]):
 
                 LOGGER.debug(
                     "Responses API stream started",
-                    input=conversation_input,
-                    call_args=call_args,
                 )
 
                 retry_metrics: RetryMetrics | None = None
@@ -598,9 +472,7 @@ class ResponsesClient(Model[TResponseType]):
 
                 # Hold the limiter for the lifetime of the stream so one active
                 # streamed generation counts as one in-flight model call.
-                # ``nullcontext`` keeps a single code path when no limiter is
-                # configured.
-                limiter_cm: Any = (
+                limiter_cm = (
                     self._rate_limiter
                     if self._rate_limiter is not None
                     else contextlib.nullcontext()
@@ -621,6 +493,7 @@ class ResponsesClient(Model[TResponseType]):
                         ):
                             if event.kind == ModelStreamEventKind.ERROR:
                                 emitted_error = True
+
                             yield event
                 except Exception as error:
                     if not emitted_error:
@@ -630,16 +503,46 @@ class ResponsesClient(Model[TResponseType]):
                         )
                         self._append_trace_event(trace_events, error_event)
                         yield error_event
+
                     raise
                 finally:
                     if self._tracing.include_data() and trace_events:
                         span_generation.span_data.events = trace_events
                     if stream is not None:
-                        close = getattr(stream, "close", None)
-                        if callable(close):
-                            await cast(Any, close)()
+                        await stream.close()
 
         return _stream()
+
+    async def _stream_connection(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, Any] | None,
+        schema: type[BaseModel] | OutputSchema[Any] | None,
+        tools: Tools | None,
+        parent_span: Span[Any] | None,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        """Prepare a native turn and map SDK events under the existing trace scope."""
+        session = self._session
+        if session is None:
+            raise RuntimeError("WebSocket calls require an active open_run context.")
+
+        # Validate turn options and history before sending through the native
+        # connection.
+        call_args = self._request_adapter.build_call_args(
+            extra_call_args,
+            schema,
+            tools,
+        )
+        input_data = session.prepare_input(messages, call_args)
+
+        # Keep tracing and rate limits scoped to this logical response.
+        with self._generation_span(parent_span, messages) as span:
+            async with contextlib.AsyncExitStack() as scope:
+                if self._rate_limiter is not None:
+                    await scope.enter_async_context(self._rate_limiter)
+
+                async for event in session.stream(input_data, call_args, span):
+                    yield event
 
     def get_model(self) -> str:
         """Get the model name."""
@@ -649,313 +552,24 @@ class ResponsesClient(Model[TResponseType]):
         """Get the enforce_structured_output flag."""
         return self._enforce_structured_output
 
-    def _messages_to_input(
-        self, messages: list[MessageDict]
-    ) -> list[ResponseInputItem]:
-        """Convert Chat Completions messages to Responses API input format.
-
-        The Responses API accepts a more flexible input format. We convert
-        standard messages to ResponseInputItem format.
-
-        Args:
-            messages: Messages in Chat Completions format.
-
-        Returns:
-            List of input items for Responses API.
-        """
-        result: list[ResponseInputItem] = []
-
-        for msg in messages:
-            role_value = msg.get("role", "user")
-            role = role_value if isinstance(role_value, str) else "user"
-            content = msg.get("content", "")
-
-            if role in {"system", "developer"}:
-                # Keep the existing system-to-developer mapping. Explicit
-                # developer instructions must reach the same input path.
-                result.append(
-                    {
-                        "type": "message",
-                        "role": "developer",
-                        "content": self._convert_content(content),
-                    }
-                )
-
-            elif role == "user":
-                result.append(
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": self._convert_content(content),
-                    }
-                )
-
-            elif role == "assistant":
-                assistant_content = self._convert_assistant_content(content)
-
-                # Chat Completions can store a refusal outside the content list.
-                # Replay it as content so a refusal-only turn is not lost.
-                refusal = msg.get("refusal")
-                if isinstance(refusal, str) and refusal:
-                    assistant_content.append({"type": "refusal", "refusal": refusal})
-
-                # Converted Chat Completions history is complete by default.
-                # Retain an explicit provider status or ID when supplied; never
-                # manufacture an ID for a message from another API.
-                assistant_item: ResponseInputItem = {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": assistant_content,
-                    "status": msg.get("status", "completed"),
-                }
-
-                if "id" in msg:
-                    assistant_item["id"] = msg["id"]
-
-                # Preserve the distinction between commentary and a final answer
-                # when the caller supplies a phase for the prior assistant turn.
-                if "phase" in msg:
-                    assistant_item["phase"] = msg["phase"]
-
-                # A tool-only turn needs function calls, not an empty message.
-                if assistant_item["content"]:
-                    result.append(assistant_item)
-
-                # Responses uses separate function-call items. Place them after
-                # the assistant text to preserve the original conversation order.
-                tool_calls_raw = msg.get("tool_calls", [])
-                if isinstance(tool_calls_raw, list):
-                    for tc in cast(list[object], tool_calls_raw):
-                        if not isinstance(tc, dict):
-                            continue
-
-                        tc_dict = cast(dict[str, Any], tc)
-                        function_payload = tc_dict.get("function", {})
-                        function_dict = (
-                            cast(dict[str, Any], function_payload)
-                            if isinstance(function_payload, dict)
-                            else cast(dict[str, Any], {})
-                        )
-
-                        result.append(
-                            {
-                                "type": "function_call",
-                                "call_id": tc_dict.get("id", ""),
-                                "name": function_dict.get("name", ""),
-                                "arguments": function_dict.get("arguments", "{}"),
-                            }
-                        )
-
-            elif role == "tool":
-                # The call ID connects this result to its earlier function call.
-                result.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": msg.get("tool_call_id", ""),
-                        "output": msg.get("content", ""),
-                    }
-                )
-
-        return result
-
-    def _convert_assistant_content(self, content: object) -> list[ResponseContentPart]:
-        """Convert assistant text and refusal parts without changing their order."""
-        if isinstance(content, str):
-            return (
-                [{"type": "output_text", "text": content, "annotations": []}]
-                if content
-                else []
-            )
-
-        if not isinstance(content, list):
-            return []
-
-        # Keep part boundaries and order when replaying a prior assistant turn.
-        result: list[ResponseContentPart] = []
-        for part in cast(list[object], content):
-            if not isinstance(part, dict):
-                continue
-
-            part_dict = cast(dict[str, Any], part)
-            part_type = part_dict.get("type")
-            text = part_dict.get("text", "")
-
-            # Empty text parts carry no assistant text. Treat them like an empty
-            # string so a tool-only turn does not gain a blank message item.
-            if part_type in {"text", "input_text", "output_text"} and not text:
-                continue
-
-            if part_type in {"text", "input_text"}:
-                # Converted text has no citation metadata; Responses output text
-                # still needs an annotations list.
-                result.append(
-                    {
-                        "type": "output_text",
-                        "text": text,
-                        "annotations": [],
-                    }
-                )
-
-            elif part_type == "output_text":
-                # Retain existing annotations and other output-text metadata.
-                result.append({"annotations": [], **part_dict})
-
-            elif part_type == "refusal":
-                result.append(dict(part_dict))
-
-        return result
-
-    def _convert_content(self, content: object) -> list[ResponseContentPart]:
-        """Convert message content to Responses API format.
-
-        Handles both string content and multi-part content (list of parts).
-
-        Args:
-            content: Either a string or a list of content parts.
-
-        Returns:
-            List of content parts in Responses API format.
-        """
-        if isinstance(content, str):
-            return [{"type": "input_text", "text": content}]
-
-        if not isinstance(content, list):
-            return [{"type": "input_text", "text": str(content)}]
-
-        # Multi-part content - convert each part
-        result: list[ResponseContentPart] = []
-        for part in cast(list[object], content):
-            if not isinstance(part, dict):
-                continue
-            part_dict = cast(dict[str, Any], part)
-            part_type = part_dict.get("type", "")
-            if part_type == "text":
-                result.append({"type": "input_text", "text": part_dict.get("text", "")})
-            elif part_type == "input_text":
-                # Already in correct format
-                result.append(part_dict)
-            elif part_type == "input_image":
-                # Already in correct format
-                result.append(part_dict)
-            elif part_type == "file":
-                # FilePart format - pass through for PDF support
-                result.append(part_dict)
-        return result
-
-    def _build_call_args(
-        self,
-        extra_call_args: dict[str, Any] | None,
-        schema: type[BaseModel] | OutputSchema[Any] | None,
-        tools: Tools | None,
-    ) -> dict[str, Any]:
-        """Build the arguments for the Responses API call."""
-        call_args: dict[str, Any] = {**self._common_params}
-
-        if extra_call_args:
-            call_args.update(extra_call_args)
-
-        # Handle structured output via response_format / text parameter
-        if schema is not None and self._enforce_structured_output:
-            output_schema = resolve_output_schema(schema)
-            if output_schema is not None:
-                response_format = output_schema.response_format()
-                # Convert Chat Completions response_format to Responses API text format
-                if isinstance(response_format, dict):
-                    json_schema = response_format.get("json_schema", {})
-                    call_args["text"] = {
-                        "format": {
-                            "type": "json_schema",
-                            "name": json_schema.get("name", "response"),
-                            "schema": json_schema.get("schema", {}),
-                            "strict": json_schema.get("strict", True),
-                        }
-                    }
-
-        # Handle tools
-        if tools is not None:
-            tools_payload: list[dict[str, Any]] = []
-            for tool in tools.normalized_tools:
-                tools_payload.append(
-                    {
-                        "type": "function",
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.schema.get("parameters", {}),
-                        "strict": tool.strict if tool.strict is not None else True,
-                    }
-                )
-            call_args["tools"] = tools_payload
-
-            # Map tool_choice (same values for Responses API)
-            call_args["tool_choice"] = tools.tool_choice
-            call_args["parallel_tool_calls"] = tools.parallel_tool_calls
-
-        # Convert max_tokens to max_output_tokens (Responses API naming)
-        if "max_tokens" in call_args:
-            call_args["max_output_tokens"] = call_args.pop("max_tokens")
-
-        # Convert reasoning_effort to reasoning dict (Responses API format)
-        if "reasoning_effort" in call_args:
-            reasoning = call_args.get("reasoning", {})
-            reasoning["effort"] = call_args.pop("reasoning_effort")
-            call_args["reasoning"] = reasoning
-
-        # Convert verbosity to text config (Responses API format)
-        # verbosity -> text.verbosity (low, medium, high)
-        if "verbosity" in call_args:
-            text = call_args.get("text", {})
-            text["verbosity"] = call_args.pop("verbosity")
-            call_args["text"] = text
-
-        return call_args
-
-    def _extract_tool_calls(self, result: OpenAIResponse) -> list[ToolCall]:
-        """Extract tool calls from Responses API response.
-
-        Converts ResponseFunctionToolCall to our standard ToolCall format.
-        """
-        tool_calls: list[ToolCall] = []
-
-        for item in result.output:
-            if isinstance(item, ResponseFunctionToolCall):
-                tool_call = ToolCall(
-                    id=item.call_id,
-                    type="function",
-                    function=ToolCallFunction(
-                        name=item.name,
-                        arguments=item.arguments,
-                    ),
-                )
-                tool_calls.append(tool_call)
-
-        return tool_calls
-
     async def _iterate_stream(
         self,
         *,
-        stream: object,
+        stream: AsyncStream[ResponseStreamEvent],
         trace_events: list[dict[str, Any]],
         span_generation: Span[Any],
         retry_metrics: RetryMetrics | None,
     ) -> AsyncIterator[ModelStreamEvent]:
         """Yield normalized events from one open OpenAI response stream."""
-        async for raw_event in cast(AsyncIterator[object], stream):
-            event = self._to_stream_event(raw_event)
+        async for raw_event in stream:
+            event = to_stream_event(raw_event, self._async_tools)
             self._append_trace_event(trace_events, event)
 
-            if event.kind == ModelStreamEventKind.COMPLETED:
-                # The Responses API sends a terminal response object on
-                # `response.completed`, so final canonical assembly happens here.
-                raw_response = getattr(raw_event, "response", None)
-                if raw_response is None:
-                    raise RuntimeError(
-                        "OpenAI streaming completed without a terminal response."
-                    )
-                final_response = cast(OpenAIResponse, raw_response)
-                self._record_tracing_output(span_generation, final_response)
-                self._record_usage(span_generation, final_response, retry_metrics)
-                if self._rate_limiter is not None and final_response.usage is not None:
-                    self._rate_limiter.record_usage(final_response.usage.total_tokens)
+            if isinstance(raw_event, (ResponseCompletedEvent, ResponseIncompleteEvent)):
+                # Event conversion validates the terminal output before accounting.
+                self._record_stream_response(
+                    span_generation, raw_event.response, retry_metrics
+                )
                 yield event
                 return
 
@@ -966,82 +580,6 @@ class ResponsesClient(Model[TResponseType]):
                 raise error
 
         raise RuntimeError("OpenAI stream ended without a completed event.")
-
-    def _to_stream_event(self, raw_event: object) -> ModelStreamEvent:
-        """Map one OpenAI streaming event into the shared streaming envelope."""
-        provider_event_type = str(
-            getattr(raw_event, "type", raw_event.__class__.__name__)
-        )
-        item_index = getattr(raw_event, "output_index", None)
-
-        if provider_event_type == "response.output_text.delta":
-            return ModelStreamEvent(
-                kind=ModelStreamEventKind.TEXT_DELTA,
-                raw=raw_event,
-                provider_event_type=provider_event_type,
-                item_index=cast(int | None, item_index),
-                text=cast(str | None, getattr(raw_event, "delta", None)),
-            )
-
-        if provider_event_type == "response.function_call_arguments.delta":
-            return ModelStreamEvent(
-                kind=ModelStreamEventKind.TOOL_CALL_ARGUMENTS_DELTA,
-                raw=raw_event,
-                provider_event_type=provider_event_type,
-                item_index=cast(int | None, item_index),
-                tool_call_id=cast(str | None, getattr(raw_event, "item_id", None)),
-                arguments_delta=cast(str | None, getattr(raw_event, "delta", None)),
-            )
-
-        if provider_event_type in (
-            "response.reasoning_text.delta",
-            "response.reasoning_summary_text.delta",
-        ):
-            return ModelStreamEvent(
-                kind=ModelStreamEventKind.REASONING,
-                raw=raw_event,
-                provider_event_type=provider_event_type,
-                item_index=cast(int | None, item_index),
-                reasoning=getattr(raw_event, "delta", None),
-            )
-
-        if provider_event_type == "response.completed":
-            response = cast(OpenAIResponse | None, getattr(raw_event, "response", None))
-            if response is None:
-                raise RuntimeError(
-                    "OpenAI completed stream event did not include a response."
-                )
-            return ModelStreamEvent(
-                kind=ModelStreamEventKind.COMPLETED,
-                raw=raw_event,
-                provider_event_type=provider_event_type,
-                response=response_to_model_response(response),
-            )
-
-        if provider_event_type == "error":
-            message = cast(str | None, getattr(raw_event, "message", None))
-            code = cast(str | None, getattr(raw_event, "code", None))
-            error_parts = [part for part in [code, message] if part]
-            error_message = (
-                ": ".join(error_parts)
-                if error_parts
-                else "OpenAI streaming error event."
-            )
-            return ModelStreamEvent(
-                kind=ModelStreamEventKind.ERROR,
-                raw=raw_event,
-                provider_event_type=provider_event_type,
-                error=RuntimeError(error_message),
-            )
-
-        raw_item = getattr(raw_event, "item", None)
-        return ModelStreamEvent(
-            kind=ModelStreamEventKind.PROVIDER,
-            raw=raw_event,
-            provider_event_type=provider_event_type,
-            item_index=cast(int | None, item_index),
-            item_type=cast(str | None, getattr(raw_item, "type", None)),
-        )
 
     def _append_trace_event(
         self,
@@ -1059,19 +597,23 @@ class ResponsesClient(Model[TResponseType]):
         input_data: list[dict[str, Any]],
         call_args: dict[str, Any],
         cancellation_token: CancellationToken | None,
-    ) -> tuple[object, RetryMetrics]:
+    ) -> tuple[AsyncStream[ResponseStreamEvent], RetryMetrics]:
         """Create one OpenAI response stream with retry on stream setup errors."""
 
         @retry_on_errors(
             max_retries=self._max_retries, is_retryable=_is_openai_retryable
         )
-        async def _api_call() -> object:
-            return await self._openai_client.responses.create(
-                model=self._model,
-                input=input_data,  # type: ignore[arg-type]
-                stream=True,
-                **call_args,
+        async def _api_call() -> AsyncStream[ResponseStreamEvent]:
+            stream: AsyncStream[ResponseStreamEvent] = (
+                await self._openai_client.responses.create(
+                    model=self._model,
+                    input=cast(ResponseInputParam, input_data),
+                    stream=True,
+                    **call_args,
+                )
             )
+
+            return stream
 
         if cancellation_token is None:
             retry_result = await _api_call()
@@ -1099,37 +641,33 @@ class ResponsesClient(Model[TResponseType]):
             max_retries=self._max_retries, is_retryable=_is_openai_retryable
         )
         async def _api_call() -> OpenAIResponse:
-            if self._rate_limiter is not None:
-                async with self._rate_limiter:
-                    result = cast(  # type: ignore[redundant-cast]
-                        OpenAIResponse,
-                        await self._openai_client.responses.create(
-                            model=self._model,
-                            input=input_data,  # type: ignore[arg-type]
-                            **call_args,
-                        ),
-                    )
-                    # Record token usage for TPM limiters
-                    if result.usage is not None:
-                        self._rate_limiter.record_usage(result.usage.total_tokens)
-                    return result
+            async with (
+                self._rate_limiter
+                if self._rate_limiter is not None
+                else contextlib.nullcontext()
+            ):
+                result = cast(
+                    OpenAIResponse,
+                    await self._openai_client.responses.create(
+                        model=self._model,
+                        input=cast(ResponseInputParam, input_data),
+                        **call_args,
+                    ),
+                )
+                if self._rate_limiter is not None and result.usage is not None:
+                    self._rate_limiter.record_usage(result.usage.total_tokens)
 
-            return cast(  # type: ignore[redundant-cast]
-                OpenAIResponse,
-                await self._openai_client.responses.create(
-                    model=self._model,
-                    input=input_data,  # type: ignore[arg-type]
-                    **call_args,
-                ),
-            )
+                return result
 
         if cancellation_token is None:
             retry_result = await _api_call()
+
             return retry_result.result, retry_result.metrics
 
         future = asyncio.ensure_future(_api_call())
         cancellation_token.link_future(future)
         retry_result = await future
+
         return retry_result.result, retry_result.metrics
 
     async def _execute_with_azure_refusal_retry(
@@ -1172,26 +710,61 @@ class ResponsesClient(Model[TResponseType]):
                 max_attempts=_MAX_REFUSAL_RETRIES,
             )
             response, metrics = await self._execute_with_retry(
-                input_data=_append_refusal_context(input_data, self._refusal_context),
+                input_data=[
+                    *input_data,
+                    *messages_to_input(
+                        [
+                            {
+                                "role": MessageRole.USER.value,
+                                "content": self._refusal_context,
+                            }
+                        ]
+                    ),
+                ],
                 call_args=call_args,
                 cancellation_token=cancellation_token,
             )
 
         return response, metrics
 
-    def _record_tracing_output(
+    @contextlib.contextmanager
+    def _generation_span(
         self,
-        span_generation: Span[Any],
-        result: OpenAIResponse,
+        parent_span: Span[Any] | None,
+        messages: list[MessageDict],
+    ) -> Generator[Span[Any], None, None]:
+        if parent_span is not None:
+            parent_span.span_data.model = self._model
+            parent_span.span_data.model_config = self._trace_settings
+
+        span_context = (
+            contextlib.nullcontext(parent_span)
+            if parent_span is not None
+            else generation_span(
+                model=self._model,
+                model_config=self._trace_settings,
+                disabled=self._tracing.is_disabled(),
+            )
+        )
+        with span_context as span:
+            if self._tracing.include_data():
+                span.span_data.input = messages
+
+            yield span
+
+    def _record_stream_response(
+        self,
+        span: Span[Any],
+        response: OpenAIResponse,
+        retry_metrics: RetryMetrics | None = None,
     ) -> None:
-        """Persist the model output in tracing when enabled."""
-        if not self._tracing.include_data():
-            return
+        """Record a provider terminal even when steering delays harness completion."""
+        self._record_response(span, response, retry_metrics)
 
-        output_data = [result.model_dump(mode="json")]
-        span_generation.span_data.output = output_data
+        if self._rate_limiter is not None and response.usage is not None:
+            self._rate_limiter.record_usage(response.usage.total_tokens)
 
-    def _record_usage(
+    def _record_response(
         self,
         span_generation: Span[Any],
         result: OpenAIResponse,
@@ -1203,6 +776,10 @@ class ResponsesClient(Model[TResponseType]):
         span shared across multiple model calls in one run captures every
         call's tokens rather than only the last call.
         """
+        # Trace payloads are optional, but token and retry accounting always applies.
+        if self._tracing.include_data():
+            span_generation.span_data.output = [result.model_dump(mode="json")]
+
         existing_usage = getattr(span_generation.span_data, "usage", None)
         if not isinstance(existing_usage, dict):
             usage_dict: dict[str, Any] = {}

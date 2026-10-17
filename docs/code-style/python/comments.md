@@ -2,7 +2,7 @@
 
 Thoughtful comments explain why code exists, how to use it, and capture non-obvious decisions; they do not restate what the code already says.
 
-## Python specific:
+## Python specific
 
 - Use Google-style docstrings for public functions, classes, and methods.
 - Dataclass and Pydantic field comments must use this exact style when inline
@@ -12,6 +12,66 @@ Thoughtful comments explain why code exists, how to use it, and capture non-obvi
 field: FieldType
 """Comment ..."""
 ```
+
+## Constants
+
+Every constant, including an enum member, requires a short purpose docstring
+immediately after its assignment. State where the value is used, when it is
+returned, or which condition it represents. Put a blank line after the
+docstring to separate definitions. A module docstring does not replace this
+documentation.
+
+Use this format:
+
+```python
+CLIENT_CLOSED = "MCP client manager is closed."
+"""Used in errors when an operation requires a client that is already closed."""
+
+AGENT_DEPTH_LIMIT_REACHED = "Agent depth limit reached. Solve the task yourself."
+"""Returned to the model when another delegated child would exceed the depth limit."""
+```
+
+## Multi-step methods
+
+Use blank lines to separate logical steps. Put a short Python `#` comment
+immediately above a block when the reader needs its purpose, the reason for a
+condition, or an ordering constraint. These comments also apply to application
+logic. Keep the comment and its block together, with a blank line before them.
+
+This excerpt shows preparation followed by conditional extension work and tool
+restrictions:
+
+```python
+# Build this turn from the agent's configured defaults.
+turn = PreparedTurn(
+    run_state=self.state,
+    tools=self.runner_task.tools,
+    model_args=_model_args(self.runner_task),
+    transient_state=self.transient_state,
+)
+
+# Let shims adjust the turn before applying tool restrictions.
+if self.shims is not None:
+    async with cancellation_scope(self.cancellation_token):
+        await self.shims.prepare_turn(turn)
+
+# Remove exhausted tools before the next model request.
+if turn.tools is not None:
+    turn.tools = _limit_tools(
+        turn.tools, self.tool_call_counts, self.tool_round_trips
+    )
+
+return turn
+```
+
+The comments explain each step's role in preparing the request. They do not
+need to explain Python syntax or repeat every condition. Apply the same pattern
+to inherited state, protocol conversions, event handling, and other steps whose
+purpose is not clear from a call name alone.
+
+A function docstring describes the overall contract. It does not replace
+comments beside the logical steps inside the function. Preserve useful block
+comments during simplification and update them when their code changes.
 
 ## Guiding principles
 
@@ -34,7 +94,7 @@ A useful model:
 
 **Purpose:** Describe the module’s role, major concepts, invariants, and relationships to other modules.
 
-**Best practices**
+### Best practices
 
 - Place a brief, high-level description at the top of the file.  
 - Mention domain concepts, I/O and side effects, and important invariants or configuration expectations.  
@@ -77,7 +137,7 @@ package accounts
 
 **Purpose:** Describe what the abstraction represents, its invariants, and how it should be used.
 
-**Best practices**
+### Best practices
 
 - Explain the conceptual model (“represents…”, “encapsulates…”), not just “Class that does X”.  
 - Document invariants, lifecycle expectations, and thread-safety.  
@@ -123,7 +183,7 @@ type RateLimiter struct {
 
 **Purpose:** Specify contract, behavior, parameters, return values, errors, and important side effects.
 
-**Best practices**
+### Best practices
 
 - For public/exposed APIs, always have a concise, complete doc comment.  
 - Describe behavior at the level of the caller: what it does, not how it is implemented.  
@@ -208,7 +268,7 @@ func ParseConfig(path string) (*Config, error) {
 
 **Purpose:** Clarify non-obvious logic, document invariants, and highlight rationale for unusual code.
 
-**Best practices**
+### Best practices
 
 - Prefer full-line comments above the code they explain.  
 - Reserve end-of-line comments for very short, local clarifications.  
@@ -316,9 +376,8 @@ extend later. Document those contracts at the definition site.
   to own.
 - Named callback types should document when callbacks fire, whether they are
   best-effort, and whether they receive raw or validated data.
-- Exported constants and operation-critical internal constants should have a
-  helpful comment or docstring explaining the invariant they carry, not just the
-  literal value.
+- Constants must use the purpose docstring format in [Constants](#constants).
+  Explain their use or invariant, not just their literal value.
 - Protocol and transport comments should mark trust boundaries, lifecycle
   ownership, ordering constraints, and failure behavior.
 - Inline comments should explain non-obvious branches such as cancellation
@@ -359,10 +418,10 @@ well-defined type instead.
 
 ## Patterns summary
 
-| Area              | Common pattern in good repos                                                |
-|-------------------|-------------------------------------------------------------------------------|
-| Public APIs       | Every exported symbol has a concise, accurate doc comment.                  |
-| Packages/modules  | Top-of-file comment describing purpose, often with a tiny usage example.    |
-| Internal helpers  | Emphasis on good naming; comments only for tricky logic or invariants.      |
-| Invariants        | Explicitly documented near the code that enforces them.                     |
-| TODOs / FIXMEs    | Tagged with owner/issue and short context, not used as a dumping ground.    |
+| Area                | Common pattern in good repos                                                    |
+| ------------------- | ------------------------------------------------------------------------------- |
+| Public APIs         | Every exported symbol has a concise, accurate doc comment.                      |
+| Packages/modules    | Top-of-file comment describing purpose, often with a tiny usage example.        |
+| Internal helpers    | Emphasis on good naming; comments only for tricky logic or invariants.          |
+| Invariants          | Explicitly documented near the code that enforces them.                         |
+| TODOs / FIXMEs      | Tagged with owner/issue and short context, not used as a dumping ground.        |

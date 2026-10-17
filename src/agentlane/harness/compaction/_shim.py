@@ -3,12 +3,25 @@
 import inspect
 import time
 from collections.abc import MutableMapping, Sequence
-from typing import Literal, Protocol, cast, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
-from agentlane.models import MessageDict, Model, ModelResponse, get_usage_totals
+from agentlane.models import (
+    MessageDict,
+    MessageRole,
+    Model,
+    ModelResponse,
+    get_usage_totals,
+)
 
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._config import CompactionShimConfig
+from ._constants import (
+    FAILURE_SKIP,
+    REASON_AUTO,
+    SOURCE_ESTIMATE,
+    SOURCE_MIXED,
+    SOURCE_SERVER_USAGE,
+)
 from ._default import DefaultCompactor
 from ._estimate import estimate_message_tokens
 from ._render import render_request_messages
@@ -18,6 +31,7 @@ from ._types import (
     CompactionResult,
     Compactor,
     ContextSignal,
+    ContextSource,
     OnCompact,
     TokenEstimator,
 )
@@ -123,7 +137,7 @@ class _BoundCompactionShim(BoundShim):
             model=self._model,
             model_args=(dict(turn.model_args) if turn.model_args is not None else None),
             estimator=self._estimator,
-            reason="auto",
+            reason=REASON_AUTO,
         )
         started_at = time.monotonic()
         try:
@@ -144,7 +158,7 @@ class _BoundCompactionShim(BoundShim):
                 error=error,
             )
             await _notify_compaction(self._on_compact, report)
-            if self._config.on_failure == "skip":
+            if self._config.on_failure == FAILURE_SKIP:
                 return
             _store_failure_notice(
                 turn,
@@ -217,18 +231,19 @@ def _effective_tokens(
     local_estimate: int,
     reported_tokens: int | None,
     trigger_tokens: int,
-) -> tuple[int, Literal["server_usage", "estimate", "mixed"]]:
+) -> tuple[int, ContextSource]:
     if reported_tokens is None:
-        return local_estimate, "estimate"
+        return local_estimate, SOURCE_ESTIMATE
     # Provider usage is useful when it agrees with or exceeds a locally-large
     # request, but it may be stale after handoff/resume. Do not let an inherited
     # prior response trigger compaction when the current rendered request is
     # below the local threshold.
     if reported_tokens >= local_estimate and local_estimate >= trigger_tokens:
-        return reported_tokens, "server_usage"
+        return reported_tokens, SOURCE_SERVER_USAGE
     if reported_tokens == local_estimate:
-        return local_estimate, "server_usage"
-    return local_estimate, "mixed"
+        return local_estimate, SOURCE_SERVER_USAGE
+
+    return local_estimate, SOURCE_MIXED
 
 
 def _success_report(
@@ -387,7 +402,7 @@ def _failure_notice_state_key(shim_name: str) -> str:
 def _failure_notice(report: CompactionReport) -> MessageDict:
     error = report.error or "unknown compaction failure"
     return {
-        "role": "user",
+        "role": MessageRole.USER.value,
         "content": (
             "Context compaction failed before this turn. The original "
             "conversation history was preserved, so continue normally. "

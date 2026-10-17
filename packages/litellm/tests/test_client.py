@@ -1,10 +1,13 @@
 """Tests for the imported LiteLLM client wrapper."""
 
 import asyncio
+import json
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
+import httpx2
 import litellm
+import openai
 import pytest
 from agentlane_litellm import Client, Factory
 from litellm.types.utils import ModelResponseStream
@@ -13,6 +16,7 @@ from structlog.testing import capture_logs
 
 from agentlane.models import (
     Config,
+    MessageDict,
     ModelResponse,
     ModelStreamEvent,
     ModelStreamEventKind,
@@ -42,6 +46,78 @@ class StructuredResponse(BaseModel):
     """Structured response schema used in adapter tests."""
 
     message: str
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_litellm_delegates_through_sdk3_http_client(streaming: bool) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(json.loads(request.content))
+        response = _make_model_response("ok").model_dump(mode="json")
+        if streaming:
+            response["object"] = "chat.completion.chunk"
+            choice = response["choices"][0]
+            choice["delta"] = choice.pop("message")
+
+            return httpx2.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=f"data: {json.dumps(response)}\n\ndata: [DONE]\n\n",
+            )
+
+        return httpx2.Response(200, json=response)
+
+    # Exercise the native SDK transport through LiteLLM without network access.
+    async with openai.AsyncOpenAI(
+        api_key="test",
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond)),
+    ) as native:
+        client = Client(Config(api_key="test", model="openai/gpt-4o", max_retries=0))
+        arguments = {"client": native, "timeout": openai.Timeout(2.0)}
+        messages: list[MessageDict] = [{"role": "user", "content": "hello"}]
+        if streaming:
+            events = [
+                event
+                async for event in client.stream_response(
+                    messages,
+                    extra_call_args=arguments,
+                )
+            ]
+
+            assert "".join(event.text or "" for event in events) == "ok"
+            assert events[-1].response is not None
+        else:
+            result = await client.get_response(messages, extra_call_args=arguments)
+
+            assert result.choices[0].message.content == "ok"
+
+    assert len(requests) == 1
+    assert requests[0]["messages"] == messages
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_litellm_rejects_native_responses_history(streaming: bool) -> None:
+    client = Client(Config(api_key="test-key", model="openai/test"))
+
+    async def scenario() -> None:
+        messages: list[MessageDict] = [
+            {
+                "role": "assistant",
+                "openai_responses_input": [
+                    {"type": "reasoning", "id": "rs_1", "summary": []}
+                ],
+            }
+        ]
+        if streaming:
+            async for _ in client.stream_response(messages):
+                pass
+        else:
+            await client.get_response(messages)
+
+    with pytest.raises(ValueError, match="Native Responses history"):
+        asyncio.run(scenario())
 
 
 async def _echo_handler(

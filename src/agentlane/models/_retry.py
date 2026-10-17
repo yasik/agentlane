@@ -11,6 +11,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from typing import Any, TypeVar, cast
 
 import structlog
@@ -62,18 +63,31 @@ def extract_retry_after(exception: BaseException) -> float | None:
     Returns:
         The retry delay in seconds, or None if not found.
     """
+
     # Try response_headers first (if the client exposes it)
     raw_headers = getattr(exception, "response_headers", None)
+    if raw_headers is None:
+        raw_headers = getattr(getattr(exception, "response", None), "headers", None)
+
     headers: Mapping[str, Any]
     if isinstance(raw_headers, Mapping):
         headers = cast(Mapping[str, Any], raw_headers)
     else:
         headers = {}
+
+    # Accept either a delay in seconds or an HTTP date from the server.
     if "retry-after" in headers:
         try:
-            return float(headers["retry-after"])
+            return max(0.0, float(headers["retry-after"]))
         except (ValueError, TypeError):
-            pass
+            try:
+                return max(
+                    0.0,
+                    parsedate_to_datetime(str(headers["retry-after"])).timestamp()
+                    - time.time(),
+                )
+            except (ValueError, TypeError, OverflowError):
+                pass
 
     # Parse from message: "Please retry after X second(s)"
     message = str(exception)
@@ -94,7 +108,7 @@ def wait_with_retry_after(
     Args:
         retry_state: The current retry state from tenacity.
         min_wait: Minimum wait time for exponential backoff.
-        max_wait: Maximum wait time (caps both Retry-After and backoff).
+        max_wait: Maximum wait time for exponential backoff.
 
     Returns:
         The number of seconds to wait before the next retry.
@@ -104,11 +118,11 @@ def wait_with_retry_after(
         if exception is not None:
             retry_after = extract_retry_after(exception)
             if retry_after is not None:
-                # Honor the server's request, but cap at max_wait
-                return min(retry_after, max_wait)
+                return retry_after
 
     # Fallback to exponential backoff (capped at max_wait)
     exp_wait = tenacity.wait_random_exponential(min=min_wait, max=max_wait)
+
     return exp_wait(retry_state)
 
 
@@ -129,7 +143,16 @@ def is_retryable_by_status_code(
     if retry_status_codes is None:
         retry_status_codes = DEFAULT_RETRY_STATUS_CODES
 
+    # Quota, billing, and policy failures do not become retryable with an HTTP code.
+    if getattr(exception, "code", None) in {
+        "insufficient_quota",
+        "billing_hard_limit_reached",
+        "content_policy_violation",
+    }:
+        return False
+
     status_code = getattr(exception, "status_code", None)
+
     return status_code is not None and status_code in retry_status_codes
 
 

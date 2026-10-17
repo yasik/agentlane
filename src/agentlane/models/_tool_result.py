@@ -22,6 +22,37 @@ Typical usage example:
 from dataclasses import dataclass
 from typing import Any, Literal, Self
 
+from strenum import LowercaseStrEnum
+
+
+class ToolErrorKind(LowercaseStrEnum):
+    """Built-in tool failure kinds; tools can also supply custom string kinds."""
+
+    ERROR = "error"
+    """Identifies a tool failure without a more specific built-in category."""
+
+    TIMEOUT = "timeout"
+    """Identifies a tool call that exceeds its execution deadline."""
+
+    CANCELLED = "cancelled"
+    """Identifies a tool call interrupted by cancellation."""
+
+    NONZERO_EXIT = "nonzero_exit"
+    """Identifies a command that finishes with a nonzero exit code."""
+
+
+class PlanStepState(LowercaseStrEnum):
+    """Shared state values for plan steps."""
+
+    PENDING = "pending"
+    """Marks a planned step whose execution has not started."""
+
+    IN_PROGRESS = "in_progress"
+    """Marks the active step; the plan tool permits at most one."""
+
+    COMPLETED = "completed"
+    """Marks a plan step whose work is complete."""
+
 
 @dataclass(frozen=True, slots=True)
 class ToolError:

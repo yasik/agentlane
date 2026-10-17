@@ -9,12 +9,14 @@ from pydantic import BaseModel
 
 from agentlane.models import (
     MessageDict,
+    MessageRole,
     ModelBehaviorError,
     ModelResponse,
     PromptSpec,
     RunErrorDetails,
 )
 
+from ._constants import MISSING_MODEL_CHOICE
 from ._run import RunHistoryItem, RunInstructions
 
 
@@ -36,9 +38,13 @@ def _instruction_messages(instructions: RunInstructions) -> list[MessageDict]:
     """Render system instructions into canonical model messages."""
     if instructions is None:
         return []
+
     if isinstance(instructions, PromptSpec):
-        return _prompt_messages("system", instructions)
-    return [_normalize_message({"role": "system", "content": instructions})]
+        return _prompt_messages(MessageRole.SYSTEM, instructions)
+
+    return [
+        _normalize_message({"role": MessageRole.SYSTEM.value, "content": instructions})
+    ]
 
 
 def _history_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
@@ -54,22 +60,24 @@ def _history_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
 def _user_item_to_messages(item: RunHistoryItem) -> list[MessageDict]:
     """Render one user-side continuation item into canonical model messages."""
     if isinstance(item, PromptSpec):
-        return _prompt_messages("user", item)
-    return [_normalize_message({"role": "user", "content": item})]
+        return _prompt_messages(MessageRole.USER, item)
+
+    return [_normalize_message({"role": MessageRole.USER.value, "content": item})]
 
 
 def _prompt_messages(
-    role: Literal["system", "user"],
+    role: Literal[MessageRole.SYSTEM, MessageRole.USER],
     prompt_spec: PromptSpec[Any],
 ) -> list[MessageDict]:
     """Render a `PromptSpec` and keep only messages matching `role`."""
     messages = [
         _normalize_message(message)
         for message in prompt_spec.template.render_messages(prompt_spec.values)
-        if message.get("role") == role
+        if message.get("role") == role.value
     ]
     if messages:
         return messages
+
     raise ValueError(f"PromptSpec must render at least one {role}-role message.")
 
 
@@ -114,9 +122,7 @@ def _as_message_dict(item: object) -> dict[str, object] | None:
 def _assistant_message_from_response(response: ModelResponse) -> MessageDict:
     """Extract the first assistant message for continuation history."""
     if not response.choices:
-        error = ModelBehaviorError(
-            "Runner expected the model response to contain at least one choice."
-        )
+        error = ModelBehaviorError(MISSING_MODEL_CHOICE)
         error.run_data = RunErrorDetails(raw_response=response)
         raise error
     return response.choices[0].message.model_dump(mode="json", exclude_none=True)

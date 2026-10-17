@@ -11,11 +11,23 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, ConfigDict
 
-from agentlane.models import Tool, ToolError, ToolExecutionContext, ToolFailure
+from agentlane.models import (
+    Tool,
+    ToolError,
+    ToolErrorKind,
+    ToolExecutionContext,
+    ToolFailure,
+)
 from agentlane.runtime import CancellationToken
 
 from ._connection import MCPConnection
-from ._errors import MCPDiscoveryError
+from ._constants import CONNECTION_UNAVAILABLE, STATUS_ERROR, STATUS_OK, TOOL_CANCELLED
+from ._errors import (
+    MCP_AUTHORIZATION_TOOL_ERROR_KIND,
+    MCP_TRANSPORT_TOOL_ERROR_KIND,
+    MCPDiscoveryError,
+    MCPFailureKind,
+)
 from ._operation import mcp_operation
 from ._result import render_mcp_result
 from ._sdk import exception_kind
@@ -72,9 +84,9 @@ async def call_tool(
     timeout_seconds: float,
 ) -> str | ToolFailure:
     if cancellation_token.is_cancelled:
-        return tool_failure("MCP tool call was cancelled.", "cancelled")
+        return tool_failure(TOOL_CANCELLED, ToolErrorKind.CANCELLED.value)
     if is_closed() or connection.failed or connection.closing:
-        return tool_failure("MCP connection is unavailable.", "mcp_transport")
+        return tool_failure(CONNECTION_UNAVAILABLE, MCP_TRANSPORT_TOOL_ERROR_KIND)
     started_at = time.monotonic()
     with mcp_operation() as operation:
         operation.expected_authorization_generation = (
@@ -93,18 +105,22 @@ async def call_tool(
             result = await asyncio.wait_for(call, timeout=timeout_seconds)
         except asyncio.CancelledError:
             if cancellation_token.is_cancelled:
-                return tool_failure("MCP tool call was cancelled.", "cancelled")
-            if operation.failure_kind == "authorization":
+                return tool_failure(TOOL_CANCELLED, ToolErrorKind.CANCELLED.value)
+            if operation.failure_kind == MCPFailureKind.AUTHORIZATION.value:
                 connection.authorization.reject()
-                return tool_failure("MCP authorization failure.", "mcp_authorization")
+                return tool_failure(
+                    "MCP authorization failure.", MCP_AUTHORIZATION_TOOL_ERROR_KIND
+                )
             if is_closed() or connection.closing:
-                return tool_failure("MCP connection is unavailable.", "mcp_transport")
+                return tool_failure(
+                    CONNECTION_UNAVAILABLE, MCP_TRANSPORT_TOOL_ERROR_KIND
+                )
             raise
         except Exception as exc:
             failure_kind = operation.failure_kind or exception_kind(exc)
-            if failure_kind == "transport":
+            if failure_kind == MCPFailureKind.TRANSPORT.value:
                 connection.failed = True
-            if failure_kind == "authorization":
+            if failure_kind == MCPFailureKind.AUTHORIZATION.value:
                 connection.authorization.reject()
             logger.warning(
                 "mcp_tool_failed",
@@ -115,7 +131,11 @@ async def call_tool(
                 protocol_version=connection.protocol_version,
                 retry_reason=operation.retry_reason,
             )
-            kind = "timeout" if failure_kind == "timeout" else f"mcp_{failure_kind}"
+            kind = (
+                MCPFailureKind.TIMEOUT.value
+                if failure_kind == MCPFailureKind.TIMEOUT.value
+                else f"mcp_{failure_kind}"
+            )
             return tool_failure(f"MCP {failure_kind} failure.", kind)
         finally:
             connection.active_calls.discard(call)
@@ -128,7 +148,7 @@ async def call_tool(
             server=connection.server.name,
             tool=name,
             duration=time.monotonic() - started_at,
-            status="error" if isinstance(rendered, ToolFailure) else "ok",
+            status=STATUS_ERROR if isinstance(rendered, ToolFailure) else STATUS_OK,
             protocol_version=connection.protocol_version,
             retry_reason=operation.retry_reason,
         )

@@ -10,6 +10,8 @@ respective client packages.
 
 from typing import Any, Protocol
 
+from ._message_role import MessageRole
+
 
 class ToolOutputAdapter(Protocol):
     """Protocol for adapting tool execution output to client-specific formats."""
@@ -58,7 +60,7 @@ class ChatCompletionsOutputAdapter:
         """Format successful tool execution for Chat Completions API."""
         return {
             "tool_call_id": call_id,
-            "role": "tool",
+            "role": MessageRole.TOOL.value,
             "name": tool_name,
             "content": content,
         }
@@ -69,7 +71,7 @@ class ChatCompletionsOutputAdapter:
         """Format error output for Chat Completions API."""
         return {
             "tool_call_id": call_id,
-            "role": "tool",
+            "role": MessageRole.TOOL.value,
             "name": tool_name,
             "content": error_message,
         }

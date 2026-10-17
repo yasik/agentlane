@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 import pytest
@@ -1266,6 +1267,7 @@ def test_runner_disables_tools_after_max_round_trips() -> None:
         ) -> str:
             del context
             del cancellation_token
+
             return f"echo:{args.text}"
 
         tool: Tool[_EchoArgs, str] = Tool(
@@ -1311,7 +1313,10 @@ def test_runner_disables_tools_after_max_round_trips() -> None:
 
         assert result.final_output == "done"
         assert model.call_options[0]["tools"] == tools
-        assert model.call_options[1]["tools"] is None
+        limited = cast(Tools, model.call_options[1]["tools"])
+
+        assert limited.normalized_tools == ()
+        assert limited.tool_choice == "none"
 
     asyncio.run(scenario())
 
@@ -2188,3 +2193,140 @@ def test_runner_run_stream_exposes_live_run_state_to_tool_handler() -> None:
         assert context.run_state.active_skill_names == ("alpha", "beta")
 
     asyncio.run(scenario())
+
+
+def test_handoff_inherits_resolved_parent_model() -> None:
+    async def scenario() -> None:
+        runner = Runner()
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="handoff_1",
+                            name="specialist",
+                            arguments='{"task":"Finish the request."}',
+                        )
+                    ],
+                ),
+                make_assistant_response(content="finished"),
+            ]
+        )
+        agent = Agent(
+            SingleThreadedRuntimeEngine(),
+            runner,
+            descriptor=AgentDescriptor(
+                model=model,
+                handoffs=(AgentDescriptor(name="Specialist"),),
+            ),
+        )
+
+        # The child has no model override, so it must continue with the parent model.
+        result = await runner.run(
+            agent, RunState(instructions=None, history=["help"], responses=[])
+        )
+
+        assert result.final_output == "finished"
+        assert result.turn_count == 2
+        assert len(model.calls) == 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_handoff_reports_final_output_to_parent_end_hook(streaming: bool) -> None:
+    hooks = _RecordingHooks()
+    runner = Runner()
+    model = _SequenceModel(
+        [
+            make_assistant_response(
+                content=None,
+                tool_calls=[
+                    _make_tool_call(
+                        tool_id="handoff_1", name="specialist", arguments="{}"
+                    )
+                ],
+            ),
+            make_assistant_response(content="finished"),
+        ]
+    )
+    agent = Agent(
+        SingleThreadedRuntimeEngine(),
+        runner,
+        descriptor=AgentDescriptor(
+            name="Parent",
+            model=model,
+            handoffs=(AgentDescriptor(name="Specialist"),),
+        ),
+    )
+    state = RunState(instructions=None, history=["help"], responses=[])
+
+    # Check parent cleanup through both terminal and streaming handoff paths.
+    if streaming:
+        stream = runner.run_stream(agent, state, hooks=hooks)
+        try:
+            result = await stream.result()
+        finally:
+            await stream.aclose()
+    else:
+        result = await runner.run(agent, state, hooks=hooks)
+
+    assert result.final_output == "finished"
+    assert [event for event in hooks.events if event[0] == "agent_end"] == [
+        ("agent_end", ("Parent", "finished"))
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["run", "stream", "events"])
+async def test_runner_rejects_missing_stream_response_and_finishes_cleanup(
+    mode: str,
+) -> None:
+    # Advertise streaming but omit its required terminal response payload.
+    class IncompleteModel(_SequenceModel):
+        closed = False
+
+        @property
+        def requires_streaming(self) -> bool:
+            return True
+
+        async def stream_response(
+            self, *args: Any, **kwargs: Any
+        ) -> AsyncIterator[ModelStreamEvent]:
+            try:
+                yield ModelStreamEvent(kind=ModelStreamEventKind.COMPLETED)
+            finally:
+                self.closed = True
+
+    model = IncompleteModel([])
+    hooks = _RecordingHooks()
+    runner = Runner()
+    agent = Agent(
+        SingleThreadedRuntimeEngine(),
+        runner,
+        descriptor=AgentDescriptor(name="Incomplete", model=model),
+    )
+    state = RunState(instructions=None, history=["hello"], responses=[])
+    if mode == "run":
+        with pytest.raises(ModelBehaviorError, match="without a terminal response"):
+            await runner.run(agent, state, hooks=hooks)
+    else:
+        stream = (
+            runner.run_stream(agent, state, hooks=hooks)
+            if mode == "stream"
+            else runner.run_events(agent, state, hooks=hooks)
+        )
+        try:
+            with pytest.raises(ModelBehaviorError, match="without a terminal response"):
+                await stream.result()
+        finally:
+            await stream.aclose()
+
+    # Invalid output must still close resources and finish the agent lifecycle.
+    assert model.closed
+    assert state.history == ["hello"]
+    assert state.responses == []
+    assert not any(event[0] == "llm_end" for event in hooks.events)
+    assert hooks.events[-1] == ("agent_end", ("Incomplete", None))

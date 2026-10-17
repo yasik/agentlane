@@ -7,17 +7,29 @@ from typing import Any, Protocol, Self
 
 import structlog
 
-from agentlane.models import Tool, ToolFailure
+from agentlane.models import Tool, ToolErrorKind, ToolFailure
 from agentlane.runtime import CancellationToken
 
 from ._auth import MCPAuthorizationState
 from ._catalog import get_catalog
 from ._connection import MCPConnection, close_connection
 from ._connection import run_connection as _run_connection
+from ._constants import (
+    AUTHORIZATION_CHANGED_AFTER_DISCOVERY,
+    AUTHORIZATION_CHANGED_DURING_DISCOVERY,
+    CLIENT_CLOSED,
+    CONNECTION_UNAVAILABLE,
+    SHUTDOWN_TIMED_OUT,
+    STATUS_STALE,
+    TOOL_CANCELLED,
+)
 from ._errors import (
+    MCP_AUTHORIZATION_TOOL_ERROR_KIND,
+    MCP_TRANSPORT_TOOL_ERROR_KIND,
     MCPAuthorizationError,
     MCPDiscoveryError,
     MCPError,
+    MCPFailureKind,
     MCPPoolCapacityError,
     MCPShutdownTimeoutError,
 )
@@ -98,7 +110,7 @@ class MCPClientLease:
         if self._released:
             raise MCPError("MCP connection lease has been released.")
         if self._manager.closed:
-            raise MCPError("MCP client manager is closed.")
+            raise MCPError(CLIENT_CLOSED)
 
         discovery = asyncio.create_task(
             self._tools(), name=f"agentlane-mcp-discovery-{self.server.name}"
@@ -108,9 +120,7 @@ class MCPClientLease:
             catalog = await discovery
             if catalog.authorization_generation != self._entry.authorization.generation:
                 self._catalog = None
-                raise MCPAuthorizationError(
-                    "MCP authorization changed during discovery."
-                )
+                raise MCPAuthorizationError(AUTHORIZATION_CHANGED_DURING_DISCOVERY)
 
             async def dispatch(
                 name: str, arguments: dict[str, Any], token: CancellationToken
@@ -167,7 +177,11 @@ class MCPClientLease:
                     or self._manager.closed
                     or self._catalog.authorization_generation
                     != self._entry.authorization.generation
-                    or failure_kind not in {"transport", "timeout"}
+                    or failure_kind
+                    not in {
+                        MCPFailureKind.TRANSPORT.value,
+                        MCPFailureKind.TIMEOUT.value,
+                    }
                 ):
                     raise MCPDiscoveryError(
                         f"Could not discover tools from MCP server {self.server.name!r}.",
@@ -176,7 +190,7 @@ class MCPClientLease:
                 logger.warning(
                     "mcp_catalog_refresh_failed",
                     server=self.server.name,
-                    status="stale",
+                    status=STATUS_STALE,
                     failure_kind=failure_kind,
                 )
                 return self._catalog
@@ -193,12 +207,15 @@ class MCPClientLease:
     ) -> str | ToolFailure:
         with mcp_operation(authorization_context=self._authorization_context):
             if token.is_cancelled:
-                return tool_failure("MCP tool call was cancelled.", "cancelled")
+                return tool_failure(TOOL_CANCELLED, ToolErrorKind.CANCELLED.value)
             if self._released or self._manager.closed:
-                return tool_failure("MCP connection is unavailable.", "mcp_transport")
+                return tool_failure(
+                    CONNECTION_UNAVAILABLE, MCP_TRANSPORT_TOOL_ERROR_KIND
+                )
             if generation != self._entry.authorization.generation:
                 return tool_failure(
-                    "MCP authorization changed after discovery.", "mcp_authorization"
+                    AUTHORIZATION_CHANGED_AFTER_DISCOVERY,
+                    MCP_AUTHORIZATION_TOOL_ERROR_KIND,
                 )
 
             self._entry.calls += 1
@@ -221,22 +238,31 @@ class MCPClientLease:
                     )
                 except asyncio.CancelledError:
                     if token.is_cancelled:
-                        return tool_failure("MCP tool call was cancelled.", "cancelled")
+                        return tool_failure(
+                            TOOL_CANCELLED,
+                            ToolErrorKind.CANCELLED.value,
+                        )
                     raise
                 except Exception as exc:
                     kind = exception_kind(exc)
                     return tool_failure(
                         f"MCP {kind} failure.",
-                        "timeout" if kind == "timeout" else f"mcp_{kind}",
+                        (
+                            MCPFailureKind.TIMEOUT.value
+                            if kind == MCPFailureKind.TIMEOUT.value
+                            else f"mcp_{kind}"
+                        ),
                     )
                 if generation != self._entry.authorization.generation:
                     return tool_failure(
-                        "MCP authorization changed after discovery.",
-                        "mcp_authorization",
+                        AUTHORIZATION_CHANGED_AFTER_DISCOVERY,
+                        MCP_AUTHORIZATION_TOOL_ERROR_KIND,
                     )
                 remaining = deadline - asyncio.get_running_loop().time()
                 if remaining <= 0:
-                    return tool_failure("MCP timeout failure.", "timeout")
+                    return tool_failure(
+                        "MCP timeout failure.", MCPFailureKind.TIMEOUT.value
+                    )
                 return await call_tool(
                     connection,
                     name,
@@ -304,7 +330,7 @@ class MCPClientManager:
             retirement: asyncio.Task[None] | None = None
             async with self._lock:
                 if self._closed:
-                    raise MCPError("MCP client manager is closed.")
+                    raise MCPError(CLIENT_CLOSED)
                 entry = self._connections.get(key)
                 if entry is None:
                     if (
@@ -354,7 +380,7 @@ class MCPClientManager:
     ) -> MCPConnection:
         async with entry.connection_lock:
             if self._closed:
-                raise MCPError("MCP client manager is closed.")
+                raise MCPError(CLIENT_CLOSED)
             connection = entry.connection
             if connection is not None and (
                 connection.failed
@@ -365,7 +391,7 @@ class MCPClientManager:
                 connection = None
             if connection is None:
                 if self._closed:
-                    raise MCPError("MCP client manager is closed.")
+                    raise MCPError(CLIENT_CLOSED)
                 connection = MCPConnection(
                     server=entry.server,
                     lifecycle_context=authorization_context,
@@ -401,9 +427,7 @@ class MCPClientManager:
         ):
             # Do not cancel SDK process reaping to satisfy the caller's deadline.
             # A later aclose() observes the same owned cleanup tasks.
-            raise MCPShutdownTimeoutError(
-                "MCP shutdown timed out; connection cleanup is still in progress."
-            )
+            raise MCPShutdownTimeoutError(SHUTDOWN_TIMED_OUT)
 
     async def _release(self, entry: _PoolEntry) -> None:
         retirement: asyncio.Task[None] | None = None
@@ -427,9 +451,7 @@ class MCPClientManager:
                 + self._limits.shutdown_timeout_seconds,
             ):
                 # Keep the owned retirement alive to finish SDK process reaping.
-                raise MCPShutdownTimeoutError(
-                    "MCP shutdown timed out; connection cleanup is still in progress."
-                )
+                raise MCPShutdownTimeoutError(SHUTDOWN_TIMED_OUT)
 
     async def _call_finished(self, entry: _PoolEntry) -> None:
         async with self._lock:
