@@ -561,7 +561,13 @@ class ResponsesClient(Model[TResponseType]):
         retry_metrics: RetryMetrics | None,
     ) -> AsyncIterator[ModelStreamEvent]:
         """Yield normalized events from one open OpenAI response stream."""
+        completed = False
         async for raw_event in stream:
+            # Let the SDK finish its iterator after the terminal response so its
+            # nested HTTP iterators close before the event loop shuts down.
+            if completed:
+                continue
+
             event = to_stream_event(raw_event, self._async_tools)
             self._append_trace_event(trace_events, event)
 
@@ -570,8 +576,9 @@ class ResponsesClient(Model[TResponseType]):
                 self._record_stream_response(
                     span_generation, raw_event.response, retry_metrics
                 )
+                completed = True
                 yield event
-                return
+                continue
 
             yield event
 
@@ -579,7 +586,8 @@ class ResponsesClient(Model[TResponseType]):
                 error = event.error or RuntimeError("OpenAI streaming error.")
                 raise error
 
-        raise RuntimeError("OpenAI stream ended without a completed event.")
+        if not completed:
+            raise RuntimeError("OpenAI stream ended without a completed event.")
 
     def _append_trace_event(
         self,

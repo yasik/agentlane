@@ -1,6 +1,7 @@
 """Tests for the imported OpenAI Responses client."""
 
 import asyncio
+import gc
 import json
 import subprocess
 import sys
@@ -1020,6 +1021,88 @@ def test_responses_client_stream_response_emits_semantic_events() -> None:
     await_kwargs = cast(dict[str, Any], cast(Any, create_mock.await_args).kwargs)
     assert await_kwargs["stream"] is True
     assert await_kwargs["model"] == "gpt-4o"
+
+
+def test_http_stream_releases_iterators_before_event_loop_shutdown() -> None:
+    """Completed streams must not leave SDK transport generators for loop shutdown."""
+    errors: list[dict[str, Any]] = []
+    terminal: dict[str, Any] = {
+        "type": "response.completed",
+        "sequence_number": 1,
+        "response": {
+            "id": "resp_cleanup",
+            "object": "response",
+            "created_at": 1,
+            "model": "test",
+            "status": "completed",
+            "output": [],
+            "parallel_tool_calls": False,
+            "tool_choice": "auto",
+            "tools": [],
+        },
+    }
+    event_bytes = ("data: " + json.dumps(terminal) + "\n\n").encode()
+    done_bytes = b"data: [DONE]\n\n"
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            headers = await reader.readuntil(b"\r\n\r\n")
+            length = next(
+                int(line.split(b":", 1)[1])
+                for line in headers.split(b"\r\n")
+                if line.lower().startswith(b"content-length:")
+            )
+            await reader.readexactly(length)
+
+            # Keep the SSE terminator separate so a terminal-only consumer stops early.
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: "
+                + str(len(event_bytes) + len(done_bytes)).encode()
+                + b"\r\nConnection: close\r\n\r\n"
+                + event_bytes
+            )
+            await writer.drain()
+            await asyncio.sleep(0.01)
+            writer.write(done_bytes)
+            await writer.drain()
+        except (ConnectionError, asyncio.IncompleteReadError):
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def run() -> None:
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: errors.append(context)
+        )
+        async with await asyncio.start_server(serve, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            client = ResponsesClient(
+                Config(
+                    api_key="test", model="test", base_url=f"http://127.0.0.1:{port}"
+                )
+            )
+            try:
+                for _ in range(10):
+                    events = [
+                        event
+                        async for event in client.stream_response(
+                            [{"role": "user", "content": "hello"}]
+                        )
+                    ]
+                    assert len(events) == 1
+                    assert events[0].response is not None
+                    assert events[0].response.id == "resp_cleanup"
+            finally:
+                await cast(Any, client)._openai_client.close()
+
+            # Exercise finalization while the owning loop can still report failures.
+            gc.collect()
+            await asyncio.sleep(0.1)
+
+    asyncio.run(run())
+
+    assert errors == []
 
 
 def test_responses_client_stream_response_traces_serialized_events() -> None:
