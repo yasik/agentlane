@@ -229,6 +229,13 @@ development release `1.107.0.dev2`, which accepts SDK 3. HTTP is the default
 transport. Steering requires `websocket=True` and a model and account that
 support the provider feature.
 
+Run the [steering example](../../examples/harness/openai_steering/) to inspect
+receipt transitions and committed history. The
+[async-tool example](../../examples/harness/openai_async_tools/) checks native
+async calls, overlapping tool execution, model text during execution, and final
+tool results. Both examples use real OpenAI requests and fail if the expected
+feature behavior is not observed.
+
 Configure the adapter and register async functions through the existing
 `Tools` interface:
 

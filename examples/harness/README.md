@@ -25,6 +25,8 @@ harness directly.
 18. [claude_agent_sdk_coworker](./claude_agent_sdk_coworker/): real OpenAI-to-Claude-to-OpenAI proof where a native AgentLane agent sends an addressed task to a Claude Agent SDK participant and completes the original run.
 19. [mounted_filesystem](./mounted_filesystem/): read, write, find, and patch mounted files; run grep and bash in a separate process workspace, without a model.
 20. [mcp_meeting_assistant](./mcp_meeting_assistant/): `DefaultAgent` that uses OpenRouter and MCP tools to search and read local meeting notes.
+21. [openai_steering](./openai_steering/): change an active OpenAI response and verify the applied steering receipt, successor, and committed history.
+22. [openai_async_tools](./openai_async_tools/): native async functions with measured tool overlap, concurrent model text, and verified results.
 
 ## Run
 
@@ -34,6 +36,8 @@ The `process_bridge_stdio` and `mounted_filesystem` demos do not call a model
 provider and need no API key. The `claude_agent_sdk_coworker` demo also needs
 `ANTHROPIC_API_KEY` and the `claude-agent-sdk` extra. The MCP meeting assistant
 uses `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` instead.
+The steering and async-tool examples default to `gpt-6-astra` and require
+provider feature access. Set `OPENAI_MODEL` to select another compatible model.
 
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -41,6 +45,8 @@ uv run python examples/harness/clinical_inbox_copilot/main.py
 uv run python examples/harness/default_agent_quickstart/main.py
 uv run python examples/harness/default_agent_shims_quickstart/main.py
 uv run python examples/harness/default_agent_streaming_quickstart/main.py
+uv run python examples/harness/openai_steering/main.py
+uv run python examples/harness/openai_async_tools/main.py
 uv run python examples/harness/default_agent_skills_quickstart/main.py
 uv run python examples/harness/base_tools_quickstart/main.py
 uv run python examples/harness/distributed_clinical_inbox_copilot/main.py
