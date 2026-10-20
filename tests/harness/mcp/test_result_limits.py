@@ -287,3 +287,27 @@ async def test_large_result_does_not_stall_the_event_loop() -> None:
     # This loose ceiling also detects an accidental event-loop stall in CI.
     assert delay < 0.5
     assert len(rendered) <= 128
+
+
+def test_json_text_over_half_the_budget_renders_complete() -> None:
+    transcript = "Speaker 1: a long meeting. " * 1500
+    text = json.dumps({"id": "meeting-1", "text": transcript})
+    rendered = render_mcp_result(
+        types.CallToolResult(content=[types.TextContent(text=text)]), MCPResultPolicy()
+    )
+    payload = json.loads(rendered)
+    assert json.loads(payload["content"][0]["text"])["text"] == transcript
+
+
+def test_structured_result_with_repeated_text_renders_structured_only() -> None:
+    structured = {"id": "meeting-1", "text": "Speaker 1: a long meeting. " * 1500}
+    rendered = render_mcp_result(
+        types.CallToolResult(
+            content=[types.TextContent(text=json.dumps(structured))],
+            structured_content=structured,
+        ),
+        MCPResultPolicy(),
+    )
+    payload = json.loads(rendered)
+    assert payload["structuredContent"] == structured
+    assert "content" not in payload

@@ -126,17 +126,17 @@ def test_result_structured_and_json_text_redact_credentials(
     credential_key: str,
 ) -> None:
     data = {credential_key: _canary("credential"), "key": "domain-key", "private": True}
-    rendered = render_mcp_result(
-        types.CallToolResult(
-            content=[types.TextContent(text=json.dumps(data))],
-            structured_content=data,
-        ),
-        MCPResultPolicy(),
+    result = types.CallToolResult(
+        content=[types.TextContent(text=json.dumps(data))],
+        structured_content=data,
     )
-    assert _canary("credential") not in rendered
-    payload = json.loads(rendered)
+    structured = render_mcp_result(result, MCPResultPolicy())
+    text = render_mcp_result(result, MCPResultPolicy(include_structured_content=False))
+    assert _canary("credential") not in structured + text
+    payload = json.loads(structured)
     assert payload["structuredContent"]["key"] == "domain-key"
     assert payload["structuredContent"]["private"] is True
+    payload = json.loads(text)
     assert json.loads(payload["content"][0]["text"])[credential_key] == "[redacted]"
 
 
@@ -147,12 +147,9 @@ def test_result_structured_and_json_text_redact_credentials(
     ids=["escaped-text", "unicode-text"],
 )
 def test_result_truncation_keeps_valid_json_and_previews(limit: int, text: str) -> None:
+    policy = MCPResultPolicy(max_text_chars=limit)
     rendered = render_mcp_result(
-        types.CallToolResult(
-            content=[types.TextContent(text=text)],
-            structured_content={"summary": "useful", "details": "x" * 3000},
-        ),
-        MCPResultPolicy(max_text_chars=limit),
+        types.CallToolResult(content=[types.TextContent(text=text)]), policy
     )
     assert len(rendered) <= limit
     payload = json.loads(rendered)
@@ -162,7 +159,17 @@ def test_result_truncation_keeps_valid_json_and_previews(limit: int, text: str) 
     else:
         assert payload["omittedBlocks"] >= 0
     assert "omittedChars" not in payload
-    assert "structuredContent" in payload
+
+    rendered = render_mcp_result(
+        types.CallToolResult(
+            content=[types.TextContent(text=text)],
+            structured_content={"summary": "useful", "details": text},
+        ),
+        policy,
+    )
+    assert len(rendered) <= limit
+    payload = json.loads(rendered)
+    assert payload["truncated"] is True
     assert payload["structuredContent"]["summary"] == "useful"
 
 
@@ -511,7 +518,7 @@ async def test_expired_http_session_recovers_at_next_discovery_without_replay(
             replacement.args_type()(value="second"), CancellationToken()
         )
         assert not isinstance(result, ToolFailure)
-        assert json.loads(result)["content"][0]["text"] == "second"
+        assert json.loads(result)["structuredContent"]["result"] == "second"
         assert call_requests == 2
         await lease.release()
 

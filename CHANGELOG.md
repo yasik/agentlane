@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- MCP results now send structured content or text blocks to the model, not
+  both. JSON text is charged once against the processing budget, so a large
+  result is no longer omitted below the configured limit.
+
 ## [0.21.0] - 2026-10-17
 
 AgentLane `0.21.0` adds native OpenAI Responses steering and async function tools. Applications can update an active WebSocket run and execute selected tools while model output continues. The adapter preserves native response items and metadata through harness history and snapshots.

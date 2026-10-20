@@ -41,30 +41,47 @@ def render_mcp_result(
     """Render a bounded preview without processing omitted server content."""
     source = _read_result(result)
     renderer = _Renderer(policy.max_text_chars, secrets)
-    structured = (
-        source.structured_content if policy.include_structured_content else None
-    )
-    reserved: dict[str, object] = {
-        "content": [],
-        "isError": source.is_error,
-        "truncated": True,
-        "omittedBlocks": len(source.content),
-    }
-    if structured is not None:
-        reserved["structuredContent"] = {"omitted": True}
 
-    available = policy.max_text_chars - len(_json(reserved))
-    content_budget = 2 + (int(available * 0.6) if structured is not None else available)
+    # Servers repeat structured content in text blocks for clients that cannot
+    # read it. Render only one copy. Use the text blocks for a failure, because
+    # the server puts the failure details there.
+    if (
+        policy.include_structured_content
+        and source.structured_content is not None
+        and not source.is_error
+    ):
+        omitted = _json({"omitted": True})
+        reserved = _json(
+            {
+                "structuredContent": {"omitted": True},
+                "isError": False,
+                "truncated": True,
+            }
+        )
+        preview = renderer.value(
+            source.structured_content,
+            len(omitted) + policy.max_text_chars - len(reserved),
+        )
+        fields = [f'"structuredContent":{preview or omitted}', '"isError":false']
+        if renderer.truncated:
+            fields.append('"truncated":true')
+
+        return "{" + ",".join(fields) + "}"
+
+    reserved = _json(
+        {
+            "content": [],
+            "isError": source.is_error,
+            "truncated": True,
+            "omittedBlocks": len(source.content),
+        }
+    )
     content, kept = renderer.content(
-        source.content, max(2, content_budget), policy.max_content_blocks
+        source.content,
+        max(2, 2 + policy.max_text_chars - len(reserved)),
+        policy.max_content_blocks,
     )
     fields = [f'"content":{content}', f'"isError":{_json(source.is_error)}']
-    if structured is not None:
-        structured_budget = len(_json(reserved["structuredContent"])) + (
-            available - (len(content) - 2)
-        )
-        preview = renderer.value(structured, structured_budget) or '{"omitted":true}'
-        fields.append(f'"structuredContent":{preview}')
 
     omitted_blocks = len(source.content) - kept
     if renderer.truncated or omitted_blocks:
@@ -208,10 +225,16 @@ class _Renderer:
             )
 
         if isinstance(value, str):
-            if not self._take_text(value):
+            # Do not charge JSON text here. The keys and strings that it parses
+            # into are charged, so one input is charged one time.
+            is_json = value.lstrip().startswith(("{", "["))
+            if len(value) > self.characters:
                 return self._omission(available)
 
-            if value.lstrip().startswith(("{", "[")):
+            if not is_json and not self._take_text(value):
+                return self._omission(available)
+
+            if is_json:
                 try:
                     parsed: object = json.loads(value)
                 except (ValueError, RecursionError):
