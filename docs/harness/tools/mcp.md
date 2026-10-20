@@ -165,8 +165,8 @@ not automatically repeat a tool call after a transport failure or timeout.
 
 To change output limits, set `MCPServer.result_policy=MCPResultPolicy(...)`.
 The defaults are 32 content blocks and 51,200 characters. If a successful
-result has structured content, the model gets only the structured content.
-Otherwise, the model gets the content blocks. Set
+result has structured content and only text blocks, the model gets only the
+structured content. Otherwise, the model gets the content blocks. Set
 `include_structured_content=False` to always use the content blocks.
 Image, audio, and resource bodies are returned as metadata.
 

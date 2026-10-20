@@ -332,3 +332,19 @@ def test_nested_json_text_parses_within_the_input_budget(
         types.CallToolResult(content=[types.TextContent(text=text)]), MCPResultPolicy()
     )
     assert sum(parsed) <= 64 * 1024
+
+
+def test_structured_result_with_non_text_blocks_renders_content() -> None:
+    rendered = render_mcp_result(
+        types.CallToolResult(
+            content=[
+                types.TextContent(text='{"chart": "weekly"}'),
+                types.ImageContent(data="chart-bytes", mime_type="image/png"),
+            ],
+            structured_content={"chart": "weekly"},
+        ),
+        MCPResultPolicy(),
+    )
+    payload = json.loads(rendered)
+    assert payload["content"][1]["mimeType"] == "image/png"
+    assert "structuredContent" not in payload
