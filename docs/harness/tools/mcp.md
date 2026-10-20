@@ -164,10 +164,13 @@ servers retry transient discovery failures on later turns. AgentLane does
 not automatically repeat a tool call after a transport failure or timeout.
 
 To change output limits, set `MCPServer.result_policy=MCPResultPolicy(...)`.
-The defaults are 32 content blocks and 51,200 characters. If a successful
-result has structured content and only text blocks, the model gets only the
-structured content. Otherwise, the model gets the content blocks. Set
-`include_structured_content=False` to always use the content blocks.
+The defaults are 32 content blocks and 51,200 characters. Servers repeat
+structured content in text blocks for clients that cannot read it. If a
+successful result has structured content, the model gets the structured
+content and the other content blocks, but not the text blocks. A failed result
+keeps its text blocks, because they contain the failure details. Set
+`include_structured_content=False` to omit structured results and keep all
+content blocks.
 Image, audio, and resource bodies are returned as metadata.
 
 ## Troubleshooting

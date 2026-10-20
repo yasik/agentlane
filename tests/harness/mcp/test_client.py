@@ -107,8 +107,7 @@ def test_result_policy_omits_binary_and_marks_server_errors() -> None:
     assert "encoded-secret" not in rendered
     assert "Bearer hidden" not in rendered
     assert "hidden-token" not in rendered
-    assert "structuredContent" not in rendered
-    assert rendered.count("[redacted]") == 1
+    assert rendered.count("[redacted]") == 2
     assert "encodedBytesOmitted" in rendered
     assert rendered.error.kind == "mcp_server"
 

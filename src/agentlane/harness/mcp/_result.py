@@ -42,53 +42,44 @@ def render_mcp_result(
     source = _read_result(result)
     renderer = _Renderer(policy.max_text_chars, secrets)
 
-    # Servers repeat structured content in text blocks for clients that cannot
-    # read it. Render only one copy. Use the content blocks for a failure,
-    # because the server puts the failure details there, and when they hold
-    # more than the repeated text.
-    if (
-        policy.include_structured_content
-        and source.structured_content is not None
-        and not source.is_error
-        and _only_text(source.content, policy.max_content_blocks)
-    ):
-        omitted = _json({"omitted": True})
-        reserved = _json(
-            {
-                "structuredContent": {"omitted": True},
-                "isError": source.is_error,
-                "truncated": True,
-            }
-        )
-        preview = renderer.value(
-            source.structured_content,
-            len(omitted) + policy.max_text_chars - len(reserved),
-        )
-        fields = [
-            f'"structuredContent":{preview or omitted}',
-            f'"isError":{_json(source.is_error)}',
-        ]
-        if renderer.truncated:
-            fields.append('"truncated":true')
-    else:
-        reserved = _json(
-            {
-                "content": [],
-                "isError": source.is_error,
-                "truncated": True,
-                "omittedBlocks": len(source.content),
-            }
-        )
-        content, kept = renderer.content(
-            source.content,
-            max(2, 2 + policy.max_text_chars - len(reserved)),
-            policy.max_content_blocks,
-        )
-        fields = [f'"content":{content}', f'"isError":{_json(source.is_error)}']
+    # An empty structured result carries no data, so it does not replace text.
+    structured = (
+        source.structured_content
+        if policy.include_structured_content and source.structured_content
+        else None
+    )
+    reserved: dict[str, object] = {
+        "content": [],
+        "isError": source.is_error,
+        "truncated": True,
+        "omittedBlocks": len(source.content),
+    }
+    if structured is not None:
+        reserved["structuredContent"] = {"omitted": True}
 
-        omitted_blocks = len(source.content) - kept
-        if renderer.truncated or omitted_blocks:
-            fields.extend(['"truncated":true', f'"omittedBlocks":{omitted_blocks}'])
+    available = policy.max_text_chars - len(_json(reserved))
+    content_budget = 2 + (int(available * 0.6) if structured is not None else available)
+
+    # Servers repeat structured content in text blocks for clients that cannot
+    # read it, so skip that copy. Keep the text blocks of a failure, because
+    # the server puts the failure details there.
+    content, kept = renderer.content(
+        source.content,
+        max(2, content_budget),
+        policy.max_content_blocks,
+        skip_text=structured is not None and not source.is_error,
+    )
+    fields = [f'"content":{content}', f'"isError":{_json(source.is_error)}']
+    if structured is not None:
+        structured_budget = len(_json(reserved["structuredContent"])) + (
+            available - (len(content) - 2)
+        )
+        preview = renderer.value(structured, structured_budget) or '{"omitted":true}'
+        fields.append(f'"structuredContent":{preview}')
+
+    omitted_blocks = len(source.content) - kept
+    if renderer.truncated or omitted_blocks:
+        fields.extend(['"truncated":true', f'"omittedBlocks":{omitted_blocks}'])
 
     text = "{" + ",".join(fields) + "}"
     if source.is_error:
@@ -117,21 +108,6 @@ def _read_result(value: object) -> _Result:
 
     source = cast(_SDKResult, value)
     return _Result(source.content, source.structured_content, source.is_error)
-
-
-def _only_text(content: Sequence[object], max_blocks: int) -> bool:
-    """Return whether the rendered content blocks are all text blocks."""
-    for index in range(min(len(content), max_blocks)):
-        block = content[index]
-        kind = (
-            cast(Mapping[str, object], block).get("type")
-            if isinstance(block, Mapping)
-            else getattr(block, "type", None)
-        )
-        if kind != "text":
-            return False
-
-    return True
 
 
 def _sequence(value: object) -> Sequence[object]:
@@ -164,6 +140,13 @@ def _field(value: Mapping[str, object] | BaseModel, name: str) -> object:
         return getattr(value, name)
 
     return value[name]
+
+
+def _block_type(block: object) -> object:
+    if isinstance(block, (Mapping, BaseModel)):
+        return _field(cast(Mapping[str, object] | BaseModel, block), "type")
+
+    return None
 
 
 class _Renderer:
@@ -397,21 +380,35 @@ class _Renderer:
         return "[" + ",".join(parts) + "]"
 
     def content(
-        self, value: Sequence[object], available: int, max_blocks: int
+        self,
+        value: Sequence[object],
+        available: int,
+        max_blocks: int,
+        *,
+        skip_text: bool,
     ) -> tuple[str, int]:
         parts: list[str] = []
         used = 2
+        kept = 0
         for index in range(min(len(value), max_blocks)):
+            block = value[index]
+
+            # A skipped text block is a repeated copy, not an omitted block.
+            if skip_text and _block_type(block) == "text":
+                kept += 1
+                continue
+
             remaining = available - used - bool(parts)
             if self.nodes <= 0 or remaining < 2:
                 self.truncated = True
                 break
 
-            encoded = self.value(value[index], remaining, block=True)
+            encoded = self.value(block, remaining, block=True)
             if encoded is None:
                 break
 
             used += len(encoded) + bool(parts)
             parts.append(encoded)
+            kept += 1
 
-        return "[" + ",".join(parts) + "]", len(parts)
+        return "[" + ",".join(parts) + "]", kept

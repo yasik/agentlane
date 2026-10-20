@@ -171,6 +171,7 @@ def test_result_truncation_keeps_valid_json_and_previews(limit: int, text: str) 
     payload = json.loads(rendered)
     assert payload["truncated"] is True
     assert payload["structuredContent"]["summary"] == "useful"
+    assert payload["isError"] is False
 
 
 def test_resource_blocks_return_only_metadata() -> None:

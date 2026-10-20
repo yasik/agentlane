@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Successful MCP results with structured content no longer repeat it in text
+  blocks; the model gets `structuredContent` and the other content blocks.
+  Read the result data from `structuredContent`, or set
+  `include_structured_content=False` to keep the text blocks.
+
 ### Fixed
 
-- MCP results now send structured content or text blocks to the model, not
-  both. JSON text is charged once against the processing budget, so a large
-  result is no longer omitted below the configured limit.
+- JSON text in MCP results is charged once against the processing budget, so
+  a large result is no longer omitted below the configured limit.
 
 ## [0.21.0] - 2026-10-17
 
