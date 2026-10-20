@@ -142,7 +142,7 @@ def _field(value: Mapping[str, object] | BaseModel, name: str) -> object:
     return value[name]
 
 
-def _block_type(block: object) -> object:
+def _block_type(block: object) -> object | None:
     if isinstance(block, (Mapping, BaseModel)):
         return _field(cast(Mapping[str, object] | BaseModel, block), "type")
 
