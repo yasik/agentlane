@@ -203,6 +203,7 @@ class _Renderer:
         *,
         resource: bool = False,
         block: bool = False,
+        charged: bool = False,
     ) -> str | None:
         if available < 2:
             self.truncated = True
@@ -222,16 +223,14 @@ class _Renderer:
                 depth,
                 resource=resource,
                 block=block,
+                charged=charged,
             )
 
         if isinstance(value, str):
-            # Do not charge JSON text here. The keys and strings that it parses
-            # into are charged, so one input is charged one time.
+            # Charge JSON text before each parse. A string parsed from charged
+            # JSON text is part of that text, so do not charge it again.
             is_json = value.lstrip().startswith(("{", "["))
-            if len(value) > self.characters:
-                return self._omission(available)
-
-            if not is_json and not self._take_text(value):
+            if (is_json or not charged) and not self._take_text(value):
                 return self._omission(available)
 
             if is_json:
@@ -240,14 +239,19 @@ class _Renderer:
                 except (ValueError, RecursionError):
                     return self._omission(available)
 
-                safe = self.value(parsed, max(2, available - 2), depth + 1) or "null"
+                safe = (
+                    self.value(parsed, max(2, available - 2), depth + 1, charged=True)
+                    or "null"
+                )
             else:
                 safe = cast(str, redact_known_secrets(value, self.secrets))
 
             return self._text(safe, available)
 
         if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-            return self._array(cast(Sequence[object], value), available, depth)
+            return self._array(
+                cast(Sequence[object], value), available, depth, charged=charged
+            )
 
         if value is None or isinstance(value, (bool, int, float)):
             if isinstance(value, int) and value.bit_length() > available * 3:
@@ -270,6 +274,7 @@ class _Renderer:
         *,
         resource: bool,
         block: bool,
+        charged: bool,
     ) -> str | None:
         kind = _field(value, "type") if block else None
         fields = _fields(value)
@@ -285,7 +290,7 @@ class _Renderer:
                 break
 
             self.nodes -= 1
-            if not self._take_text(alias):
+            if not charged and not self._take_text(alias):
                 continue
 
             if len(alias) > available - used - 5:
@@ -324,6 +329,7 @@ class _Renderer:
                     remaining,
                     depth + 1,
                     resource=block and kind == "resource" and alias == "resource",
+                    charged=charged,
                 )
 
             if encoded is None:
@@ -352,7 +358,9 @@ class _Renderer:
             if alias != "type" and not (text and alias == "text"):
                 yield name, alias
 
-    def _array(self, value: Sequence[object], available: int, depth: int) -> str:
+    def _array(
+        self, value: Sequence[object], available: int, depth: int, *, charged: bool
+    ) -> str:
         parts: list[str] = []
         used = 2
         for index in range(len(value)):
@@ -361,7 +369,7 @@ class _Renderer:
                 self.truncated = True
                 break
 
-            encoded = self.value(value[index], remaining, depth + 1)
+            encoded = self.value(value[index], remaining, depth + 1, charged=charged)
             if encoded is None:
                 break
 

@@ -311,3 +311,24 @@ def test_structured_result_with_repeated_text_renders_structured_only() -> None:
     payload = json.loads(rendered)
     assert payload["structuredContent"] == structured
     assert "content" not in payload
+
+
+def test_nested_json_text_parses_within_the_input_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = "[1." + "0" * 30_000 + "]"
+    while len(json.dumps([text])) <= 60_000:
+        text = json.dumps([text])
+
+    parsed: list[int] = []
+    decode = json.loads
+
+    def counting_decode(value: str, **kwargs: Any) -> Any:
+        parsed.append(len(value))
+        return decode(value, **kwargs)
+
+    monkeypatch.setattr(json, "loads", counting_decode)
+    render_mcp_result(
+        types.CallToolResult(content=[types.TextContent(text=text)]), MCPResultPolicy()
+    )
+    assert sum(parsed) <= 64 * 1024
