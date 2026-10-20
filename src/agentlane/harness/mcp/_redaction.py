@@ -32,6 +32,10 @@ _SECRET_KEYS = frozenset(
     }
 )
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+")
+_KEY_VALUE_PATTERN = re.compile(
+    r'"(?P<key>[^"\\]{1,128})"\s*:\s*(?P<value>"(?:[^"\\]|\\.)*"?|[^\s,}\]]+)'
+)
+"""Matches a quoted key and its value in text, including a cut-off string value."""
 
 
 def is_secret_key(key: str) -> bool:
@@ -84,6 +88,19 @@ def redact_known_secrets(value: object, secrets: Collection[str]) -> object:
         return _URL_PATTERN.sub(_redact_url, value)
 
     return value
+
+
+def redact_secret_pairs(text: str) -> str:
+    """Redact credential values in key-value pairs of text that is not JSON."""
+    return _KEY_VALUE_PATTERN.sub(_redact_pair, text)
+
+
+def _redact_pair(match: re.Match[str]) -> str:
+    key = match.group("key")
+    if not is_secret_key(key):
+        return match.group()
+
+    return f'"{key}":"[redacted]"'
 
 
 def contains_secret_key(value: object, secrets: Collection[str]) -> bool:

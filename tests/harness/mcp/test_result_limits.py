@@ -216,15 +216,35 @@ def test_input_character_budget_is_shared_across_blocks() -> None:
     assert "test-only-secret" not in rendered
 
 
-@pytest.mark.parametrize("text", ['{"password":"credential-canary"', "[notes]"])
-def test_unparseable_json_text_is_omitted(text: str) -> None:
+@pytest.mark.parametrize(
+    "text", ['{"password":"credential-canary"', '{"password":"credential-canary']
+)
+def test_unparseable_json_text_renders_with_credentials_redacted(text: str) -> None:
     rendered = render_mcp_result(
         types.CallToolResult(content=[types.TextContent(text=text)]), MCPResultPolicy()
     )
     payload = json.loads(rendered)
-    assert "omitted" in payload["content"][0]["text"]
+    assert payload["content"][0]["text"] == '{"password":"[redacted]"'
     assert "credential-canary" not in rendered
-    assert payload["truncated"] is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[00:31] Speaker 1: Hi there, doctor.",
+        "[Speaker 1] Hello.",
+        "[notes]",
+        "{draft} reply",
+        "[3.8-11.8] reference range",
+    ],
+)
+def test_bracketed_prose_renders_unchanged(text: str) -> None:
+    rendered = render_mcp_result(
+        types.CallToolResult(content=[types.TextContent(text=text)]), MCPResultPolicy()
+    )
+    payload = json.loads(rendered)
+    assert payload["content"][0]["text"] == text
+    assert "truncated" not in payload
 
 
 def test_ordinary_prose_remains_unchanged() -> None:

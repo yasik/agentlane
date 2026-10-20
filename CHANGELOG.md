@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - JSON text in MCP results now counts once against the processing limit, so a
   result shorter than `max_text_chars` is no longer omitted.
+- MCP text that starts with `[` or `{` but is not JSON, such as
+  `[00:31] Speaker 1: Hello.`, is no longer omitted. Credential values in
+  `"key": value` pairs of such text are redacted.
 
 ## [0.21.0] - 2026-10-17
 

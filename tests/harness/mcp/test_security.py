@@ -139,6 +139,13 @@ def test_result_structured_and_json_text_redact_credentials(
     payload = json.loads(text)
     assert json.loads(payload["content"][0]["text"])[credential_key] == "[redacted]"
 
+    broken = render_mcp_result(
+        types.CallToolResult(content=[types.TextContent(text=json.dumps(data)[:-1])]),
+        MCPResultPolicy(),
+    )
+    assert _canary("credential") not in broken
+    assert "domain-key" in broken
+
 
 @pytest.mark.parametrize("limit", [128, 129, 180, 256, 1024])
 @pytest.mark.parametrize(

@@ -11,12 +11,14 @@ from pydantic import BaseModel
 from agentlane.models import ToolError, ToolFailure
 
 from ._errors import MCP_SERVER_TOOL_ERROR_KIND
-from ._redaction import is_secret_key, redact_known_secrets
+from ._redaction import is_secret_key, redact_known_secrets, redact_secret_pairs
 from ._types import MCPResultPolicy
 
 _OMISSION = "[omitted: exceeds processing limit]"
 _MAX_NODES = 4096
 _MAX_DEPTH = 32
+_NOT_JSON = object()
+"""Returned by `_parse_json` when text is not valid JSON."""
 
 
 class _SDKResult(Protocol):
@@ -108,6 +110,13 @@ def _read_result(value: object) -> _Result:
 
     source = cast(_SDKResult, value)
     return _Result(source.content, source.structured_content, source.is_error)
+
+
+def _parse_json(text: str) -> object:
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError):
+        return _NOT_JSON
 
 
 def _sequence(value: object) -> Sequence[object]:
@@ -234,18 +243,17 @@ class _Renderer:
             if (is_json or not charged) and not self._take_text(value):
                 return self._omission(available)
 
-            if is_json:
-                try:
-                    parsed: object = json.loads(value)
-                except (ValueError, RecursionError):
-                    return self._omission(available)
-
+            # Render JSON text as structure, so credential keys are redacted.
+            # Text that does not parse is text, so redact it as text.
+            parsed = _parse_json(value) if is_json else _NOT_JSON
+            if parsed is not _NOT_JSON:
                 safe = (
                     self.value(parsed, max(2, available - 2), depth + 1, charged=True)
                     or "null"
                 )
             else:
-                safe = cast(str, redact_known_secrets(value, self.secrets))
+                text = cast(str, redact_known_secrets(value, self.secrets))
+                safe = redact_secret_pairs(text)
 
             return self._text(safe, available)
 
