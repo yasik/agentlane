@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- JSON text in MCP results is charged once against the processing budget, so
-  a large result is no longer omitted below the configured limit.
+- JSON text in MCP results now counts once against the processing limit, so a
+  result shorter than `max_text_chars` is no longer omitted.
 
 ## [0.21.0] - 2026-10-17
 

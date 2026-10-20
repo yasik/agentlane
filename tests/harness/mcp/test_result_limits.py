@@ -71,8 +71,8 @@ def test_sdk_result_and_content_do_not_require_full_model_dump(
     assert payload["content"][0]["text"] == "useful"
 
 
-@pytest.mark.parametrize("structured", [None, {"ok": True}])
 @pytest.mark.parametrize("count", [1000, 100_000])
+@pytest.mark.parametrize("structured", [None, {"ok": True}])
 def test_block_limit_does_not_visit_omitted_content(
     count: int, structured: dict[str, bool] | None
 ) -> None:
