@@ -12,6 +12,7 @@ from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from .._constants import EMPTY_PATH_ERROR
+from .._storage_write import write_content
 from ._constants import NULL_BYTE_PATH_ERROR, PATCH_TOOL_NAME
 from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
@@ -21,7 +22,6 @@ from ._permissions import (
     ToolPermissionRequest,
     evaluate_tool_permission,
 )
-from ._storage_write import write_content
 from ._types import HarnessToolDefinition
 
 _TOOL_DESCRIPTION = (

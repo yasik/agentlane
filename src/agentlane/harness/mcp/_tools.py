@@ -20,6 +20,7 @@ from agentlane.models import (
 )
 from agentlane.runtime import CancellationToken
 
+from ..filesystem import FileWriter
 from ._connection import MCPConnection
 from ._constants import CONNECTION_UNAVAILABLE, STATUS_ERROR, STATUS_OK, TOOL_CANCELLED
 from ._errors import (
@@ -29,7 +30,7 @@ from ._errors import (
     MCPFailureKind,
 )
 from ._operation import mcp_operation
-from ._result import render_mcp_result
+from ._output import render_mcp_result_with_storage
 from ._sdk import exception_kind
 from ._types import MCPRemoteTool, MCPServer
 
@@ -82,6 +83,9 @@ async def call_tool(
     cancellation_token: CancellationToken,
     is_closed: Callable[[], bool],
     timeout_seconds: float,
+    *,
+    result_writer: FileWriter | None = None,
+    result_directory: str | None = None,
 ) -> str | ToolFailure:
     if cancellation_token.is_cancelled:
         return tool_failure(TOOL_CANCELLED, ToolErrorKind.CANCELLED.value)
@@ -140,9 +144,52 @@ async def call_tool(
         finally:
             connection.active_calls.discard(call)
             connection.secrets.update(operation.secrets)
-        rendered = render_mcp_result(
-            result, connection.server.result_policy, secrets=connection.secrets
+
+        if result_writer is not None:
+            if cancellation_token.is_cancelled:
+                return tool_failure(TOOL_CANCELLED, ToolErrorKind.CANCELLED.value)
+            if is_closed() or connection.closing:
+                return tool_failure(
+                    CONNECTION_UNAVAILABLE, MCP_TRANSPORT_TOOL_ERROR_KIND
+                )
+
+        preparation = render_mcp_result_with_storage(
+            result,
+            policy=connection.server.result_policy,
+            secrets=connection.secrets,
+            writer=result_writer,
+            directory=result_directory,
         )
+        if result_writer is None:
+            rendered = await preparation
+        else:
+            # Shutdown must cancel and drain storage after the provider call
+            # ends, before the connection owner releases its resources.
+            preparing = asyncio.create_task(preparation)
+            connection.active_calls.add(preparing)
+            cancellation_token.link_future(preparing)
+            try:
+                rendered = await preparing
+            except asyncio.CancelledError:
+                if cancellation_token.is_cancelled:
+                    return tool_failure(TOOL_CANCELLED, ToolErrorKind.CANCELLED.value)
+                if is_closed() or connection.closing:
+                    return tool_failure(
+                        CONNECTION_UNAVAILABLE, MCP_TRANSPORT_TOOL_ERROR_KIND
+                    )
+                raise
+            finally:
+                connection.active_calls.discard(preparing)
+
+            # A writer can finish its write while handling cancellation.
+            # Do not publish its reference after the run or connection closes.
+            if cancellation_token.is_cancelled:
+                return tool_failure(TOOL_CANCELLED, ToolErrorKind.CANCELLED.value)
+            if is_closed() or connection.closing:
+                return tool_failure(
+                    CONNECTION_UNAVAILABLE, MCP_TRANSPORT_TOOL_ERROR_KIND
+                )
+
         logger.info(
             "mcp_tool_completed",
             server=connection.server.name,

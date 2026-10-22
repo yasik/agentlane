@@ -12,6 +12,7 @@ from agentlane.models import Tool
 from agentlane.models.run import RunContext
 
 from .._run import RunResult, RunState
+from ..filesystem import FilePathResolver, FileWriter, normalize_relative_path
 from ..shims import (
     BoundShim,
     PreparedTurn,
@@ -45,6 +46,8 @@ class _BoundMCPToolsShim(BoundShim):
     manager: MCPClientManager
     owns_manager: bool
     max_concurrent_discoveries: int = 8
+    result_writer: FileWriter | None = None
+    result_directory: str | None = None
     inherited_names: frozenset[str] | None = None
     sources: tuple[_SourceState, ...] = ()
     tools: tuple[Tool[BaseModel, object], ...] = ()
@@ -112,7 +115,10 @@ class _BoundMCPToolsShim(BoundShim):
                     source.lease = await self.manager._acquire(  # pyright: ignore[reportPrivateUsage]
                         source.server, self.authorization_context
                     )
-                source.tools = await source.lease.tools()
+                source.tools = await source.lease.tools(
+                    result_writer=self.result_writer,
+                    result_directory=self.result_directory,
+                )
             except Exception as exc:
                 source.tools = ()
                 if source.server.required:
@@ -159,6 +165,8 @@ class _BoundMCPToolsShim(BoundShim):
             client_manager=None if self.owns_manager else self.manager,
             inherited_names=allowed_names,
             max_concurrent_discoveries=self.max_concurrent_discoveries,
+            result_writer=self.result_writer,
+            result_directory=self.result_directory,
         )
         return (ToolSourceBinding(source=self.source, bind=bind),)
 
@@ -213,6 +221,8 @@ class MCPToolsShim(Shim):
         authorization_context: MCPAuthorizationContext | None = None,
         client_manager: MCPClientManager | None = None,
         max_concurrent_discoveries: int = 8,
+        result_writer: FileWriter | None = None,
+        result_directory: str | None = None,
     ) -> None:
         if not servers:
             raise ValueError("MCPToolsShim requires at least one server.")
@@ -221,12 +231,27 @@ class MCPToolsShim(Shim):
             or max_concurrent_discoveries < 1
         ):
             raise ValueError("max_concurrent_discoveries must be a positive integer.")
+        if (result_writer is None) != (result_directory is None):
+            raise ValueError(
+                "result_writer and result_directory must be configured together."
+            )
+
+        # Resolve paths once in the same namespace used by injected file tools.
+        if result_directory is not None:
+            result_directory = str(
+                result_writer.resolve_path(result_directory)
+                if isinstance(result_writer, FilePathResolver)
+                else normalize_relative_path(result_directory)
+            )
+
         self._servers = servers
         self._authorization_context = authorization_context or MCPAuthorizationContext(
             key="anonymous"
         )
         self._client_manager = client_manager
         self._max_concurrent_discoveries = max_concurrent_discoveries
+        self._result_writer = result_writer
+        self._result_directory = result_directory
 
     @property
     def name(self) -> str:
@@ -245,6 +270,8 @@ class MCPToolsShim(Shim):
             authorization_context=self._authorization_context,
             client_manager=self._client_manager,
             max_concurrent_discoveries=self._max_concurrent_discoveries,
+            result_writer=self._result_writer,
+            result_directory=self._result_directory,
         )
 
 
@@ -256,6 +283,8 @@ async def _bind_mcp_tools(
     authorization_context: MCPAuthorizationContext,
     client_manager: MCPClientManager | None,
     max_concurrent_discoveries: int,
+    result_writer: FileWriter | None = None,
+    result_directory: str | None = None,
     inherited_names: frozenset[str] | None = None,
 ) -> BoundShim:
     """Create a fresh source session with its complete inheritance limits."""
@@ -267,5 +296,7 @@ async def _bind_mcp_tools(
         manager=client_manager if client_manager is not None else MCPClientManager(),
         owns_manager=client_manager is None,
         max_concurrent_discoveries=max_concurrent_discoveries,
+        result_writer=result_writer,
+        result_directory=result_directory,
         inherited_names=inherited_names,
     )
