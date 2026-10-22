@@ -55,7 +55,6 @@ from ._handoff import (
 from ._hooks import RunnerHooks, coerce_runner_hooks
 from ._run import (
     RunHistoryItem,
-    RunInput,
     RunInstructions,
     RunResult,
     RunState,
@@ -64,6 +63,7 @@ from ._run import (
     copy_instructions,
     copy_run_state,
 )
+from ._snapshot import RunInput, ToolResultInput
 from ._stream import RunStream
 from ._stream_base import close_stream_callback
 from ._task import Task
@@ -195,6 +195,10 @@ class AgentDescriptor:
         )
 
 
+class ExternalTool[ArgsT: BaseModel](ToolSpec[ArgsT]):
+    """Declarative tool whose result is supplied by the application."""
+
+
 class AgentTool(ToolSpec[Any]):
     """Declarative tool schema that routes one call to another agent run."""
 
@@ -291,7 +295,7 @@ class LifecycleRunner(Protocol):
     async def run(
         self,
         agent: Task,
-        state: RunState,
+        state: RunState | ToolResultInput,
         *,
         hooks: RunnerHooks | None = None,
         cancellation_token: CancellationToken | None = None,
@@ -300,7 +304,7 @@ class LifecycleRunner(Protocol):
     def run_stream(
         self,
         agent: Task,
-        state: RunState,
+        state: RunState | ToolResultInput,
         *,
         hooks: RunnerHooks | None = None,
         cancellation_token: CancellationToken | None = None,
@@ -309,7 +313,7 @@ class LifecycleRunner(Protocol):
     def run_events(
         self,
         agent: Task,
-        state: RunState,
+        state: RunState | ToolResultInput,
         *,
         hooks: RunnerHooks | None = None,
         approval_events: AsyncIterator["ToolApprovalEvent"] | None = None,
@@ -576,36 +580,42 @@ class AgentLifecycle:
 
                     active_input = self._pending_inputs.popleft()
 
-                # Build working state (outside lock)
-                working_state = _next_run_state(
-                    self._run_state,
-                    active_input.run_input,
-                    initial_instructions=self._descriptor.instructions,
-                )
-
-                if (
-                    active_input.cancellation_token is not None
-                    and active_input.cancellation_token.is_cancelled
-                ):
-                    # Skip cancelled queued input before opening a model session.
-                    exc = asyncio.CancelledError()
-                    _fail_queued_input(active_input, exc)
-                    active_input = None
-                    continue
-
-                # Execute one runner turn
                 try:
+                    # Build working state (outside lock)
+                    working_state = _next_run_state(
+                        self._run_state,
+                        active_input.run_input,
+                        initial_instructions=self._descriptor.instructions,
+                    )
+
+                    if (
+                        active_input.cancellation_token is not None
+                        and active_input.cancellation_token.is_cancelled
+                    ):
+                        # Skip cancelled queued input before opening a model session.
+                        exc = asyncio.CancelledError()
+                        _fail_queued_input(active_input, exc)
+                        continue
+
+                    # Keep resume data intact while retaining the working revision.
+                    runner_input = (
+                        active_input.run_input
+                        if isinstance(active_input.run_input, ToolResultInput)
+                        else working_state
+                    )
+
+                    # Execute one runner turn
                     if isinstance(active_input.completion, Future):
                         result = await runner.run(
                             agent=agent,
-                            state=working_state,
+                            state=runner_input,
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
                     elif isinstance(active_input.completion, RunEventStream):
                         event_stream = runner.run_events(
                             agent=agent,
-                            state=working_state,
+                            state=runner_input,
                             hooks=hooks,
                             approval_events=active_input.approval_events,
                             cancellation_token=active_input.cancellation_token,
@@ -627,7 +637,7 @@ class AgentLifecycle:
                     else:
                         model_stream = runner.run_stream(
                             agent=agent,
-                            state=working_state,
+                            state=runner_input,
                             hooks=hooks,
                             cancellation_token=active_input.cancellation_token,
                         )
@@ -646,7 +656,7 @@ class AgentLifecycle:
                         finally:
                             await model_stream.aclose()
                 except Exception as exc:  # noqa: BLE001
-                    # Runner failures are contained: only this input's
+                    # Input and runner failures are contained: only this input's
                     # future is failed. The persisted baseline is unchanged,
                     # so subsequent queued inputs start from the last good
                     # state.
@@ -698,9 +708,18 @@ def _next_run_state(
       3. Plain input + existing baseline → continue with new user input
          appended to ``history``.
 
-    Resuming into an agent that already has a baseline is an error — the
-    caller should create a fresh agent instance instead.
+    Explicit ``RunState`` requires a fresh lifecycle. ``ToolResultInput``
+    resumes at the current committed revision.
     """
+
+    if isinstance(run_input, ToolResultInput):
+        if (
+            current_state is not None
+            and current_state.revision != run_input.continuation.checkpoint.revision
+        ):
+            raise ValueError("Continuation revision does not match the stored state.")
+
+        return run_input.continuation.to_run_state()
 
     # Case 1: resume from a serialized RunState
     if isinstance(run_input, RunState):

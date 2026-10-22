@@ -35,7 +35,17 @@ from openai.types.responses.response_usage import (
 )
 from pydantic import BaseModel, TypeAdapter
 
-from agentlane.harness import Agent, AgentDescriptor, AgentSnapshot, Runner, RunState
+from agentlane.harness import (
+    Agent,
+    AgentDescriptor,
+    AgentSnapshot,
+    ExternalTool,
+    RunContinuation,
+    Runner,
+    RunPaused,
+    RunState,
+    ToolResultInput,
+)
 from agentlane.harness.compaction import render_request_messages
 from agentlane.messaging import AgentId
 from agentlane.models import (
@@ -1292,3 +1302,109 @@ def test_responses_reasoning_serializes_in_fresh_process(
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_responses_resume_keeps_original_call_and_one_result(
+    streaming: bool,
+) -> None:
+    root = AgentId.from_values("test", "root")
+    native_output: list[dict[str, Any]] = [
+        {
+            "id": "rs_original",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "saved-reasoning",
+        },
+        {
+            "id": "fc_original",
+            "type": "function_call",
+            "call_id": "call_original",
+            "name": "external",
+            "arguments": '{"text":"Choose a location."}',
+            "status": "completed",
+        },
+    ]
+    tools = Tools(
+        tools=[
+            ExternalTool(
+                name="external", description="Ask the host.", args_model=EchoArgs
+            )
+        ]
+    )
+    saved = None
+    for output in (native_output, []):
+        native = OpenAIResponse.model_validate(
+            {
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1,
+                "model": "test",
+                "status": "completed",
+                "output": output,
+                "parallel_tool_calls": False,
+                "tool_choice": "auto",
+                "tools": [],
+            }
+        )
+        transport = _FakeAsyncStream(
+            [
+                ResponseCompletedEvent(
+                    type="response.completed", response=native, sequence_number=1
+                )
+            ]
+        )
+        create = AsyncMock(return_value=transport if streaming else native)
+        client = ResponsesClient(Config(api_key="test-key", model="test"))
+        cast(Any, client)._openai_client.responses.create = create
+        runner = Runner()
+        agent = Agent(
+            SingleThreadedRuntimeEngine(),
+            runner,
+            bind_id=root,
+            descriptor=AgentDescriptor(name="test", model=client, tools=tools),
+        )
+
+        state = (
+            ToolResultInput(continuation=saved, result="Prague")
+            if saved
+            else RunState(instructions=None, history=["Start."], responses=[])
+        )
+        try:
+            # Each iteration has a new runner, model client, and runtime.
+            stream = runner.run_events(agent, state) if streaming else None
+            try:
+                operation = stream.result() if stream else runner.run(agent, state)
+                if saved is None:
+                    with pytest.raises(RunPaused) as paused:
+                        await operation
+                    saved = RunContinuation.from_json(
+                        json.loads(json.dumps(paused.value.continuation.to_json()))
+                    )
+                else:
+                    await operation
+            finally:
+                if stream:
+                    await stream.aclose()
+                    assert transport.closed
+            create.assert_awaited_once()
+            assert create.await_args is not None
+            if not output:
+                request = create.await_args.kwargs
+                assert request["input"] == [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Start."}],
+                    },
+                    *native_output,
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_original",
+                        "output": "Prague",
+                    },
+                ]
+                assert "previous_response_id" not in request
+        finally:
+            await cast(Any, client)._openai_client.close()

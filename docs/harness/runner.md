@@ -391,6 +391,70 @@ total number of turns that ran (`RunResult.turn_count` is this final value).
 Gate first-turn logic on `turn_count == 1` rather than reading it as a
 completed-turns count.
 
+## External Tool Results
+
+Declare an `ExternalTool(name=..., description=..., args_model=...)` in the
+root agent's tools. The application owns the question schema, choices, free
+text, validation, and UI. AgentLane generates the continuation ID and preserves
+the original tool-call ID.
+
+An external call raises `RunPaused` after model and shim cleanup; a cleanup
+failure takes precedence. Its `continuation` holds the pending call, used limits,
+and an uncommitted `checkpoint: AgentSnapshot`. Save the whole continuation;
+never store its checkpoint as completed state. Pause leaves the completed state
+and revision unchanged. A successful resume commits the result and advances the
+revision once. Completed snapshot v1 stays unchanged.
+
+Pass `ToolResultInput(continuation, result)` to `run()`, `run_stream()`, or
+`run_events()` to resume. This input restores the saved state internally. The
+same agent and runner can resume after a pause. After a process restart, create
+an agent with the same root ID, completed baseline, and tool contract.
+
+The application supplies `descriptor` (with the external tool), `root_id`,
+`baseline`, `publish_question`, and the durable `store` operations below.
+
+```python
+from agentlane.harness import RunContinuation, RunPaused, ToolResultInput
+from agentlane.harness.agents import DefaultAgent
+
+agent = DefaultAgent(
+    descriptor=descriptor, agent_id=root_id, run_state=baseline,
+)
+try:
+    await agent.run("Help me choose a destination.")
+except RunPaused as paused:
+    continuation_id = paused.continuation.continuation_id
+    # Save the waiting record before showing the question.
+    await store.save_waiting(paused.continuation.to_json())
+    await publish_question(paused.continuation)
+
+# Later: authorize and atomically claim one answer.
+record, answer = await store.claim_answer(continuation_id)
+saved = RunContinuation.from_json(record)
+result = await agent.run(ToolResultInput(saved, answer))
+```
+
+`RunInput` includes `ToolResultInput`. Low-level `Runner` methods also accept it
+as their state argument. A runner remains reusable and rejects a continuation
+ID already submitted to that runner. An already-cancelled token does not
+consume the ID. The application must prevent replay across processes and
+reconcile failed or uncertain attempts before retrying.
+
+For `run_stream()` and `run_events()`, catch `RunPaused` around both stream
+iteration and `stream.result()`, then close and drain the stream as described
+above. Resume adds one result to the original tool call, with no extra user
+message or replay of completed tools. Resume reuses the arguments validated at
+pause, including generated defaults. Saved limits can be reduced; the smaller
+configured or saved model-turn cap applies to that execution and its handoffs.
+
+The application must block ordinary input while waiting. The local runner guard
+does not guarantee exactly-once side effects. Only a single external call at an
+idle root boundary is supported. Mixed tool batches, live provider sessions,
+asynchronous dispatch, steering, child suspension, and process-bridge resume
+are outside this contract. Agents with external tools or `ToolResultInput`
+cannot use `state_path`, `state_store`, or `fork()`; the application owns
+persistence.
+
 ## Request Ownership
 
 One of the runner's main jobs is deciding how a high-level run turns into a

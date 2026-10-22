@@ -3,28 +3,38 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from agentlane.harness import (
     Agent,
     AgentDescriptor,
+    ExternalTool,
     JsonFileStateStore,
     Runner,
     RunnerHooks,
+    RunPaused,
     RunResult,
     RunState,
     RunStream,
     Task,
+    ToolResultInput,
 )
 from agentlane.harness._run import copy_run_state
 from agentlane.harness.agents import AgentBase, DefaultAgent
+from agentlane.harness.tools import HarnessToolDefinition, HarnessToolsShim
+from agentlane.messaging import AgentId
 from agentlane.models import (
     MessageDict,
     Model,
     ModelResponse,
     ModelStreamEvent,
     ModelStreamEventKind,
+    Tools,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import Span
+
+from .tools_test_utils import EchoArgs, make_tool_call
 
 
 def make_assistant_response(content: str) -> ModelResponse:
@@ -163,7 +173,7 @@ class _RecordingRunner(Runner):
     async def run(
         self,
         agent: Task,
-        state: RunState,
+        state: RunState | ToolResultInput,
         *,
         hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
@@ -171,6 +181,7 @@ class _RecordingRunner(Runner):
         del hooks
         del cancellation_token
 
+        assert isinstance(state, RunState)
         copied = copy_run_state(state)
         self.calls.append(copied)
 
@@ -580,3 +591,161 @@ def test_default_agent_fork_supports_explicit_run_state_without_persisting_it() 
         assert runner.calls[1].turn_count == 1
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["run", "run_stream", "run_events"])
+@pytest.mark.parametrize("same_instance", [False, True])
+async def test_default_agent_pause_and_resume_preserve_commit_contract(
+    mode: str,
+    same_instance: bool,
+    tmp_path: Path,
+) -> None:
+    root = AgentId.from_values("test", "external")
+    pending = make_assistant_response("Choose a city.")
+    pending.choices[0].message.tool_calls = [
+        make_tool_call(
+            tool_id="question", name="external", arguments='{"text":"City?"}'
+        )
+    ]
+
+    tools = Tools(
+        tools=[
+            ExternalTool(
+                name="external", description="Ask the host.", args_model=EchoArgs
+            )
+        ]
+    )
+    baseline = RunState(instructions=None, history=["prior"], responses=[], revision=7)
+    model = _SequenceModel(
+        [pending, make_assistant_response("done")] if same_instance else [pending]
+    )
+    agent = DefaultAgent(
+        agent_id=root,
+        run_state=baseline,
+        descriptor=AgentDescriptor(name="test", model=model, tools=tools),
+        runner=Runner(),
+    )
+
+    # Both stream consumption and result retrieval retain the same typed signal.
+    if mode == "run":
+        with pytest.raises(RunPaused) as paused:
+            await agent.run("start")
+    else:
+        stream = await getattr(agent, mode)("start")
+        try:
+            with pytest.raises(RunPaused) as streamed:
+                async for _ in stream:
+                    pass
+            with pytest.raises(RunPaused) as paused:
+                await stream.result()
+            assert streamed.value is paused.value
+        finally:
+            await stream.aclose()
+    assert agent.run_state == baseline
+    snapshot = agent.snapshot()
+    assert snapshot is not None and snapshot.revision == 7
+    continuation = paused.value.continuation
+    assert continuation.checkpoint.revision == 7
+
+    # The resumed execution commits once and adds no new user message.
+    resumed_model = (
+        model if same_instance else _SequenceModel([make_assistant_response("done")])
+    )
+    resumed = (
+        agent
+        if same_instance
+        else DefaultAgent(
+            agent_id=root,
+            run_state=baseline,
+            descriptor=AgentDescriptor(name="test", model=resumed_model, tools=tools),
+            runner=Runner(),
+        )
+    )
+    run_input = ToolResultInput(continuation=continuation, result="Prague")
+    if mode == "run":
+        result = await resumed.run(run_input)
+    else:
+        stream = await getattr(resumed, mode)(run_input)
+        async for _ in stream:
+            pass
+        result = await stream.result()
+    assert result.final_output == "done"
+    assert resumed.run_state is not None and resumed.run_state.revision == 8
+    assert resumed_model.calls[-1][-1] == {
+        "role": "tool",
+        "tool_call_id": "question",
+        "name": "external",
+        "content": "Prague",
+    }
+
+    # A completed run invalidates the old revision on this instance.
+    completed_state = resumed.run_state
+    model_calls = len(resumed_model.calls)
+    if mode == "run":
+        with pytest.raises(ValueError, match="Continuation revision"):
+            await resumed.run(run_input)
+    else:
+        stream = await getattr(resumed, mode)(run_input)
+        try:
+            with pytest.raises(ValueError, match="Continuation revision"):
+                await stream.result()
+        finally:
+            await stream.aclose()
+    assert resumed.run_state == completed_state
+    assert len(resumed_model.calls) == model_calls
+
+    stored = DefaultAgent(
+        agent_id=root,
+        descriptor=AgentDescriptor(name="test"),
+        state_path=tmp_path / "agent.json",
+    )
+    with pytest.raises(ValueError, match="host-managed continuation storage"):
+        await stored.run(run_input)
+    assert stored.run_state is None
+    assert not (tmp_path / "agent.json").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["run", "run_stream", "run_events", "fork"])
+async def test_default_agent_rejects_dynamic_external_tools_with_store_or_fork(
+    mode: str,
+    tmp_path: Path,
+) -> None:
+    pending = make_assistant_response("Choose a city.")
+    pending.choices[0].message.tool_calls = [
+        make_tool_call(
+            tool_id="question", name="external", arguments='{"text":"City?"}'
+        )
+    ]
+    model = _SequenceModel([pending])
+    source = HarnessToolsShim(
+        definitions=(
+            HarnessToolDefinition(
+                tool=ExternalTool(
+                    name="external", description="Ask the host.", args_model=EchoArgs
+                )
+            ),
+        )
+    )
+    state_path = tmp_path / "agent.json"
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(name="test", model=model, shims=(source,)),
+        state_path=None if mode == "fork" else state_path,
+    )
+    message = "forked runs" if mode == "fork" else "host-managed continuation storage"
+    if mode in {"run", "fork"}:
+        with pytest.raises(ValueError, match=message):
+            await getattr(agent, mode)("start")
+    else:
+        stream = await getattr(agent, mode)("start")
+        try:
+            with pytest.raises(ValueError, match=message):
+                async for _ in stream:
+                    pass
+            with pytest.raises(ValueError, match=message):
+                await stream.result()
+        finally:
+            await stream.aclose()
+    assert agent.run_state is None
+    assert not state_path.exists()

@@ -10,7 +10,7 @@ from functools import partial
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 import structlog
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, JsonValue, ValidationError
 from strenum import LowercaseStrEnum
 
 from agentlane.messaging import AgentId
@@ -71,6 +71,7 @@ from ._lifecycle import (
     AgentTool,
     DefaultAgentTool,
     DefaultHandoffTool,
+    ExternalTool,
     HandoffTool,
     LifecycleRunner,
 )
@@ -83,6 +84,12 @@ from ._run import (
     copy_instructions,
     copy_run_state,
     copy_shim_state,
+)
+from ._snapshot import (
+    AgentSnapshot,
+    RunContinuation,
+    RunPaused,
+    ToolResultInput,
 )
 from ._stream_base import BaseRunStream
 from ._task import Task
@@ -177,6 +184,9 @@ class AgentDelegationState:
 
     max_depth: int
     max_threads: int
+    child_turn_limits: dict[AgentId, int] = field(default_factory=dict[AgentId, int])
+    """Active child runs and their inherited turn limits."""
+
     _live_agents: int = 0
     _depth_by_agent: dict[AgentId, int] = field(default_factory=dict[AgentId, int])
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -256,7 +266,7 @@ class RunLoop:
         agent: Task,
         runner_task: RunnerTask,
         model: Model[ModelResponse],
-        state: RunState,
+        state: RunState | ToolResultInput,
         delegate_runner: LifecycleRunner,
         agent_delegation: AgentDelegationState,
         tool_executor: ToolExecutor,
@@ -272,18 +282,38 @@ class RunLoop:
         self.agent = agent
         self.runner_task = runner_task
         self.model = model
-        self.state = state
-        self.agent_delivery = AgentDelivery(agent, delegate_runner, cancellation_token)
+        self.external_input = state if isinstance(state, ToolResultInput) else None
+        self.state = (
+            state.continuation.to_run_state()
+            if isinstance(state, ToolResultInput)
+            else state
+        )
         self.agent_delegation = agent_delegation
+        self._is_child = agent.id in agent_delegation.child_turn_limits
         self.tool_executor = tool_executor
         self.hooks = hooks
         self.max_attempts = max_attempts
-        self.max_turns = max_turns
+        self.max_turns = min(
+            max_turns, agent_delegation.child_turn_limits.get(agent.id, max_turns)
+        )
+        if self.external_input is not None:
+            self.max_turns = min(
+                self.max_turns, self.external_input.continuation.max_turns
+            )
+        self.agent_delivery = AgentDelivery(
+            agent,
+            delegate_runner,
+            cancellation_token,
+            child_turn_limits=agent_delegation.child_turn_limits,
+            max_turns=self.max_turns,
+        )
         self.is_retryable = is_retryable
         self.cancellation_token = cancellation_token
         self.emit = emit
         self.run_events = run_events
         self.control_stream = control_stream
+        self._external_tools_enabled = self.external_input is not None
+        self._external_resume_applied = False
 
         # Keep tool budgets and pending results local to this run.
         self.transient_state = DefaultRunContext()
@@ -301,6 +331,8 @@ class RunLoop:
 
     async def run(self) -> RunResult:
         """Execute turns and close model and tool resources on every exit path."""
+        self._validate_external_setup()
+        pause: RunPaused | None = None
         run_error: BaseException | None = None
         result: RunResult | None = None
 
@@ -310,7 +342,7 @@ class RunLoop:
             async with cancellation_scope(self.cancellation_token):
                 model = await model_scope.enter_async_context(self.model.open_run())
 
-            if self.control_stream is not None:
+            if self.control_stream is not None and not self._external_tools_enabled:
                 self.control_stream.bind_steering(model.steer)
 
             # Notify hooks and shims before the first prepared turn.
@@ -329,6 +361,9 @@ class RunLoop:
                     result = await self._run_turns(model, span)
 
                     return result
+                except RunPaused as exc:
+                    # Close the trace and resources before raising the pause.
+                    pause = exc
                 finally:
                     await self._cancel_pending_calls()
         except BaseException as exc:
@@ -347,6 +382,8 @@ class RunLoop:
         finally:
             await self._finish_run(model_scope, result, run_error)
 
+        raise pause
+
     async def _run_turns(
         self, model: Model[ModelResponse], span: Span[Any]
     ) -> RunResult:
@@ -356,6 +393,84 @@ class RunLoop:
             result = await self._finish_turn(turn, response, completed, span)
             if result is not None:
                 return result
+
+    def _validate_external_setup(self) -> None:
+        """Validate saved state and restore used tool budgets before model I/O."""
+        self._validate_external_catalog(self.runner_task.tools)
+        if self.external_input is None:
+            self._reject_unresolved_external_calls()
+            return
+
+        # Match the saved root before restoring tool usage.
+        saved = self.external_input.continuation
+        if self._is_child or saved.checkpoint.agent_id != self.agent.id:
+            raise ValueError("External tool continuation belongs to a different root.")
+        self.tool_call_counts = dict(saved.tool_call_counts)
+        self.tool_round_trips = saved.tool_round_trips
+
+    def _validate_external_catalog(self, tools: Tools | None) -> None:
+        """Enable external tools only at a root without a live provider session."""
+        if tools is not None and any(
+            isinstance(tool, ExternalTool) for tool in tools.normalized_tools
+        ):
+            if self._is_child:
+                raise ValueError("External tools do not support child suspension.")
+            self._external_tools_enabled = True
+
+        if self._external_tools_enabled:
+            if self.model.requires_streaming:
+                raise ValueError(
+                    "External tools require a model without a live provider session."
+                )
+            if self.control_stream is not None:
+                self.control_stream.bind_steering(None)
+
+    def _reject_unresolved_external_calls(self) -> None:
+        """Reject unfinished calls without a saved continuation and result."""
+        if not self._external_tools_enabled:
+            return
+
+        # History alone cannot restore the saved tool budgets.
+        pending: set[str] = set()
+        for message in render_request_messages(None, self.state.history):
+            for raw_call in cast(list[object], message.get("tool_calls") or []):
+                call = ToolCall.model_validate(raw_call)
+                pending.add(call.id)
+            if message.get("role") == MessageRole.TOOL.value:
+                pending.discard(str(message.get("tool_call_id")))
+        if pending:
+            raise ValueError("An unfinished external call requires ToolResultInput.")
+
+    def _apply_external_result(self, tools: Tools | None) -> None:
+        """Validate the current tool and append its external result once."""
+        if self.external_input is None:
+            raise RuntimeError("External result admission requires a typed input.")
+        saved = self.external_input.continuation
+        definition = next(
+            (
+                tool
+                for tool in (tools.normalized_tools if tools is not None else ())
+                if tool.name == saved.tool_call.function.name
+            ),
+            None,
+        )
+        if not isinstance(definition, ExternalTool):
+            raise ValueError("The pending external tool is no longer registered.")
+        if definition.schema != saved.args_schema:
+            raise ValueError("The pending external tool contract has changed.")
+
+        # Shims must preserve the pending call. Keep its validated arguments:
+        # running argument validation again could generate different defaults.
+        current = AgentSnapshot.capture(agent_id=self.agent.id, run_state=self.state)
+        RunContinuation.from_json(saved.model_copy(update={"checkpoint": current}))
+        self.state.history.append(
+            _tool_result_message(
+                tool_call=saved.tool_call,
+                tool_name=definition.name,
+                content=self.external_input.result,
+            )
+        )
+        self._external_resume_applied = True
 
     async def _prepare_turn(self) -> PreparedTurn:
         self.state.turn_count += 1
@@ -380,6 +495,27 @@ class RunLoop:
         # An automatic successor keeps the previous turn's tool handlers.
         if self.inherited_turn is not None:
             turn.tools = self._inherited_tools(self.inherited_turn.tools, turn.tools)
+
+        # Check tools and pending calls after shims can change them.
+        self._validate_external_catalog(turn.tools)
+        if self.external_input is not None and not self._external_resume_applied:
+            self._apply_external_result(turn.tools)
+        elif self.external_input is None:
+            self._reject_unresolved_external_calls()
+
+        # Resume uses the smaller of the saved and current limits.
+        if turn.tools is not None and self.external_input is not None:
+            saved = self.external_input.continuation
+            limits = dict(turn.tools.tool_call_limits or {})
+            for name, limit in (saved.tool_call_limits or {}).items():
+                limits[name] = min(limits.get(name, limit), limit)
+            turn.tools = replace(
+                turn.tools,
+                max_tool_round_trips=min(
+                    turn.tools.max_tool_round_trips, saved.max_tool_round_trips
+                ),
+                tool_call_limits=limits or None,
+            )
 
         # Remove exhausted tools before the next model request.
         if turn.tools is not None:
@@ -499,6 +635,15 @@ class RunLoop:
         normal_calls = self._normal_tool_calls(
             tool_calls, completed.required_tool_call_ids, response
         )
+
+        # Provider-driven continuation or steering would bypass the pause checks.
+        if self._external_tools_enabled and (
+            completed.continuation is not None or completed.input_messages
+        ):
+            raise _model_behavior_error(
+                "External tools do not support automatic continuation or steering.",
+                raw_response=response,
+            )
 
         # Resolve a handoff once, before committing an ordinary tool round.
         handoff: _HandoffTarget | None = None
@@ -713,6 +858,12 @@ class RunLoop:
         tools: Tools | None,
         span: Span[Any],
     ) -> None:
+        if self._external_tools_enabled:
+            raise _model_behavior_error(
+                "External tool runs do not support asynchronous tool dispatch.",
+                raw_response=None,
+            )
+
         # Stream replay must not start the same tool call twice.
         previous = self.pending_calls.get(call.id)
         if previous is not None:
@@ -912,6 +1063,11 @@ class RunLoop:
             # Apply live inputs and dispatch tools while retaining the terminal
             # response.
             async for event in stream:
+                if self._external_tools_enabled and event.input_messages:
+                    raise _model_behavior_error(
+                        "External tool runs do not support steering input.",
+                        raw_response=event.response,
+                    )
                 if (
                     event.kind != ModelStreamEventKind.COMPLETED
                     and event.input_messages
@@ -981,6 +1137,48 @@ class RunLoop:
                 raise _model_behavior_error(
                     "Runner received a tool call for an unknown tool.",
                     raw_response=response,
+                )
+
+        # History and round usage are already recorded; save the pending call.
+        for call in tool_calls:
+            definition = tool_definitions[call.function.name or ""]
+            if isinstance(definition, ExternalTool):
+                if (
+                    not self._external_tools_enabled
+                    or len(tool_calls) != 1
+                    or self._has_pending_results()
+                ):
+                    raise _model_behavior_error(
+                        "An external tool requires a sole call at an idle root boundary.",
+                        raw_response=response,
+                    )
+                if (
+                    type(self.state.turn_count) is not int
+                    or type(self.state.revision) is not int
+                ):
+                    raise ValueError("Continuation counters must be integers.")
+                arguments = _parse_external_tool_args(call, definition)
+                self.tool_call_counts[definition.name] = (
+                    self.tool_call_counts.get(definition.name, 0) + 1
+                )
+                raise RunPaused(
+                    RunContinuation(
+                        checkpoint=AgentSnapshot.capture(
+                            agent_id=self.agent.id, run_state=self.state
+                        ),
+                        tool_call=call,
+                        arguments=arguments,
+                        args_schema=cast(dict[str, JsonValue], definition.schema),
+                        tool_call_counts=self.tool_call_counts,
+                        tool_round_trips=self.tool_round_trips,
+                        max_turns=self.max_turns,
+                        tool_call_limits=(
+                            dict(tools.tool_call_limits)
+                            if tools.tool_call_limits is not None
+                            else None
+                        ),
+                        max_tool_round_trips=tools.max_tool_round_trips,
+                    )
                 )
 
         # Execute a tool call batch in parallel and return aggregated result
@@ -1375,6 +1573,23 @@ def _resolved_child_descriptor(
         model=model,
         model_args=model_args,
     )
+
+
+def _parse_external_tool_args(
+    tool_call: ToolCall, definition: ExternalTool[Any]
+) -> dict[str, JsonValue]:
+    """Validate an external call against the registered argument model."""
+    try:
+        arguments = definition.args_type().model_validate_json(
+            tool_call.function.arguments or "{}"
+        )
+    except ValidationError as exc:
+        raise _model_behavior_error(
+            "External tool arguments do not match the registered schema.",
+            raw_response=None,
+        ) from exc
+
+    return cast(dict[str, JsonValue], arguments.model_dump(mode="json"))
 
 
 def _parse_delegated_tool_args[ArgsT: BaseModel](

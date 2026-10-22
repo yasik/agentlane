@@ -14,6 +14,7 @@ from agentlane.harness import (
     RunState,
     StateStore,
     Task,
+    ToolResultInput,
 )
 from agentlane.harness.agents import DefaultAgent
 from agentlane.messaging import AgentId
@@ -55,11 +56,12 @@ class _ReplacingRunner(Runner):
     async def run(
         self,
         agent: Task,
-        state: RunState,
+        state: RunState | ToolResultInput,
         *,
         hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
+        assert isinstance(state, RunState)
         del agent, hooks, cancellation_token
         replacement = RunState(
             instructions=state.instructions,
@@ -84,11 +86,12 @@ class _BlockingRunner(Runner):
     async def run(
         self,
         agent: Task,
-        state: RunState,
+        state: RunState | ToolResultInput,
         *,
         hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> RunResult:
+        assert isinstance(state, RunState)
         del agent, hooks, cancellation_token
         self.started.set()
         await self.release.wait()

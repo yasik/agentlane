@@ -26,8 +26,9 @@ from ._lifecycle import (
     DefaultHandoffTool,
     HandoffTool,
 )
-from ._run import RunHistoryItem, RunInput, RunResult, RunState
+from ._run import RunHistoryItem, RunResult, RunState
 from ._runner import Runner
+from ._snapshot import RunInput, RunPaused, ToolResultInput
 from ._stream import RunStream
 from ._task import Task
 from ._tooling import merge_tools, resolve_tools
@@ -185,14 +186,18 @@ class Agent(Task):
         run_input: RunInput,
         *,
         cancellation_token: CancellationToken | None = None,
-    ) -> RunResult:
-        """Queue one internal run input and wait for the final result."""
-        return await self._lifecycle.enqueue_input(
-            agent=self,
-            runner=self._runner,
-            run_input=run_input,
-            cancellation_token=cancellation_token,
-        )
+    ) -> RunResult | RunPaused:
+        """Queue one input and return its result or pause."""
+        try:
+            return await self._lifecycle.enqueue_input(
+                agent=self,
+                runner=self._runner,
+                run_input=run_input,
+                cancellation_token=cancellation_token,
+            )
+        except RunPaused as pause:
+            # Return the pause so runtime delivery does not convert it to text.
+            return pause
 
     async def enqueue_input_stream(
         self,
@@ -271,6 +276,17 @@ class Agent(Task):
         context: MessageContext,
     ) -> object:
         """Handle one inbound resumable run state."""
+        return await self._enqueue_input(
+            payload, cancellation_token=context.cancellation_token
+        )
+
+    @on_message
+    async def handle_tool_result(
+        self,
+        payload: ToolResultInput,
+        context: MessageContext,
+    ) -> object:
+        """Resume one pending tool call."""
         return await self._enqueue_input(
             payload, cancellation_token=context.cancellation_token
         )

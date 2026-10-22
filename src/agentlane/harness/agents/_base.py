@@ -18,7 +18,8 @@ import abc
 
 from agentlane.runtime import CancellationToken
 
-from .._run import RunInput, RunResult
+from .._run import RunResult
+from .._snapshot import RunInput
 from .._stream import RunStream
 
 
@@ -50,7 +51,7 @@ class AgentBase(abc.ABC):
         """Run or continue the primary conversation line.
 
         Args:
-            input: Raw run input or an explicit ``RunState`` resume payload.
+            input: Raw run input, explicit ``RunState``, or ``ToolResultInput``.
             cancellation_token: Optional shared cancellation token for the run.
 
         Returns:
@@ -91,7 +92,7 @@ class AgentBase(abc.ABC):
         """Run or continue the primary conversation line with live streaming.
 
         Args:
-            input: Raw run input or an explicit ``RunState`` resume payload.
+            input: Raw run input, explicit ``RunState``, or ``ToolResultInput``.
             cancellation_token: Optional shared cancellation token for the run.
 
         Returns:

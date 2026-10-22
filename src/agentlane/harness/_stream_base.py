@@ -31,9 +31,9 @@ class BaseRunStream[T](AsyncIterator[T]):
         self._cleanup_callbacks: list[Callable[[], None]] = []
 
     def bind_steering(
-        self, handler: Callable[[SteeringInput], Awaitable[SteeringReceipt]]
+        self, handler: Callable[[SteeringInput], Awaitable[SteeringReceipt]] | None
     ) -> None:
-        """Bind the control operation for this run or its lifecycle relay."""
+        """Bind or clear the control operation for this run or its lifecycle relay."""
         self._steer = handler
 
     async def steer(self, input: SteeringInput) -> SteeringReceipt:

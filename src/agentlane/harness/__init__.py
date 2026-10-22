@@ -25,12 +25,11 @@ from ._events import (
 )
 from ._hooks import RunnerHooks
 from ._json_file_state_store import JsonFileStateStore
-from ._lifecycle import AgentDescriptor, DefaultAgentTool, DefaultHandoff
+from ._lifecycle import AgentDescriptor, DefaultAgentTool, DefaultHandoff, ExternalTool
 from ._run import (
     ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX,
     LiveRunStateView,
     RunHistoryItem,
-    RunInput,
     RunInstructions,
     RunResult,
     RunResultRecord,
@@ -38,7 +37,13 @@ from ._run import (
     ShimState,
 )
 from ._runner import Runner
-from ._snapshot import AgentSnapshot
+from ._snapshot import (
+    AgentSnapshot,
+    RunContinuation,
+    RunInput,
+    RunPaused,
+    ToolResultInput,
+)
 from ._state_store import StateStore
 from ._stream import RunStream
 from ._task import Task
@@ -67,6 +72,7 @@ __all__ = [
     "AgentSnapshot",
     "DefaultAgentTool",
     "DefaultHandoff",
+    "ExternalTool",
     "HarnessEventType",
     "INHERIT_TOOLS",
     "InheritTools",
@@ -78,6 +84,7 @@ __all__ = [
     "RESTRICT_TOOLS",
     "RunAgentEndEvent",
     "RunAgentStartEvent",
+    "RunContinuation",
     "RunEvent",
     "RunEventKind",
     "RunEventRecord",
@@ -90,6 +97,7 @@ __all__ = [
     "RunLLMEndEvent",
     "RunLLMStartEvent",
     "RunModelStreamEvent",
+    "RunPaused",
     "RunPlanItem",
     "RunPlanUpdatedEvent",
     "RunResult",
@@ -113,5 +121,6 @@ __all__ = [
     "ToolError",
     "ToolFailure",
     "ToolOutcome",
+    "ToolResultInput",
     "tool_outcome",
 ]

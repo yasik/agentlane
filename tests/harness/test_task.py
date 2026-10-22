@@ -13,6 +13,7 @@ from agentlane.harness import (
     RunResult,
     RunState,
     Task,
+    ToolResultInput,
 )
 from agentlane.messaging import (
     AgentId,
@@ -87,7 +88,7 @@ class _FakeRunner(Runner):
     async def run(
         self,
         agent: Task,
-        state: RunState,
+        state: RunState | ToolResultInput,
         *,
         hooks: RunnerHooks | Sequence[RunnerHooks] | None = None,
         cancellation_token: CancellationToken | None = None,

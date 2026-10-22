@@ -116,16 +116,6 @@ class RunState:
     """Committed state generation, incremented after each successful run."""
 
 
-type RunInput = str | list[RunHistoryItem] | RunState
-"""Public input accepted by the default harness agent.
-
-A plain `str` starts or continues a conversation with a single user
-message. A `list[RunHistoryItem]` provides a richer multi-item payload (e.g.
-a `PromptSpec` mixed with prior `ModelResponse` objects). A
-`RunState` resumes a previously persisted conversation wholesale.
-"""
-
-
 class RunResultRecord(TypedDict):
     """Complete JSON-ready result inspection record, without an envelope."""
 
