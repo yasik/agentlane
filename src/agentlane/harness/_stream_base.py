@@ -118,12 +118,12 @@ def close_stream_callback(stream: BaseRunStream[Any]) -> Callable[[], None]:
     """Return a cleanup callback that closes a child run stream."""
 
     def close_stream() -> None:
-        asyncio.create_task(_close_stream(stream))
+        asyncio.create_task(close_run_stream(stream))
 
     return close_stream
 
 
-async def _close_stream(stream: BaseRunStream[Any]) -> None:
+async def close_run_stream(stream: BaseRunStream[Any]) -> None:
     await stream.aclose()
     with suppress(BaseException):
         await stream.result()
