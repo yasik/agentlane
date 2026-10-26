@@ -40,7 +40,11 @@ _GENERIC_READ_ERROR = "failed to read file"
 class _ToolArgs(BaseModel):
     """Model-visible arguments for the read tool."""
 
-    path: str = Field(description="File path to read.")
+    path: str = Field(
+        description=(
+            "One literal file path to read; braces and wildcards are not expanded."
+        )
+    )
     offset: int | None = Field(
         default=None,
         description=(

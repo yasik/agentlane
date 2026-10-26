@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The `read` tool's `path` description now says it takes one literal path, so models stop passing brace patterns such as `references/{a,b}.md` that `find` accepts and `read` reports as not found.
+
 ## [0.22.0] - 2026-10-20
 
 AgentLane `0.22.0` removes duplicate text from successful structured MCP results and fixes processing limits for JSON text. Consumers that read text blocks from these results must use `structuredContent` or set `include_structured_content=False`.
