@@ -50,6 +50,7 @@ from agentlane.models import (
     ToolExecutionContext,
     Tools,
     extract_retry_after,
+    internal_message,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import (
@@ -1292,3 +1293,27 @@ def test_responses_reasoning_serializes_in_fresh_process(
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_responses_client_strips_internal_metadata_from_all_message_shapes() -> None:
+    context = internal_message({"role": "user", "content": "inventory"}, origin="test")
+    native_item = internal_message(
+        {"type": "function_call_output", "call_id": "call-1", "output": "inventory"},
+        origin="test",
+    )
+    client = ResponsesClient(Config(api_key="test-key", model="test"))
+    create = AsyncMock(return_value=_make_response("ok"))
+    cast(Any, client)._openai_client.responses.create = create
+
+    asyncio.run(client.get_response([context, native_item]))
+
+    assert create.call_args.kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "inventory"}],
+        },
+        {"type": "function_call_output", "call_id": "call-1", "output": "inventory"},
+    ]
+    assert "_agentlane" in context
+    assert "_agentlane" in native_item

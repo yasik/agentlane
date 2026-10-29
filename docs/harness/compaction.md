@@ -56,9 +56,15 @@ summary placement, and optional summary output cap.
 recent history tail using both `keep_recent_messages` as a minimum history-item
 floor and `keep_recent_tokens` as an approximate token budget, summarizes older
 history with the model supplied on `CompactionRequest`, and returns replacement
-history with one tagged summary item plus the retained tail. The newest
-non-summary history item is always retained even when it alone is larger than
-the configured tail budget.
+history with one tagged summary item plus the retained tail.
+
+The compactor always retains the newest block that is neither internal context
+nor a summary, plus any internal messages after that block. This rule applies
+even when those items exceed the tail budget. Internal messages remain separate
+blocks; older internal messages follow the normal message and token budgets.
+If history contains only internal context, the compactor protects its newest
+block. Retained internal messages keep their runtime metadata; the summary
+model receives their contents without runtime metadata fields.
 
 ```python
 from agentlane.harness.compaction import DefaultCompactor, DefaultCompactorConfig

@@ -14,6 +14,7 @@ from ._interface import (
     Tools,
 )
 from ._json_repair import parse_json_dict
+from ._message_metadata import internal_message, is_internal_message, provider_messages
 from ._message_role import MessageRole
 from ._output_schema import OutputSchema, SchemaValidationResult, resolve_output_schema
 from ._prompts import (
@@ -94,6 +95,9 @@ from ._types import (
 )
 
 __all__ = [
+    "internal_message",
+    "is_internal_message",
+    "provider_messages",
     "ESCAPE_SEQUENCE_RETRY_MESSAGE",
     "SCHEMA_NORMALIZATION_ERROR",
     "ToolChoice",

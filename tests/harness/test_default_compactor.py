@@ -16,13 +16,50 @@ from agentlane.harness.compaction import (
     is_summary_item,
     render_summary_item,
 )
-from agentlane.models import MessageDict, Model, ModelResponse, Tools
+from agentlane.models import MessageDict, Model, ModelResponse, Tools, internal_message
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span
 
 from .tools_test_utils import SequenceModel, make_assistant_response, make_tool_call
 
 _TOKEN_PATTERN = re.compile(r"\[t=(\d+)]")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["user", "assistant"])
+async def test_internal_context_preserves_conversation_tail_across_compactions(
+    role: str,
+) -> None:
+    model = _RecordingModel([make_assistant_response("summary [t=1]")] * 3)
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=1)
+    )
+    history: list[RunHistoryItem] = [
+        {"role": "user", "content": "old request [t=20]"},
+        internal_message(
+            {"role": "user", "content": "old context [t=20]"}, origin="test"
+        ),
+        {"role": "assistant", "content": "old reply [t=20]"},
+        {"role": "user", "content": "another old request [t=20]"},
+    ]
+
+    for turn in range(3):
+        conversation = {"role": role, "content": f"request {turn} [t=20]"}
+        context = internal_message(
+            {"role": "user", "content": f"context {turn} [t=20]"}, origin="test"
+        )
+        history.extend([conversation, context])
+        result = await compactor.compact(_request(history, model))
+
+        # Internal context must not take the latest conversation's tail slot.
+        assert result.history[-2:] == [conversation, context]
+        assert all("_agentlane" not in message for message in model.calls[-1])
+        history = list(result.history)
+        history.append({"role": "assistant", "content": "reply [t=20]"})
+
+    assert any(
+        message.get("content") == "old context [t=20]" for message in model.calls[0]
+    )
 
 
 class _RecordingModel(SequenceModel):
@@ -716,3 +753,104 @@ async def test_default_compactor_rejects_summarizer_request_overflow() -> None:
         await compactor.compact(_request(history, model, context_window=10))
 
     assert model.calls == []
+
+
+@pytest.mark.asyncio
+async def test_internal_context_keeps_tool_block_and_trailing_context_in_order() -> (
+    None
+):
+    tool_response = make_assistant_response(
+        "calling [t=20]",
+        tool_calls=[make_tool_call(tool_id="call_1", name="echo", arguments="{}")],
+    )
+    tool_result: MessageDict = {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "result [t=20]",
+    }
+    tail: list[RunHistoryItem] = [
+        tool_response,
+        tool_result,
+        internal_message({"role": "user", "content": "first [t=20]"}, origin="test"),
+        internal_message({"role": "user", "content": "second [t=20]"}, origin="test"),
+    ]
+    history: list[RunHistoryItem] = [
+        {"role": "user", "content": f"old {index} [t=20]"} for index in range(3)
+    ]
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=1)
+    )
+
+    result = await compactor.compact(_request([*history, *tail], model))
+
+    assert result.history[1:] == tail
+    assert result.dropped_items == tuple(history)
+
+
+@pytest.mark.asyncio
+async def test_all_internal_history_protects_only_newest_block() -> None:
+    history: list[RunHistoryItem] = [
+        internal_message(
+            {"role": "user", "content": f"context {index} [t=20]"}, origin="test"
+        )
+        for index in range(4)
+    ]
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=1)
+    )
+
+    result = await compactor.compact(_request(history, model))
+
+    assert result.history[1:] == history[-1:]
+    assert result.dropped_items == tuple(history[:-1])
+
+
+@pytest.mark.asyncio
+async def test_older_internal_context_uses_its_own_tail_budget() -> None:
+    history: list[RunHistoryItem] = [
+        {"role": "user", "content": f"old {index} [t=20]"} for index in range(3)
+    ]
+    context = internal_message(
+        {"role": "user", "content": "context [t=2]"}, origin="test"
+    )
+    latest = {"role": "assistant", "content": "latest [t=2]"}
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=4, keep_recent_messages=1)
+    )
+
+    result = await compactor.compact(_request([*history, context, latest], model))
+
+    # Retaining context does not require retaining its preceding old message.
+    assert result.history[1:] == [context, latest]
+    assert result.dropped_items == tuple(history)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("summary_after_anchor", [False, True])
+async def test_internal_tail_does_not_prevent_prior_summary_replacement(
+    summary_after_anchor: bool,
+) -> None:
+    summary = render_summary_item(bridge="Continue", summary_text="old summary [t=40]")
+    old = {"role": "user", "content": "old request [t=20]"}
+    latest = {"role": "user", "content": "latest [t=2]"}
+    context = internal_message(
+        {"role": "user", "content": "context [t=2]"}, origin="test"
+    )
+    history: list[RunHistoryItem] = (
+        [old, latest, summary, context]
+        if summary_after_anchor
+        else [old, summary, latest, context]
+    )
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=1)
+    )
+
+    result = await compactor.compact(_request(history, model))
+
+    assert result.history[1:] == [latest, context]
+    assert result.dropped_items == (old, summary)
+    assert sum(is_summary_item(item) for item in result.history) == 1

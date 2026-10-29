@@ -155,6 +155,26 @@ of the harness request builder. Supported items include:
 items before installing them. It is the sanctioned whole-history rewrite point
 for compaction and similar persisted history transformations.
 
+### Internal context messages
+
+Mark host-generated context with
+[`internal_message()`](../models/overview.md#internal-message-metadata) before
+appending it to history. Use `is_internal_message(item, origin=...)` to find
+context owned by your shim. Keep provider fields such as `name` for their
+provider-defined purpose.
+
+To preserve a cached request prefix, append a context message only when its
+contents change or compaction removes it. Keep earlier messages and system
+instructions unchanged. When appending from `transform_messages(...)`, append
+the marked message to both `turn` history and the returned message list.
+The metadata helpers do not inject or deduplicate context.
+
+The model receives the context contents. Stored history, live hooks, and
+snapshots retain its runtime metadata. Event `to_dict()` and `dumps()` and
+result `to_dict()` omit internal messages automatically, including messages
+in nested history and model requests. For details, see
+[Internal messages](event-serialization.md#internal-messages).
+
 ## Shim State
 
 Shims have two state buckets.

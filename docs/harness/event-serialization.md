@@ -14,8 +14,8 @@ text = event.dumps()
 `to_dict()` returns a new `RunEventRecord`, a typed dictionary with two fields:
 
 - `type: str`: the source `RunEventKind` value, `event.kind.value`.
-- `payload: dict[str, JsonValue]`: the complete converted event fields with
-  their original nesting.
+- `payload: dict[str, JsonValue]`: the converted event fields with their original
+  nesting and internal messages omitted.
 
 `dumps()` returns the same record as compact JSON text. It preserves Unicode,
 escapes embedded newlines, and rejects nonfinite numbers. It adds no line
@@ -23,13 +23,30 @@ terminator, SSE framing, or host metadata. Both methods use the same private
 conversion code. There is no public standalone serializer function.
 
 Use `to_dict()` when a host adds its own envelope; no JSON decode step is needed.
-Use `dumps()` when the complete record can be written directly to a transport.
+Use `dumps()` when the serialized record can be written directly to a transport.
+
+## Internal messages
+
+Event `to_dict()`, event `dumps()`, and `RunResult.to_dict()` automatically omit
+messages marked with `internal_message()`. Stream clients use these methods
+without an additional filtering step.
+
+Serialization removes internal messages from lists at every nesting level,
+including model requests and result history. If a mapping value is an internal
+message, serialization keeps its key and replaces the value with `None` (`null`
+in JSON). For example, a result whose `final_output` is an internal message
+retains `final_output: null`. Ordinary messages remain visible by default.
+
+Live state, hooks, and `AgentSnapshot` retain internal messages and their runtime
+metadata. Use snapshots for authoritative storage and restoration. The host
+still owns access control and filtering for other private state and provider
+data.
 
 ## Final Results
 
-`RunResult.to_dict()` returns a new `RunResultRecord` with the complete converted
-`final_output`, `responses`, `turn_count`, and `run_state` fields. It uses the
-same internal conversion code as events. It adds no event kind or transport
+`RunResult.to_dict()` returns a new `RunResultRecord` with converted
+`final_output`, `responses`, `turn_count`, and `run_state` fields. It omits internal
+messages with the same conversion code as events. It adds no event kind or transport
 envelope. Import both public result types from `agentlane.harness`.
 
 ```python
@@ -107,10 +124,11 @@ rendered view of the stored template and values. It does not necessarily contain
 the messages sent to the model client. Template rendering errors propagate to
 the caller.
 
-`RunLLMStartEvent.messages`, serialized at `payload.messages`, contains the
-messages passed to the model client after harness transformations, including
-shim message transformations. Use this field to inspect the model request
-messages. A shim can change these messages without changing the stored
+The live `RunLLMStartEvent.messages` field contains the messages after harness
+transformations, including shim message transformations. It retains runtime
+message metadata. The harness removes that metadata before calling the model
+client. Serialization writes this field at `payload.messages` with internal
+messages omitted. A shim can change these messages without changing the stored
 `PromptSpec`, so the two rendered message lists can differ. This field does not
 describe later provider-specific wire conversion inside the model client.
 
@@ -127,7 +145,7 @@ Model kinds and approval statuses are converted as source values, not selected
 through a transport-name mapping.
 
 The host must authorize access before it sends these payloads. Source events can
-contain instructions, full history, tool data, and provider metadata. Exception
+contain instructions, ordinary history, tool data, and provider metadata. Exception
 messages are preserved, not sanitized; traceback and runtime attributes are not
 included. This serializer is not a redaction boundary.
 
@@ -151,5 +169,5 @@ and retrieve its result, handling failure or cancellation. See
   ordinary control-value text fallback never applies to them. See
   [Protocol and Lifecycle](../process-bridge/protocol.md).
 
-New transports can use these methods for complete native inspection records and
+Transports can use these methods for serialized run records and
 add their own framing and failure policy.
