@@ -21,6 +21,7 @@ from agentlane.harness import (
     ToolConfig,
 )
 from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.filesystem import FileWriter
 from agentlane.harness.mcp import (
     MCPAuthorizationContext,
     MCPClientManager,
@@ -100,7 +101,13 @@ class _FakeLease(MCPClientLease):
     def server(self) -> MCPServer:
         return self.config
 
-    async def tools(self) -> tuple[Tool[BaseModel, object], ...]:
+    async def tools(
+        self,
+        *,
+        result_writer: FileWriter | None = None,
+        result_directory: str | None = None,
+    ) -> tuple[Tool[BaseModel, object], ...]:
+        del result_writer, result_directory
         assert not self.released
         assert not self.manager.closed
         self.reads += 1

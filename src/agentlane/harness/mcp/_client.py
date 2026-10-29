@@ -10,6 +10,7 @@ import structlog
 from agentlane.models import Tool, ToolErrorKind, ToolFailure
 from agentlane.runtime import CancellationToken
 
+from ..filesystem import FileWriter
 from ._auth import MCPAuthorizationState
 from ._catalog import get_catalog
 from ._connection import MCPConnection, close_connection
@@ -34,6 +35,7 @@ from ._errors import (
     MCPShutdownTimeoutError,
 )
 from ._operation import mcp_operation
+from ._output import validate_result_storage
 from ._sdk import exception_kind
 from ._tools import call_tool, native_tool, tool_failure
 from ._types import (
@@ -106,11 +108,20 @@ class MCPClientLease:
     def server(self) -> MCPServer:
         return self._entry.server
 
-    async def tools(self) -> tuple[Tool[Any, Any], ...]:
+    async def tools(
+        self,
+        *,
+        result_writer: FileWriter | None = None,
+        result_directory: str | None = None,
+    ) -> tuple[Tool[Any, Any], ...]:
         if self._released:
             raise MCPError("MCP connection lease has been released.")
         if self._manager.closed:
             raise MCPError(CLIENT_CLOSED)
+
+        validate_result_storage(
+            result_writer, result_directory, self.server.result_policy.max_text_chars
+        )
 
         discovery = asyncio.create_task(
             self._tools(), name=f"agentlane-mcp-discovery-{self.server.name}"
@@ -126,7 +137,12 @@ class MCPClientLease:
                 name: str, arguments: dict[str, Any], token: CancellationToken
             ) -> str | ToolFailure:
                 return await self._call_tool(
-                    catalog.authorization_generation, name, arguments, token
+                    catalog.authorization_generation,
+                    name,
+                    arguments,
+                    token,
+                    result_writer=result_writer,
+                    result_directory=result_directory,
                 )
 
             return tuple(
@@ -204,6 +220,9 @@ class MCPClientLease:
         name: str,
         arguments: dict[str, Any],
         token: CancellationToken,
+        *,
+        result_writer: FileWriter | None,
+        result_directory: str | None,
     ) -> str | ToolFailure:
         with mcp_operation(authorization_context=self._authorization_context):
             if token.is_cancelled:
@@ -270,6 +289,8 @@ class MCPClientLease:
                     token,
                     lambda: self._manager.closed,
                     remaining,
+                    result_writer=result_writer,
+                    result_directory=result_directory,
                 )
             finally:
                 self._entry.calls -= 1

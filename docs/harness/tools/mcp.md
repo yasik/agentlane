@@ -164,14 +164,77 @@ servers retry transient discovery failures on later turns. AgentLane does
 not automatically repeat a tool call after a transport failure or timeout.
 
 To change output limits, set `MCPServer.result_policy=MCPResultPolicy(...)`.
-The defaults are 32 content blocks and 51,200 characters. Servers repeat
-structured content in text blocks for clients that cannot read it. If a
-successful result has structured content, the model gets the structured
-content and the other content blocks, but not the text blocks. A failed result
+The inline defaults are 32 content blocks and 51,200 characters. Servers repeat
+structured content in text blocks for clients that cannot read it. If a successful result has structured content, the model
+gets the structured content and the other content blocks, but not the text
+blocks. A failed result
 keeps its text blocks, because they contain the failure details. Set
 `include_structured_content=False` to omit structured results and keep all
 content blocks.
 Image, audio, and resource bodies are returned as metadata.
+
+JSON text that exceeds parser limits or contains duplicate keys is omitted
+and marks the result as incomplete. This applies with and without storage;
+an incomplete result is not saved as a full result.
+
+## Store full results
+
+Pass an existing `FileWriter` and a directory to `MCPToolsShim`. Give the
+native [`read`](./read.md) tool the same filesystem:
+
+```python
+shim = MCPToolsShim(
+    servers=(notes,),
+    result_writer=filesystem,
+    result_directory="/workspace/tool-results",
+)
+reader = read_tool(reader=filesystem)
+shims = (shim, HarnessToolsShim((reader,)))
+```
+
+Import `HarnessToolsShim` and `read_tool` from `agentlane.harness.tools`, and
+pass `shims` to `AgentDescriptor`. Use a directory that the filesystem can
+resolve. See [File I/O interfaces](../filesystem.md) for mounts and backends.
+
+With storage enabled, AgentLane sanitizes the selected content once with its
+existing renderer. Saved content includes all supported text blocks and embedded
+resource text. `include_structured_content` controls structured content in both
+the saved file and the inline response. Image, audio, and blob bodies remain
+metadata.
+
+`max_text_chars` and `max_content_blocks` limit the inline response. If the
+selected content fits both limits, the result returns inline. Otherwise,
+AgentLane saves one UUID-named `.txt` file. The file retains text beyond both
+inline limits. Inline responses keep the structured-content and resource
+metadata behavior described above.
+
+A saved result returns a preview and `[Full MCP result: "<path>"]`. The model
+calls `read(path="<path>", offset=1, limit=200)` and follows the reader's next
+offset. Text lines wrap at 4,096 characters so large strings remain readable.
+The file contains serialized MCP text with JSON escaping; line wrapping means
+it is not a stable JSON format. “Full” means the complete supported text
+representation selected by policy.
+
+The response, including its path, stays within `max_text_chars`. Storage uses
+the existing write and cancellation handling. If a write fails, the preview
+reports `[Full MCP result unavailable.]`. The provider call is not repeated.
+The host owns write deadlines and file retention.
+
+Configure both storage options together. With neither option set, the existing
+response and processing limits are unchanged.
+
+`MCPToolsShim` checks that the resolved directory, UUID filename, and reference
+format fit each server's `max_text_chars`, including JSON escaping. Direct calls
+to `MCPClientLease.tools()` check the supplied directory before tool discovery.
+If the reference cannot fit, configuration raises `ValueError`. Use a shorter
+directory or increase `max_text_chars`.
+
+Storage preparation has separate processing limits: depth 32, 4,096 nodes,
+8 Mi characters processed, and 8 Mi serialized characters. These internal
+limits bound renderer work. They are independent of the inline limits and
+application storage quotas. If a processing limit is reached, AgentLane writes
+no file and returns a bounded preview with
+`[MCP processing limit exceeded; full result not saved.]`.
 
 ## Troubleshooting
 
@@ -187,7 +250,7 @@ Use the symptom or error to choose the next step:
 | A tool call times out | Check whether the server completed the operation before retrying. Increase `tool_timeout_seconds` only if the operation needs more time. |
 | `MCPPoolCapacityError` | Reduce concurrent runs or increase `MCPClientLimits.max_connections`. |
 | `MCPShutdownTimeoutError` | Check for a server that does not stop. Increase `shutdown_timeout_seconds` if needed; call `aclose()` again to wait for ongoing cleanup. |
-| Results contain `truncated` or `omittedBlocks` | Request less data or increase the relevant `MCPResultPolicy` limit. `max_text_chars` must be at least 128. |
+| Results contain `truncated` or `omittedBlocks` | Configure `result_writer` and `result_directory`, request less data, or increase the relevant `MCPResultPolicy` limit. `max_text_chars` must be at least 128. |
 
 Tool execution failures return `ToolFailure`. Treat server results as
 untrusted input, and keep secrets out of tool arguments and results.
