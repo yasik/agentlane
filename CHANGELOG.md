@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-29
+
+AgentLane `0.24.0` keeps internal context in model input and agent snapshots while filtering marked messages from serialized client streams. Existing stream clients need no additional filtering step.
+
+### Added
+
+- Added `internal_message()`, `is_internal_message()`, and `provider_messages()` to mark internal context, identify it by origin, and remove runtime metadata at provider boundaries. Message contents remain available to the model, and metadata survives history copies and snapshot restoration ([`870fb9a`](https://github.com/yasik/agentlane/commit/870fb9a)).
+
+### Changed
+
+- Event `to_dict()`, event `dumps()`, and result `to_dict()` filter marked internal messages by default, including provider-native items without a `role` field. Internal list entries are omitted; direct internal mapping values become `null` while required fields remain present. Ordinary messages remain visible ([`870fb9a`](https://github.com/yasik/agentlane/commit/870fb9a)).
+- Compaction protects the newest conversation block and trailing internal context in order. Older internal context uses normal budgets without being grouped with the preceding block. Histories containing only internal messages retain the newest block ([`870fb9a`](https://github.com/yasik/agentlane/commit/870fb9a)).
+
 ## [0.23.0] - 2026-10-28
 
 AgentLane `0.23.0` can save large MCP tool results to files for the `read` tool. Applications supply the filesystem and storage directory.
@@ -438,7 +451,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
-[Unreleased]: https://github.com/yasik/agentlane/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/yasik/agentlane/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/yasik/agentlane/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/yasik/agentlane/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/yasik/agentlane/compare/v0.20.0...v0.21.0
