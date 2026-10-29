@@ -11,7 +11,62 @@ from agentlane.harness import RunnerHooks, RunState, Task
 from agentlane.harness._lifecycle import LifecycleRunner
 from agentlane.harness._run_loop import AgentDelegationState, RunLoop
 from agentlane.messaging import AgentId
-from agentlane.models import MessageDict, Model, ModelResponse, ToolExecutor, Tools
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    ToolExecutor,
+    Tools,
+    internal_message,
+)
+
+from .tools_test_utils import (
+    SequenceModel,
+    StreamingSequenceModel,
+    make_assistant_response,
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_loop_keeps_internal_metadata_for_hooks_only(streaming: bool) -> None:
+    model_type = StreamingSequenceModel if streaming else SequenceModel
+    model = model_type([make_assistant_response("done")])
+    context = internal_message({"role": "user", "content": "inventory"}, origin="test")
+    state = RunState(instructions=None, history=["hello", context], responses=[])
+    agent = Mock(
+        spec=Task,
+        model=model,
+        model_args=None,
+        tools=None,
+        base_tools=None,
+        schema=None,
+        instructions=None,
+        shims=None,
+        task_id=AgentId.from_values("test", "metadata"),
+    )
+    agent.name = "test"
+    hooks = create_autospec(RunnerHooks, instance=True)
+    loop = RunLoop(
+        agent=agent,
+        runner_task=agent,
+        model=model,
+        state=state,
+        delegate_runner=create_autospec(LifecycleRunner, instance=True),
+        agent_delegation=AgentDelegationState(max_depth=4, max_threads=16),
+        tool_executor=ToolExecutor(),
+        hooks=hooks,
+        emit=(lambda event: None) if streaming else None,
+    )
+
+    await loop.run()
+
+    assert hooks.on_llm_start.call_args.args[1][-1] == context
+    assert model.calls[0] == [
+        {"role": "user", "content": "hello"},
+        {"role": "user", "content": "inventory"},
+    ]
+    assert state.history[1] == context
 
 
 def response(message: MessageDict) -> ModelResponse:

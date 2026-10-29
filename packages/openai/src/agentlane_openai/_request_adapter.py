@@ -10,6 +10,7 @@ from agentlane.models import (
     OutputSchema,
     ToolChoice,
     Tools,
+    provider_messages,
     resolve_output_schema,
 )
 
@@ -31,7 +32,7 @@ def messages_to_input(messages: list[MessageDict]) -> list[ResponseInputItem]:
     """
     result: list[ResponseInputItem] = []
 
-    for msg in messages:
+    for msg in provider_messages(messages):
         # Replay native items directly so they are not also converted from chat
         # fields.
         if "openai_responses_input" in msg:

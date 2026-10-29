@@ -9,6 +9,8 @@ from agentlane.models import (
     MessageRole,
     ModelResponse,
     get_content_or_none,
+    is_internal_message,
+    provider_messages,
 )
 
 from .._run import RunHistoryItem
@@ -70,7 +72,7 @@ class DefaultCompactor:
         )
 
         summarizer_response = await request.model(
-            summarizer_messages,
+            provider_messages(summarizer_messages),
             extra_call_args=call_args,
         )
         summary_text = _summary_text(summarizer_response)
@@ -206,6 +208,14 @@ def _history_blocks(history: tuple[RunHistoryItem, ...]) -> list[_HistoryBlock]:
     index = 0
     while index < len(history):
         item = history[index]
+
+        # Internal context belongs to the preceding conversational block. It
+        # must not displace the latest human input from the protected tail.
+        if is_internal_message(item) and blocks:
+            blocks[-1].items.append(item)
+            index += 1
+            continue
+
         if _tool_result_call_id(item) is not None:
             # Tool results must stay attached to nearby context. A tool result
             # without a visible assistant opener is malformed history, but

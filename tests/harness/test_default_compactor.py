@@ -16,13 +16,47 @@ from agentlane.harness.compaction import (
     is_summary_item,
     render_summary_item,
 )
-from agentlane.models import MessageDict, Model, ModelResponse, Tools
+from agentlane.models import MessageDict, Model, ModelResponse, Tools, internal_message
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span
 
 from .tools_test_utils import SequenceModel, make_assistant_response, make_tool_call
 
 _TOKEN_PATTERN = re.compile(r"\[t=(\d+)]")
+
+
+@pytest.mark.asyncio
+async def test_internal_context_preserves_human_tail_across_compactions() -> None:
+    model = _RecordingModel([make_assistant_response("summary [t=1]")] * 3)
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=1)
+    )
+    history: list[RunHistoryItem] = [
+        {"role": "user", "content": "old request [t=20]"},
+        internal_message(
+            {"role": "user", "content": "old context [t=20]"}, origin="test"
+        ),
+        {"role": "assistant", "content": "old reply [t=20]"},
+        {"role": "user", "content": "another old request [t=20]"},
+    ]
+
+    for turn in range(3):
+        human = {"role": "user", "content": f"request {turn} [t=20]"}
+        context = internal_message(
+            {"role": "user", "content": f"context {turn} [t=20]"}, origin="test"
+        )
+        history.extend([human, context])
+        result = await compactor.compact(_request(history, model))
+
+        # Internal context must not take the latest human request's tail slot.
+        assert result.history[-2:] == [human, context]
+        assert all("_agentlane" not in message for message in model.calls[-1])
+        history = list(result.history)
+        history.append({"role": "assistant", "content": "reply [t=20]"})
+
+    assert any(
+        message.get("content") == "old context [t=20]" for message in model.calls[0]
+    )
 
 
 class _RecordingModel(SequenceModel):

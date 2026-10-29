@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx2
 import pytest
 from agentlane_openai import ResponseError, ResponsesClient, ResponsesFactory
+from agentlane_openai._request_adapter import messages_to_input
 from openai import RateLimitError
 from openai.types.responses import Response as OpenAIResponse
 from openai.types.responses import (
@@ -50,6 +51,7 @@ from agentlane.models import (
     ToolExecutionContext,
     Tools,
     extract_retry_after,
+    internal_message,
 )
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import (
@@ -1292,3 +1294,23 @@ def test_responses_reasoning_serializes_in_fresh_process(
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_responses_adapter_strips_internal_metadata_from_all_message_shapes() -> None:
+    context = internal_message({"role": "user", "content": "inventory"}, origin="test")
+    native_item: MessageDict = {
+        "type": "message",
+        "content": "native inventory",
+        "_agentlane": {"visibility": "internal", "origin": "test"},
+    }
+
+    assert messages_to_input([context, native_item]) == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "inventory"}],
+        },
+        {"type": "message", "content": "native inventory"},
+    ]
+    assert "_agentlane" in context
+    assert "_agentlane" in native_item

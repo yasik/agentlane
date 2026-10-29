@@ -54,6 +54,35 @@ tool choice, steering status, and continuation remain unchanged.
 Provider adapters share `ESCAPE_SEQUENCE_RETRY_MESSAGE` and
 `SCHEMA_NORMALIZATION_ERROR` for model validation feedback.
 
+## Internal message metadata
+
+Use `internal_message()` to mark runtime context that the model must receive
+but a public conversation must omit:
+
+```python
+from agentlane.models import internal_message, is_internal_message
+
+context = internal_message(
+    {"role": "user", "content": "Available files: report.csv"},
+    origin="file_inventory",
+)
+assert is_internal_message(context, origin="file_inventory")
+```
+
+The helper returns a copy with JSON-safe visibility and origin metadata in the
+reserved `_agentlane` field. The origin must be nonempty. Use
+`is_internal_message(message)` to detect context from any origin. Messages
+without this metadata remain public by default.
+
+The harness, LiteLLM client, and OpenAI adapter remove runtime metadata before
+provider calls. They preserve message contents and order. Custom provider
+adapters can call `provider_messages(messages)` from `agentlane.models` at
+their request boundary. Keep metadata in stored history and request hooks.
+
+History copies and `AgentSnapshot` JSON restoration retain the metadata.
+For public output, apply the
+[public message projection](../harness/event-serialization.md#public-message-projection).
+
 ## Prompts, Tools, And Output
 
 The three pieces fit together:

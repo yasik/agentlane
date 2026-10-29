@@ -25,6 +25,26 @@ conversion code. There is no public standalone serializer function.
 Use `to_dict()` when a host adds its own envelope; no JSON decode step is needed.
 Use `dumps()` when the complete record can be written directly to a transport.
 
+## Public message projection
+
+Native event and result records retain internal messages and their runtime
+metadata. Before publishing a record, apply `public_message_projection()`:
+
+```python
+from agentlane.harness import public_message_projection
+
+public_record = public_message_projection(dict(event.to_dict()))
+```
+
+The helper accepts a JSON value and returns a copy. It removes messages marked
+with `internal_message()` from lists and mapping values at every nesting level,
+including model requests and result history. A standalone internal message
+becomes `None`. Ordinary messages remain visible by default.
+
+Keep the complete native value for inspection and authoritative snapshot
+storage. This projection only removes marked messages. The host still owns
+access control and filtering for other private state and provider data.
+
 ## Final Results
 
 `RunResult.to_dict()` returns a new `RunResultRecord` with the complete converted
@@ -108,8 +128,9 @@ the messages sent to the model client. Template rendering errors propagate to
 the caller.
 
 `RunLLMStartEvent.messages`, serialized at `payload.messages`, contains the
-messages passed to the model client after harness transformations, including
-shim message transformations. Use this field to inspect the model request
+messages after harness transformations, including shim message transformations.
+It retains runtime message metadata; the harness removes that metadata before
+calling the model client. Use this field to inspect the model request
 messages. A shim can change these messages without changing the stored
 `PromptSpec`, so the two rendered message lists can differ. This field does not
 describe later provider-specific wire conversion inside the model client.

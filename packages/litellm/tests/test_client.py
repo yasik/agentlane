@@ -25,6 +25,7 @@ from agentlane.models import (
     ToolCall,
     ToolExecutionContext,
     Tools,
+    internal_message,
 )
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import (
@@ -50,7 +51,10 @@ class StructuredResponse(BaseModel):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_litellm_delegates_through_sdk3_http_client(streaming: bool) -> None:
+@pytest.mark.parametrize("internal", [False, True])
+async def test_litellm_delegates_through_sdk3_http_client(
+    streaming: bool, internal: bool
+) -> None:
     requests: list[dict[str, Any]] = []
 
     def respond(request: httpx2.Request) -> httpx2.Response:
@@ -77,6 +81,8 @@ async def test_litellm_delegates_through_sdk3_http_client(streaming: bool) -> No
         client = Client(Config(api_key="test", model="openai/gpt-4o", max_retries=0))
         arguments = {"client": native, "timeout": openai.Timeout(2.0)}
         messages: list[MessageDict] = [{"role": "user", "content": "hello"}]
+        if internal:
+            messages = [internal_message(messages[0], origin="test")]
         if streaming:
             events = [
                 event
@@ -94,7 +100,8 @@ async def test_litellm_delegates_through_sdk3_http_client(streaming: bool) -> No
             assert result.choices[0].message.content == "ok"
 
     assert len(requests) == 1
-    assert requests[0]["messages"] == messages
+    assert requests[0]["messages"] == [{"role": "user", "content": "hello"}]
+    assert ("_agentlane" in messages[0]) is internal
 
 
 @pytest.mark.parametrize("streaming", [False, True])

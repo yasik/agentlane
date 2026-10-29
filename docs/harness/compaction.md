@@ -60,6 +60,11 @@ history with one tagged summary item plus the retained tail. The newest
 non-summary history item is always retained even when it alone is larger than
 the configured tail budget.
 
+Internal context messages remain with the preceding history block. They do
+not create a separate recent-message boundary that can displace the latest
+user request. Retained internal messages keep their runtime metadata; the
+summary model receives their contents without runtime metadata fields.
+
 ```python
 from agentlane.harness.compaction import DefaultCompactor, DefaultCompactorConfig
 

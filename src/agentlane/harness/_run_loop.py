@@ -33,6 +33,7 @@ from agentlane.models import (
     ToolExecutor,
     Tools,
     ToolSpec,
+    provider_messages,
     retry_on_errors,
 )
 from agentlane.models.run import DefaultRunContext
@@ -862,7 +863,7 @@ class RunLoop:
 
         await self.hooks.on_llm_start(self.agent, messages)
         response = await model(
-            messages,
+            provider_messages(messages),
             extra_call_args=model_args,
             schema=self.runner_task.schema,
             tools=tools,
@@ -898,7 +899,7 @@ class RunLoop:
             AsyncExitStack() as scope,
         ):
             stream = model.stream_response(
-                messages,
+                provider_messages(messages),
                 extra_call_args=model_args,
                 schema=self.runner_task.schema,
                 tools=tools,

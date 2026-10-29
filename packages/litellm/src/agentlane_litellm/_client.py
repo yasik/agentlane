@@ -31,6 +31,7 @@ from agentlane.models import (
     Tools,
     has_escape_sequence_explosion,
     is_retryable_by_status_code,
+    provider_messages,
     resolve_output_schema,
     retry_on_errors,
 )
@@ -782,7 +783,7 @@ class Client(Model[TResponseType]):
                 async with self._rate_limiter:
                     result = await _litellm_acompletion(
                         model=self._model,
-                        messages=messages,
+                        messages=provider_messages(messages),
                         **call_args,
                     )
                     # Record token usage for TPM limiters
@@ -794,7 +795,7 @@ class Client(Model[TResponseType]):
 
             return await _litellm_acompletion(
                 model=self._model,
-                messages=messages,
+                messages=provider_messages(messages),
                 **call_args,
             )
 
@@ -822,7 +823,7 @@ class Client(Model[TResponseType]):
         async def _llm_call() -> ModelResponse | CustomStreamWrapper:
             return await _litellm_astream_completion(
                 model=self._model,
-                messages=messages,
+                messages=provider_messages(messages),
                 **call_args,
             )
 
