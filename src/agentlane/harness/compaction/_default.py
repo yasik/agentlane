@@ -129,12 +129,16 @@ def _split_history_for_summary(
     tail_tokens = 0
     tail_items = 0
     tail_closed = False
+    blocks = _history_blocks(request.history)
+    tail_anchor = _tail_anchor(blocks)
 
     # Walk newest-to-oldest so the retained tail is always a contiguous suffix.
     # Once a real block falls outside both recency budgets, every older real
     # block must be summarized; otherwise compaction could leave holes in the
     # conversation that make the model see cause without effect.
-    for block in reversed(_history_blocks(request.history)):
+    for index in range(len(blocks) - 1, -1, -1):
+        block = blocks[index]
+
         # A previous summary is treated as old compressed context, not as fresh
         # tail. Recompaction should replace summaries instead of stacking them.
         if block.is_summary:
@@ -146,14 +150,14 @@ def _split_history_for_summary(
 
         # After the tail is closed, avoid estimating older blocks. They are
         # already committed to the summarizer side of the split.
-        if tail_closed:
+        protected = tail_anchor is not None and index >= tail_anchor
+        if tail_closed and not protected:
             compacted_blocks_reversed.append(block)
             compacted_block_count += 1
             continue
 
         block_tokens = _estimate_history_tokens(request, block.items)
-        should_keep = _should_keep_in_tail(
-            has_tail=bool(tail_blocks_reversed),
+        should_keep = protected or _should_keep_in_tail(
             tail_items=tail_items,
             tail_tokens=tail_tokens,
             block_tokens=block_tokens,
@@ -178,21 +182,31 @@ def _split_history_for_summary(
     )
 
 
+def _tail_anchor(blocks: list[_HistoryBlock]) -> int | None:
+    """Protect the newest conversation block and any trailing internal context."""
+    fallback: int | None = None
+    for index in range(len(blocks) - 1, -1, -1):
+        block = blocks[index]
+        if block.is_summary:
+            continue
+
+        # With no ordinary conversation, protect only the newest context block.
+        if fallback is None:
+            fallback = index
+        if not all(is_internal_message(item) for item in block.items):
+            return index
+
+    return fallback
+
+
 def _should_keep_in_tail(
     *,
-    has_tail: bool,
     tail_items: int,
     tail_tokens: int,
     block_tokens: int,
     keep_recent_messages: int,
     keep_recent_tokens: int,
 ) -> bool:
-    # Always keep the newest non-summary block. This protects the next request
-    # from losing the immediately preceding user input or tool result even when
-    # that single block is larger than the configured budget.
-    if not has_tail:
-        return True
-
     # The message floor is evaluated before the token ceiling. That deliberately
     # favors conversational continuity over an exact tail budget: the later
     # overflow and shrink checks still protect the model context if the minimum
@@ -208,13 +222,6 @@ def _history_blocks(history: tuple[RunHistoryItem, ...]) -> list[_HistoryBlock]:
     index = 0
     while index < len(history):
         item = history[index]
-
-        # Internal context belongs to the preceding conversational block. It
-        # must not displace the latest human input from the protected tail.
-        if is_internal_message(item) and blocks:
-            blocks[-1].items.append(item)
-            index += 1
-            continue
 
         if _tool_result_call_id(item) is not None:
             # Tool results must stay attached to nearby context. A tool result

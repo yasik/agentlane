@@ -5,11 +5,11 @@ from pydantic import JsonValue
 from agentlane.models import is_internal_message
 
 
-def public_message_projection(value: JsonValue) -> JsonValue:
+def project_messages(value: JsonValue) -> JsonValue:
     """Copy a JSON payload without internal messages at any nesting level.
 
-    Use this on serialized events, results, or conversation records before
-    publication. Native records and authoritative snapshots remain complete.
+    Event and result serialization calls this before publication.
+    Live state and authoritative snapshots remain complete.
     Internal list entries and mapping values are omitted; a standalone internal
     message becomes null. Ordinary messages remain visible by default.
     """
@@ -18,16 +18,14 @@ def public_message_projection(value: JsonValue) -> JsonValue:
 
     if isinstance(value, dict):
         return {
-            key: public_message_projection(item)
+            key: project_messages(item)
             for key, item in value.items()
             if not is_internal_message(item)
         }
 
     if isinstance(value, list):
         return [
-            public_message_projection(item)
-            for item in value
-            if not is_internal_message(item)
+            project_messages(item) for item in value if not is_internal_message(item)
         ]
 
     return value

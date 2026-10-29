@@ -26,7 +26,6 @@ from ._events import (
 from ._hooks import RunnerHooks
 from ._json_file_state_store import JsonFileStateStore
 from ._lifecycle import AgentDescriptor, DefaultAgentTool, DefaultHandoff
-from ._public_projection import public_message_projection
 from ._run import (
     ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX,
     LiveRunStateView,
@@ -62,7 +61,6 @@ from ._tooling import (
 )
 
 __all__ = [
-    "public_message_projection",
     "ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX",
     "Agent",
     "AgentDescriptor",

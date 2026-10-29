@@ -169,10 +169,11 @@ instructions unchanged. When appending from `transform_messages(...)`, append
 the marked message to both `turn` history and the returned message list.
 The metadata helpers do not inject or deduplicate context.
 
-The model receives the context contents. Stored history and snapshots retain
-its runtime metadata. Hosts must apply
-[`public_message_projection()`](event-serialization.md#public-message-projection)
-before publishing conversation or event payloads.
+The model receives the context contents. Stored history, live hooks, and
+snapshots retain its runtime metadata. Event `to_dict()` and `dumps()` and
+result `to_dict()` omit internal messages automatically, including messages
+in nested history and model requests. For details, see
+[Internal messages](event-serialization.md#internal-messages).
 
 ## Shim State
 

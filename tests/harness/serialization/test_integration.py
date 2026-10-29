@@ -10,9 +10,36 @@ from pydantic import JsonValue
 
 from agentlane.harness import RunEventKind, RunEventRecord
 from agentlane.harness.agents import DefaultAgent
-from agentlane.models import PromptSpec
+from agentlane.models import PromptSpec, internal_message, is_internal_message
 
 from ..tools_test_utils import SequenceModel
+
+
+@pytest.mark.asyncio
+async def test_stream_serialization_hides_internal_context_by_default(
+    transformed_request_agent: DefaultAgent,
+    transformed_request_model: SequenceModel,
+) -> None:
+    context = internal_message(
+        {"role": "user", "content": "PRIVATE INVENTORY"}, origin="test"
+    )
+    stream = await transformed_request_agent.run_events(["Explain this", context])
+    try:
+        async for event in stream:
+            assert "PRIVATE INVENTORY" not in event.dumps()
+            assert "PRIVATE INVENTORY" not in json.dumps(event.to_dict())
+
+        result = await stream.result()
+    finally:
+        await stream.aclose()
+
+    assert "PRIVATE INVENTORY" not in json.dumps(result.to_dict())
+    assert result.run_state is not None
+    assert any(is_internal_message(item) for item in result.run_state.history)
+    assert transformed_request_model.calls[0][-1] == {
+        "role": "user",
+        "content": "PRIVATE INVENTORY",
+    }
 
 
 @pytest.mark.asyncio

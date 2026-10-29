@@ -165,7 +165,7 @@ class RunEventRecord(TypedDict):
     """Source event name from RunEventKind."""
 
     payload: dict[str, JsonValue]
-    """Complete converted source fields with their original nesting."""
+    """Converted source fields with original nesting and internal messages omitted."""
 
 
 class _SerializableRunEvent:
@@ -174,9 +174,10 @@ class _SerializableRunEvent:
     __slots__ = ()
 
     def to_dict(self) -> RunEventRecord:
-        """Return a complete JSON-ready record with type and payload fields.
+        """Return a JSON-ready stream record with type and payload fields.
 
         Preserve supported source fields, nesting, nulls, metadata, and results.
+        Omit internal messages at every nesting level without changing live state.
         Render PromptSpec through its public methods; this is not a snapshot codec.
 
         Returns:
@@ -196,7 +197,7 @@ class _SerializableRunEvent:
         }
 
     def dumps(self) -> str:
-        """Return the complete record as compact Unicode JSON text.
+        """Return the stream record as compact Unicode JSON text.
 
         Uses the same conversion and errors as to_dict(). Does not add SSE
         framing, line terminators, or host session/run identifiers.

@@ -12,10 +12,12 @@ from pydantic import BaseModel, JsonValue, RootModel
 
 from agentlane.models import PromptSpec, PromptTemplateBase
 
+from ._public_projection import project_messages
+
 
 def serialize_value(value: object) -> JsonValue:
-    """Convert a supported value while preserving its complete structure."""
-    return _serialize_value(value, set())
+    """Convert supported values and omit internal messages from stream records."""
+    return project_messages(_serialize_value(value, set()))
 
 
 def _serialize_value(value: object, active: set[int]) -> JsonValue:

@@ -79,9 +79,10 @@ provider calls. They preserve message contents and order. Custom provider
 adapters can call `provider_messages(messages)` from `agentlane.models` at
 their request boundary. Keep metadata in stored history and request hooks.
 
-History copies and `AgentSnapshot` JSON restoration retain the metadata.
-For public output, apply the
-[public message projection](../harness/event-serialization.md#public-message-projection).
+History copies, live request hooks, and `AgentSnapshot` JSON restoration retain
+the metadata. Event `to_dict()` and `dumps()` and result `to_dict()` omit
+internal messages by default. For details, see
+[Internal messages](../harness/event-serialization.md#internal-messages).
 
 ## Prompts, Tools, And Output
 

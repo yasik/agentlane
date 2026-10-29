@@ -1,9 +1,6 @@
 """Internal context stays durable but does not enter public conversation records."""
 
 import json
-from typing import cast
-
-from pydantic import JsonValue
 
 from agentlane.harness import (
     AgentSnapshot,
@@ -11,7 +8,6 @@ from agentlane.harness import (
     RunLLMStartEvent,
     RunResult,
     RunState,
-    public_message_projection,
 )
 from agentlane.harness._render import render_request_messages
 from agentlane.harness._run import copy_run_state
@@ -47,7 +43,9 @@ def test_internal_metadata_survives_copies_and_json_restore() -> None:
         ]
 
 
-def test_public_projection_covers_requests_results_and_nested_history() -> None:
+def test_default_serialization_omits_internal_messages_without_client_filtering() -> (
+    None
+):
     ordinary = {"role": "user", "content": "Find my report"}
     context = internal_message(
         {"role": "user", "content": "PRIVATE INVENTORY"}, origin="inventory"
@@ -60,15 +58,18 @@ def test_public_projection_covers_requests_results_and_nested_history() -> None:
     ]
 
     for event in events:
-        native = cast(JsonValue, event.to_dict())
-        public = public_message_projection(native)
-        assert "PRIVATE INVENTORY" in json.dumps(native)
-        assert "PRIVATE INVENTORY" not in json.dumps(public)
-        assert "Find my report" in json.dumps(public)
+        record = event.to_dict()
+        assert "PRIVATE INVENTORY" not in json.dumps(record)
+        assert "Find my report" in json.dumps(record)
+        assert json.loads(event.dumps()) == record
 
-    assert public_message_projection(cast(JsonValue, context)) is None
-    assert public_message_projection({"nested": cast(JsonValue, context)}) == {}
+    assert "PRIVATE INVENTORY" not in json.dumps(result.to_dict())
     assert state.history == [ordinary, context]
+
+    snapshot = AgentSnapshot.capture(
+        agent_id=AgentId.from_values("assistant", "main"), run_state=state
+    )
+    assert "PRIVATE INVENTORY" in snapshot.model_dump_json()
 
 
 def test_old_snapshot_and_ordinary_messages_remain_public() -> None:
@@ -81,5 +82,19 @@ def test_old_snapshot_and_ordinary_messages_remain_public() -> None:
     ).to_run_state()
     messages = render_request_messages(restored.instructions, restored.history)
 
-    assert public_message_projection(cast(JsonValue, messages)) == messages
+    event = RunLLMStartEvent(task_name="test", task_id="1", messages=messages)
+    assert event.to_dict()["payload"]["messages"] == messages
     assert provider_messages(messages) == messages
+
+
+def test_default_result_serialization_filters_nested_message_containers() -> None:
+    context = internal_message(
+        {"role": "user", "content": "private context"}, origin="test"
+    )
+    ordinary = {"role": "user", "content": "visible", "name": "brain_artifacts"}
+    output = {"context": context, "nested": {"messages": [context, ordinary]}}
+    result = RunResult(final_output=output, responses=[], turn_count=1)
+
+    assert result.to_dict()["final_output"] == {"nested": {"messages": [ordinary]}}
+    assert result.final_output == output
+    assert "context" in output

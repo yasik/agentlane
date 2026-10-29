@@ -127,7 +127,7 @@ a `PromptSpec` mixed with prior `ModelResponse` objects). A
 
 
 class RunResultRecord(TypedDict):
-    """Complete JSON-ready result inspection record, without an envelope."""
+    """JSON-ready result record with internal messages omitted, without an envelope."""
 
     final_output: JsonValue
     responses: list[JsonValue]
@@ -159,6 +159,7 @@ class RunResult:
         """Return all result fields with strict native inspection conversion.
 
         Preserve full responses and state, including rendered stored prompts.
+        Omit internal messages from the record; the live run state is unchanged.
         This is not a snapshot codec. Unsupported values and non-string keys
         raise TypeError; cycles and nonfinite numbers raise ValueError. Prompt
         rendering errors propagate unchanged, even in fields a host does not show.
