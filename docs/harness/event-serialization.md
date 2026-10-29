@@ -31,10 +31,11 @@ Event `to_dict()`, event `dumps()`, and `RunResult.to_dict()` automatically omit
 messages marked with `internal_message()`. Stream clients use these methods
 without an additional filtering step.
 
-Serialization removes internal messages from lists and mapping values at every
-nesting level, including model requests and result history. A field that directly
-contains an internal message is omitted. Ordinary messages remain visible by
-default.
+Serialization removes internal messages from lists at every nesting level,
+including model requests and result history. If a mapping value is an internal
+message, serialization keeps its key and replaces the value with `None` (`null`
+in JSON). For example, a result whose `final_output` is an internal message
+retains `final_output: null`. Ordinary messages remain visible by default.
 
 Live state, hooks, and `AgentSnapshot` retain internal messages and their runtime
 metadata. Use snapshots for authoritative storage and restoration. The host

@@ -21,6 +21,7 @@ from agentlane.models import (
     ModelStreamEvent,
     ModelStreamEventKind,
     ToolCall,
+    internal_message,
 )
 
 from .helpers import FakeAgent, wait_for_event_count, wait_for_stream
@@ -41,6 +42,53 @@ def test_backend_preserves_text_at_former_preview_limits(length: int) -> None:
 )
 def test_backend_preserves_structured_results(result: object) -> None:
     _assert_backend_result(result)
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_backend_completes_with_internal_tool_and_final_results(native: bool) -> None:
+    value = internal_message(
+        (
+            {"type": "function_call_output", "call_id": "call", "output": "PRIVATE"}
+            if native
+            else {"role": "user", "content": "PRIVATE"}
+        ),
+        origin="test",
+    )
+
+    async def scenario() -> None:
+        output = StringIO()
+        agent = FakeAgent()
+        backend = BridgeBackend(agent=agent, events=EventWriter(output))
+        await backend.handle_command(PromptCommand(text="go"))
+        stream = await wait_for_stream(agent)
+        call = ToolCall.model_validate(
+            {
+                "id": "call",
+                "type": "function",
+                "function": {"name": "example", "arguments": "{}"},
+            }
+        )
+        tool_end = RunToolEndEvent(
+            task_name="Root", task_id="root", tool_call=call, result=value, ok=True
+        )
+        assert tool_end.to_dict()["payload"]["result"] is None
+        stream.emit(tool_end)
+        stream.finish(RunResult(final_output=value, responses=[], turn_count=1))
+
+        events = await wait_for_event_count(output, 3)
+        assert [event["type"] for event in events] == [
+            "run_start",
+            "run_event",
+            "run_complete",
+        ]
+        assert events[1]["event"]["payload"]["result"] is None
+        assert events[2]["final_output"] is None
+        assert "PRIVATE" not in output.getvalue()
+        assert "_agentlane" not in output.getvalue()
+        assert tool_end.result is value
+        await backend.close()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("kind", ["list", "dict"])

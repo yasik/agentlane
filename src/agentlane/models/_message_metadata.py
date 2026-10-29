@@ -27,9 +27,6 @@ def is_internal_message(value: object, *, origin: str | None = None) -> bool:
         return False
 
     message = cast(Mapping[str, object], value)
-    if not isinstance(message.get("role"), str):
-        return False
-
     metadata = message.get(_METADATA_KEY)
     if not isinstance(metadata, Mapping):
         return False

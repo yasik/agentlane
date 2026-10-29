@@ -10,18 +10,14 @@ def project_messages(value: JsonValue) -> JsonValue:
 
     Event and result serialization calls this before publication.
     Live state and authoritative snapshots remain complete.
-    Internal list entries and mapping values are omitted; a standalone internal
-    message becomes null. Ordinary messages remain visible by default.
+    Internal list entries are omitted. Internal mapping values and standalone
+    messages become null. Ordinary messages remain visible by default.
     """
     if is_internal_message(value):
         return None
 
     if isinstance(value, dict):
-        return {
-            key: project_messages(item)
-            for key, item in value.items()
-            if not is_internal_message(item)
-        }
+        return {key: project_messages(item) for key, item in value.items()}
 
     if isinstance(value, list):
         return [

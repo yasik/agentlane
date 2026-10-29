@@ -74,6 +74,9 @@ reserved `_agentlane` field. The origin must be nonempty. Use
 `is_internal_message(message)` to detect context from any origin. Messages
 without this metadata remain public by default.
 
+Detection uses the reserved metadata marker and also supports provider-native
+input items without a `role` field.
+
 The harness, LiteLLM client, and OpenAI adapter remove runtime metadata before
 provider calls. They preserve message contents and order. Custom provider
 adapters can call `provider_messages(messages)` from `agentlane.models` at

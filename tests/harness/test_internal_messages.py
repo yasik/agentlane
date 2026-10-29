@@ -2,17 +2,25 @@
 
 import json
 
+import pytest
+
 from agentlane.harness import (
+    AgentDescriptor,
     AgentSnapshot,
     RunAgentEndEvent,
     RunLLMStartEvent,
     RunResult,
     RunState,
 )
-from agentlane.harness._render import render_request_messages
-from agentlane.harness._run import copy_run_state
+from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.compaction import render_request_messages
 from agentlane.messaging import AgentId
-from agentlane.models import internal_message, is_internal_message, provider_messages
+from agentlane.models import (
+    MessageDict,
+    internal_message,
+    is_internal_message,
+    provider_messages,
+)
 
 
 def test_internal_metadata_survives_copies_and_json_restore() -> None:
@@ -25,7 +33,13 @@ def test_internal_metadata_survives_copies_and_json_restore() -> None:
 
     # Repeated saves must keep the same provider prefix and runtime identity.
     for _ in range(3):
-        state = copy_run_state(state)
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(name="Assistant"), run_state=state
+        )
+        copied = agent.run_state
+        assert copied is not None
+        assert copied is not state
+        state = copied
         snapshot = AgentSnapshot.capture(
             agent_id=AgentId.from_values("assistant", "main"), run_state=state
         )
@@ -95,6 +109,49 @@ def test_default_result_serialization_filters_nested_message_containers() -> Non
     output = {"context": context, "nested": {"messages": [context, ordinary]}}
     result = RunResult(final_output=output, responses=[], turn_count=1)
 
-    assert result.to_dict()["final_output"] == {"nested": {"messages": [ordinary]}}
+    assert result.to_dict()["final_output"] == {
+        "context": None,
+        "nested": {"messages": [ordinary]},
+    }
     assert result.final_output == output
     assert "context" in output
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "user", "content": "PRIVATE"},
+        {"type": "function_call_output", "call_id": "call-1", "output": "PRIVATE"},
+    ],
+)
+def test_marked_message_shapes_are_hidden_by_default(message: MessageDict) -> None:
+    context = internal_message(message, origin="test")
+    assert context is not message
+    assert "_agentlane" not in message
+    assert is_internal_message(context)
+    assert is_internal_message(context, origin="test")
+    assert not is_internal_message(context, origin="other")
+    assert provider_messages([context]) == [message]
+
+    # Required output fields survive filtering, while message lists omit the item.
+    result = RunResult(final_output=context, responses=[], turn_count=1)
+    assert result.to_dict() == {
+        "final_output": None,
+        "responses": [],
+        "turn_count": 1,
+        "run_state": None,
+    }
+    event = RunLLMStartEvent(task_name="test", task_id="1", messages=[context])
+    assert event.to_dict()["payload"]["messages"] == []
+    assert "PRIVATE" not in event.dumps()
+    assert result.final_output is context
+
+
+@pytest.mark.parametrize(
+    "metadata", [None, "internal", [], {}, {"visibility": "public"}]
+)
+def test_unmarked_metadata_stays_public(metadata: object) -> None:
+    message = {"role": "user", "content": "visible", "_agentlane": metadata}
+    assert not is_internal_message(message)
+    result = RunResult(final_output=message, responses=[], turn_count=1)
+    assert result.to_dict()["final_output"] == message
