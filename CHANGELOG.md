@@ -7,9 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-28
+
+AgentLane `0.23.0` can save large MCP tool results to files for the `read` tool. Applications supply the filesystem and storage directory.
+
+### Added
+
+- Added optional MCP result storage through `FileWriter`, with bounded inline previews and file references. Separate processing limits prevent incomplete results from being saved as full results ([`1ca9745`](https://github.com/yasik/agentlane/commit/1ca9745)).
+
 ### Fixed
 
-- The `read` tool's `path` description now says it takes one literal path, so models stop passing brace patterns such as `references/{a,b}.md` that `find` accepts and `read` reports as not found.
+- Clarified that the `read` tool accepts one literal path, so models do not pass brace patterns such as `references/{a,b}.md` ([`39fa3a7`](https://github.com/yasik/agentlane/commit/39fa3a7)).
 
 ## [0.22.0] - 2026-10-20
 
@@ -430,7 +438,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
-[Unreleased]: https://github.com/yasik/agentlane/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/yasik/agentlane/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/yasik/agentlane/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/yasik/agentlane/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/yasik/agentlane/compare/v0.19.0...v0.20.0
