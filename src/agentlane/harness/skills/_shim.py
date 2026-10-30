@@ -5,11 +5,18 @@ from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool, ToolExecutionContext, Tools
+from agentlane.models import (
+    MessageDict,
+    Tool,
+    ToolExecutionContext,
+    Tools,
+    internal_message,
+)
 from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
 from .._constants import DEFAULT_SKILLS_SHIM_NAME
+from .._render import render_request_messages
 from .._run import ACTIVE_SKILL_NAMES_STATE_KEY_SUFFIX, RunState, ShimState
 from .._tooling import exclude_tools, filter_tools
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
@@ -51,6 +58,7 @@ class _BoundSkillsShim(BoundShim):
         self._system_prompt = system_prompt
         self._tool_name = tool_name
         self._current_run_state: RunState | None = None
+        self._loaded_skill_content: dict[str, str] = {}
         self._tool = _build_activate_skill_tool(
             tool_name=tool_name,
             handler=self._activate_skill,
@@ -66,6 +74,9 @@ class _BoundSkillsShim(BoundShim):
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         self._current_run_state = turn.run_state
+        await self._restore_active_skills(
+            turn, render_request_messages(None, turn.run_state.history)
+        )
         if len(self._catalog) == 0:
             return
         if turn.run_state.turn_count == 1:
@@ -85,6 +96,49 @@ class _BoundSkillsShim(BoundShim):
             shim_state=turn.run_state.shim_state,
             active_names_key=active_skill_names_key(self._shim_name),
         )
+
+    async def transform_messages(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> list[MessageDict] | None:
+        """Restore complete active instructions removed from conversation history."""
+        restored = await self._restore_active_skills(turn, messages)
+
+        return [*messages, *restored] if restored else None
+
+    async def _restore_active_skills(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> list[MessageDict]:
+        """Supply missing instructions before compaction and after history replacement."""
+        restored: list[MessageDict] = []
+        for name in _active_skill_names(
+            shim_state=turn.run_state.shim_state,
+            key=active_skill_names_key(self._shim_name),
+        ):
+            # Reuse the activation payload so ordinary turns do not reload skills
+            # or move their instructions to the end of each request.
+            content = self._loaded_skill_content.get(name)
+            if content is None:
+                if self._catalog.has(name):
+                    content = render_loaded_skill(await self._catalog.load(name))
+                    self._loaded_skill_content[name] = content
+                else:
+                    content = (
+                        f"Previously active skill {name!r} is no longer available "
+                        "in the current catalog. Its instructions could not be restored."
+                    )
+            if any(message.get("content") == content for message in messages):
+                continue
+
+            # Persist only a missing payload. Later turns retain this exact
+            # prefix, and snapshots carry the recovery through a process restart.
+            message = internal_message(
+                {"role": "user", "content": content},
+                origin=f"{self._shim_name}:active-skill",
+            )
+            turn.append_history_item(message)
+            restored.append(message)
+
+        return restored
 
     async def _activate_skill(
         self,
@@ -120,7 +174,10 @@ class _BoundSkillsShim(BoundShim):
         if not appended:
             return _already_active_message(skill_name)
 
-        return render_loaded_skill(loaded_skill)
+        content = render_loaded_skill(loaded_skill)
+        self._loaded_skill_content[skill_name] = content
+
+        return content
 
     def _require_shim_state(self) -> ShimState:
         """Return the persisted shim state for the current run."""

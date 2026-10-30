@@ -1,19 +1,24 @@
 """Shim integration for first-party harness tool definitions."""
 
+import json
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from itertools import chain
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
+
+from pydantic import ValidationError
 
 from agentlane.harness.filesystem import (
     FileReader,
     ReadableFileSystem,
     WritableFileSystem,
 )
+from agentlane.models import MessageDict, ToolCall, internal_message
 from agentlane.models.run import RunContext
 
 from .._constants import DEFAULT_AGENT_TOOL_NAME
+from .._render import render_request_messages
 from .._run import RunState, ShimState
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._agent import agent_tool
@@ -92,6 +97,7 @@ class _BoundHarnessToolsShim(BoundShim):
         self._current_run_state = turn.run_state
         tool_specs = tuple(definition.tool for definition in self._definitions)
         turn.add_tools(tool_specs)
+        self._restore_plan(turn, render_request_messages(None, turn.run_state.history))
 
         if self._prompt_block is None:
             return
@@ -104,6 +110,38 @@ class _BoundHarnessToolsShim(BoundShim):
 
         turn.append_system_instruction(self._prompt_block)
         turn.run_state.shim_state[marker_key] = True
+
+    async def transform_messages(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> list[MessageDict] | None:
+        """Restore the latest plan only when its exact state is absent."""
+        message = self._restore_plan(turn, messages)
+
+        return [*messages, message] if message is not None else None
+
+    def _restore_plan(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> MessageDict | None:
+        """Supply missing plan state before compaction and after history replacement."""
+        snapshot = turn.run_state.shim_state.get(plan_state_key(self._shim_name))
+        if snapshot is None:
+            return None
+
+        content = "Current task plan:\n" + json.dumps(snapshot, sort_keys=True)
+        if any(message.get("content") == content for message in messages):
+            return None
+        if _plan_is_visible(snapshot, messages):
+            return None
+
+        # Append once after history loss. Keeping this record in history avoids
+        # regenerating a moving context tail on ordinary tool-loop turns.
+        message = internal_message(
+            {"role": "user", "content": content},
+            origin=f"{self._shim_name}:plan",
+        )
+        turn.append_history_item(message)
+
+        return message
 
     def _require_shim_state(self) -> ShimState:
         """Return the persisted shim state for the current run."""
@@ -159,6 +197,33 @@ class HarnessToolsShim(Shim):
                 prompt_guidelines=self._prompt_guidelines,
             ),
         )
+
+
+def _plan_is_visible(snapshot: object, messages: list[MessageDict]) -> bool:
+    """Find the complete latest plan in surviving assistant tool arguments."""
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
+            continue
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for raw_call in cast(list[object], calls):
+            try:
+                call = ToolCall.model_validate(raw_call)
+                if call.function.name != PLAN_TOOL_NAME:
+                    continue
+                args: object = json.loads(call.function.arguments)
+            except (ValidationError, ValueError, TypeError):
+                continue
+            if isinstance(args, dict):
+                fields = cast(dict[str, object], args)
+                if {
+                    "explanation": fields.get("explanation"),
+                    "plan": fields.get("plan"),
+                } == snapshot:
+                    return True
+
+    return False
 
 
 def base_harness_tools(

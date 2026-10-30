@@ -46,3 +46,9 @@ rejected by the normal tool argument validation path.
 When used through `HarnessToolsShim`, the latest plan update is persisted in
 `RunState.shim_state` under `harness-tools:plan` for the default shim name.
 Custom shim names use the same pattern: `{shim_name}:plan`.
+
+If compaction removes the plan's tool call, `HarnessToolsShim` restores the
+persisted explanation and all plan steps as an internal context message. It
+also restores a missing plan after a JSON snapshot restore. The shim appends
+the message only when the exact plan is absent, so ordinary turns keep the
+previous request prefix.

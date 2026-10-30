@@ -1,9 +1,12 @@
 """Harness shim that installs conversation compaction results."""
 
 import inspect
+import json
 import time
 from collections.abc import MutableMapping, Sequence
-from typing import Protocol, cast, runtime_checkable
+from copy import deepcopy
+from dataclasses import replace
+from typing import Any, Protocol, cast, runtime_checkable
 
 from agentlane.models import (
     MessageDict,
@@ -11,8 +14,12 @@ from agentlane.models import (
     Model,
     ModelResponse,
     get_usage_totals,
+    internal_message,
+    is_internal_message,
 )
+from agentlane.models.run import RunContext
 
+from .._run import RunState
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._config import CompactionShimConfig
 from ._constants import (
@@ -23,8 +30,10 @@ from ._constants import (
     SOURCE_SERVER_USAGE,
 )
 from ._default import DefaultCompactor
+from ._errors import ContextOverflowError
 from ._estimate import estimate_message_tokens
 from ._render import render_request_messages
+from ._summary import is_summary_item
 from ._types import (
     CompactionReport,
     CompactionRequest,
@@ -116,9 +125,27 @@ class _BoundCompactionShim(BoundShim):
         self._estimator = estimator
         self._model = model
         self._on_compact = on_compact
+        self._pending_report: CompactionReport | None = None
+
+    async def on_run_start(
+        self, state: RunState, transient_state: RunContext[Any]
+    ) -> None:
+        """Capture the latest human request once for this invocation."""
+        del transient_state
+        for message in reversed(render_request_messages(None, state.history)):
+            if (
+                message.get("role") == MessageRole.USER.value
+                and not is_summary_item(message)
+                and not is_internal_message(message)
+            ):
+                state.shim_state[f"{self._config.name}:latest-user"] = deepcopy(message)
+                break
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         """Compact persisted history when the configured threshold is reached."""
+        self._pending_report = None
+        _normalize_output_limits(turn, self._config)
+
         # The shim runs before the runner builds the next request. All accounting
         # must therefore use the same rendered input shape that the runner would
         # send if no compaction happened.
@@ -168,8 +195,76 @@ class _BoundCompactionShim(BoundShim):
             return
 
         if report.compacted:
-            turn.replace_history(result.history)
+            history = list(result.history)
+            latest = turn.run_state.shim_state.get(f"{self._config.name}:latest-user")
+            if isinstance(latest, dict) and latest not in render_request_messages(
+                None, history
+            ):
+                # Keep the exact request before the assistant/tool tail it owns.
+                index = 0
+                while index < len(history) and is_summary_item(history[index]):
+                    index += 1
+                history.insert(index, deepcopy(cast(MessageDict, latest)))
+            turn.replace_history(history)
+        self._pending_report = report
+
+    async def on_request_prepared(
+        self,
+        turn: PreparedTurn,
+        messages: list[MessageDict],
+        error: BaseException | None,
+    ) -> None:
+        """Report the accepted replacement or the restored original history."""
+        report = self._pending_report
+        self._pending_report = None
+        if report is None:
+            return
+
+        if error is not None:
+            report = replace(
+                report,
+                compacted=False,
+                items_after=len(turn.run_state.history),
+                estimated_tokens_after=self._estimator(
+                    render_request_messages(
+                        turn.run_state.instructions, turn.run_state.history
+                    )
+                )
+                + _request_overhead(turn, self._estimator),
+                dropped_items=(),
+                error=str(error),
+            )
+        else:
+            history = turn.run_state.history
+            rendered_history = render_request_messages(None, history)
+            report = replace(
+                report,
+                items_after=len(history),
+                estimated_tokens_after=self._estimator(messages)
+                + _request_overhead(turn, self._estimator),
+                dropped_items=tuple(
+                    item
+                    for item in report.dropped_items
+                    if not all(
+                        message in rendered_history
+                        for message in render_request_messages(None, [item])
+                    )
+                ),
+            )
+
         await _notify_compaction(self._on_compact, report)
+
+    async def validate_request(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> None:
+        """Reject overflow after all restored and application context is present."""
+        required = self._estimator(messages) + _request_overhead(turn, self._estimator)
+        if required > self._config.context_window:
+            raise ContextOverflowError(
+                "Final request exceeds the configured context window "
+                f"({required} estimated tokens including tools and output > "
+                f"{self._config.context_window}). Original history was preserved."
+            )
 
     async def transform_messages(
         self,
@@ -195,7 +290,7 @@ def _context_signal(
         turn.run_state.instructions,
         turn.run_state.history,
     )
-    local_estimate = estimator(messages)
+    local_estimate = estimator(messages) + _request_overhead(turn, estimator)
     reported_tokens = _latest_reported_tokens(turn.run_state.responses)
     trigger_tokens = config.resolved_trigger_tokens()
     estimated_tokens, source = _effective_tokens(
@@ -216,6 +311,46 @@ def _context_signal(
         turn_count=turn.run_state.turn_count,
         history_item_count=len(turn.run_state.history),
     )
+
+
+def _request_overhead(turn: PreparedTurn, estimator: TokenEstimator) -> int:
+    output_tokens = 0
+    for key in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
+        value = (turn.model_args or {}).get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"Model output limit {key} must be a positive integer.")
+        output_tokens = max(output_tokens, value)
+
+    # Tool schemas occupy input context even when history is small.
+    schemas = (
+        [tool.schema for tool in turn.tools.normalized_tools] if turn.tools else []
+    )
+    schema_tokens = (
+        estimator([{"role": "system", "content": json.dumps(schemas)}])
+        if schemas
+        else 0
+    )
+
+    return schema_tokens + output_tokens
+
+
+def _normalize_output_limits(turn: PreparedTurn, config: CompactionShimConfig) -> None:
+    args = dict(turn.model_args or {})
+    has_limit = False
+    for key in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
+        value = args.get(key)
+        if value is None:
+            args.pop(key, None)
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"Model output limit {key} must be a positive integer.")
+        has_limit = True
+
+    if not has_limit and config.default_max_tokens is not None:
+        args["max_tokens"] = config.default_max_tokens
+    turn.model_args = args or None
 
 
 def _latest_reported_tokens(responses: Sequence[ModelResponse]) -> int | None:
@@ -401,14 +536,17 @@ def _failure_notice_state_key(shim_name: str) -> str:
 
 def _failure_notice(report: CompactionReport) -> MessageDict:
     error = report.error or "unknown compaction failure"
-    return {
-        "role": MessageRole.USER.value,
-        "content": (
-            "Context compaction failed before this turn. The original "
-            "conversation history was preserved, so continue normally. "
-            f"Compaction error: {_single_line(error)}"
-        ),
-    }
+    return internal_message(
+        {
+            "role": MessageRole.USER.value,
+            "content": (
+                "Context compaction failed before this turn. The original "
+                "conversation history was preserved, so continue normally. "
+                f"Compaction error: {_single_line(error)}"
+            ),
+        },
+        origin="agentlane.compaction",
+    )
 
 
 def _single_line(value: str) -> str:

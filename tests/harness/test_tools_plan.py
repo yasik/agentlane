@@ -1,12 +1,15 @@
 import asyncio
+import json
 from typing import Any, cast
 
 from agentlane.harness import (
     AgentDescriptor,
+    AgentSnapshot,
     RunPlanItem,
     RunPlanUpdatedEvent,
 )
 from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.compaction import render_request_messages
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     PLAN_TOOL_NAME,
@@ -15,6 +18,7 @@ from agentlane.harness.tools import (
     PlanUpdate,
     plan_tool,
 )
+from agentlane.messaging import AgentId
 from agentlane.models import (
     MessageDict,
     Model,
@@ -22,6 +26,7 @@ from agentlane.models import (
     ModelStreamEvent,
     ModelStreamEventKind,
     get_content_or_none,
+    is_internal_message,
 )
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken
@@ -220,8 +225,7 @@ def test_plan_tool_runs_through_normal_runner_execution() -> None:
                             tool_id="call_1",
                             name="write_plan",
                             arguments=(
-                                '{"plan":['
-                                '{"step":"Create plan","status":"completed"}]}'
+                                '{"plan":[{"step":"Create plan","status":"completed"}]}'
                             ),
                         )
                     ],
@@ -329,5 +333,116 @@ def test_plan_tool_prompt_metadata_renders_through_shim() -> None:
             in state.instructions
         )
         assert state.instructions.endswith("</default_tools>")
+
+    asyncio.run(scenario())
+
+
+def test_plan_recovery_after_history_loss_and_json_restore_keeps_prefix() -> None:
+    async def scenario() -> None:
+        shim = HarnessToolsShim((plan_tool(),), name="planner")
+        model = SequenceModel(
+            [
+                make_assistant_response(
+                    None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="plan",
+                            name="write_plan",
+                            arguments='{"plan":[{"step":"Verify changes","status":"in_progress"}]}',
+                        )
+                    ],
+                ),
+                make_assistant_response("working"),
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(name="Planner", model=model, shims=(shim,))
+        )
+        await agent.run("Complete the task")
+        state = agent.run_state
+        assert state is not None
+        assert not any(is_internal_message(item) for item in state.history)
+
+        # Repeated history replacement must recover the latest exact plan from
+        # the persisted native tool state, including after a new process binds.
+        for _ in range(2):
+            state.history.clear()
+            snapshot = AgentSnapshot.capture(
+                agent_id=AgentId.from_values("planner", "main"), run_state=state
+            )
+            state = AgentSnapshot.from_json(
+                json.loads(snapshot.model_dump_json())
+            ).to_run_state()
+            resumed_model = SequenceModel(
+                [make_assistant_response("continue"), make_assistant_response("done")]
+            )
+            resumed = DefaultAgent(
+                descriptor=AgentDescriptor(
+                    name="Planner", model=resumed_model, shims=(shim,)
+                ),
+                run_state=state,
+            )
+            await resumed.run("Continue")
+            await resumed.run("Check the result")
+            state = resumed.run_state
+            assert state is not None
+            recovered = [item for item in state.history if is_internal_message(item)]
+            assert len(recovered) == 1
+            assert is_internal_message(recovered[0], origin="planner:plan")
+            assert '"step": "Verify changes"' in str(recovered[0])
+            assert (
+                resumed_model.calls[1][: len(resumed_model.calls[0])]
+                == resumed_model.calls[0]
+            )
+
+        # Sharing a shim definition must not transfer the parent's plan state.
+        helper_model = SequenceModel([make_assistant_response("helper")])
+        helper = DefaultAgent(
+            descriptor=AgentDescriptor(name="Helper", model=helper_model, shims=(shim,))
+        )
+        await helper.run("Separate task")
+        assert "Current task plan:" not in str(helper_model.calls)
+
+    asyncio.run(scenario())
+
+
+def test_plan_prepare_restores_latest_snapshot_despite_older_visible_plan() -> None:
+    async def scenario() -> None:
+        shim = HarnessToolsShim((plan_tool(),))
+        bound = await shim.bind(cast(ShimBindingContext, object()))
+        state = run_state(turn_count=3)
+        state.history.append(
+            make_assistant_response(
+                None,
+                tool_calls=[
+                    make_tool_call(
+                        tool_id="old",
+                        name="write_plan",
+                        arguments='{"plan":[{"step":"Old step","status":"pending"}]}',
+                    )
+                ],
+            )
+        )
+        latest = {
+            "explanation": "New requirement",
+            "plan": [{"step": "New step", "status": "in_progress"}],
+        }
+        state.shim_state["harness-tools:plan"] = latest
+        turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+
+        await bound.prepare_turn(turn)
+
+        recovered = state.history[-1]
+        assert is_internal_message(recovered, origin="harness-tools:plan")
+        assert isinstance(recovered, dict)
+        assert recovered["content"] == "Current task plan:\n" + json.dumps(
+            latest, sort_keys=True
+        )
+        assert (
+            await bound.transform_messages(
+                turn, render_request_messages(None, state.history)
+            )
+            is None
+        )
 
     asyncio.run(scenario())

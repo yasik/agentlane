@@ -509,6 +509,32 @@ def test_litellm_factory_forwards_default_model_args(
     assert await_kwargs["max_tokens"] == 128
 
 
+@pytest.mark.parametrize(
+    "alias", ["max_tokens", "max_output_tokens", "max_completion_tokens"]
+)
+def test_per_call_output_limit_replaces_constructor_alias(
+    monkeypatch: pytest.MonkeyPatch, alias: str
+) -> None:
+    client = Client(Config(api_key="test-key", model="gpt-4o"), **{alias: 32000})
+    completion_mock = AsyncMock(return_value=_make_model_response("summary"))
+    monkeypatch.setattr(litellm, "acompletion", completion_mock)
+
+    asyncio.run(
+        client.get_response(
+            messages=[{"role": "user", "content": "Summarize"}],
+            extra_call_args={"max_tokens": 4096},
+        )
+    )
+
+    kwargs = cast(dict[str, Any], cast(Any, completion_mock.await_args).kwargs)
+    limits = {
+        key: kwargs[key]
+        for key in ("max_tokens", "max_output_tokens", "max_completion_tokens")
+        if key in kwargs
+    }
+    assert limits == {"max_tokens": 4096}
+
+
 def test_litellm_client_returns_raw_tool_calls_without_executing_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
