@@ -10,7 +10,7 @@ from agentlane.runtime import CancellationToken, RuntimeEngine
 from ._lifecycle import AgentDescriptor, LifecycleRunner
 from ._run import RunInput, RunResult, RunState
 from ._stream import RunStream
-from ._stream_base import BaseRunStream
+from ._stream_base import BaseRunStream, close_run_stream
 from ._task import Task
 
 
@@ -98,14 +98,14 @@ class AgentDelivery:
         if control_stream is not None:
             control_stream.bind_steering(child_stream.steer)
 
-        # Forward output and always close the child stream before returning.
+        # Forward output and always close and drain the child stream.
         try:
             async for event in child_stream:
                 emit(event)
 
             return await child_stream.result()
         finally:
-            await child_stream.aclose()
+            await close_run_stream(child_stream)
 
     def _runtime(self) -> RuntimeEngine:
         """Return the runtime engine required for delegated agent routing."""

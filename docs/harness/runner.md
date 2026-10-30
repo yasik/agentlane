@@ -325,7 +325,7 @@ cancellation contract is:
    stream's result future with `asyncio.CancelledError`. Await `result()` (and
    swallow `CancelledError`) after closing so asyncio does not log a
    "Future exception was never retrieved" warning. The shared
-   `close_stream_callback` / `_close_stream` helpers in `_stream_base.py` follow
+   `close_stream_callback` / `close_run_stream` helpers in `_stream_base.py` follow
    exactly this close-then-drain pattern.
 
 The recommended host pattern is to own the `cancellation_token`, pass it into
