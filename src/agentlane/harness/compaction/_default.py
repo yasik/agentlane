@@ -9,6 +9,7 @@ from agentlane.models import (
     MessageRole,
     ModelResponse,
     get_content_or_none,
+    is_ephemeral_message,
     is_internal_message,
     provider_messages,
 )
@@ -131,6 +132,7 @@ def _split_history_for_summary(
     tail_closed = False
     blocks = _history_blocks(request.history)
     tail_anchor = _tail_anchor(blocks)
+    has_tail = False
 
     # Walk newest-to-oldest so the retained tail is always a contiguous suffix.
     # Once a real block falls outside both recency budgets, every older real
@@ -139,12 +141,22 @@ def _split_history_for_summary(
     for index in range(len(blocks) - 1, -1, -1):
         block = blocks[index]
 
+        # Ephemeral context is always kept and does not use the tail budgets.
+        # Inside the open tail it keeps its position. After the tail closes, it
+        # waits on the summarizer side until the split moves it to the tail.
+        if _is_ephemeral_block(block):
+            if tail_closed:
+                compacted_blocks_reversed.append(block)
+            else:
+                tail_blocks_reversed.append(block)
+            continue
+
         # A previous summary is treated as old compressed context, not as fresh
         # tail. Recompaction should replace summaries instead of stacking them.
         if block.is_summary:
             compacted_blocks_reversed.append(block)
             has_compacted_summary = True
-            if tail_blocks_reversed:
+            if has_tail:
                 tail_closed = True
             continue
 
@@ -166,6 +178,7 @@ def _split_history_for_summary(
         )
         if should_keep:
             tail_blocks_reversed.append(block)
+            has_tail = True
             tail_tokens += block_tokens
             tail_items += len(block.items)
             continue
@@ -174,9 +187,22 @@ def _split_history_for_summary(
         compacted_block_count += 1
         tail_closed = True
 
+    # The summarizer never receives ephemeral context, and the run still needs
+    # it. Move older ephemeral items, including items inside mixed blocks, to
+    # the start of the tail in their original order.
+    compacted_history = _flatten_blocks(reversed(compacted_blocks_reversed))
+    moved_ephemeral = [item for item in compacted_history if is_ephemeral_message(item)]
+    if moved_ephemeral:
+        compacted_history = [
+            item for item in compacted_history if not is_ephemeral_message(item)
+        ]
+
     return _HistorySplit(
-        compacted_history=_flatten_blocks(reversed(compacted_blocks_reversed)),
-        tail_history=_flatten_blocks(reversed(tail_blocks_reversed)),
+        compacted_history=compacted_history,
+        tail_history=[
+            *moved_ephemeral,
+            *_flatten_blocks(reversed(tail_blocks_reversed)),
+        ],
         compacted_block_count=compacted_block_count,
         has_compacted_summary=has_compacted_summary,
     )
@@ -187,7 +213,9 @@ def _tail_anchor(blocks: list[_HistoryBlock]) -> int | None:
     fallback: int | None = None
     for index in range(len(blocks) - 1, -1, -1):
         block = blocks[index]
-        if block.is_summary:
+
+        # The split always keeps ephemeral context, so it never anchors retention.
+        if block.is_summary or _is_ephemeral_block(block):
             continue
 
         # With no ordinary conversation, protect only the newest context block.
@@ -197,6 +225,10 @@ def _tail_anchor(blocks: list[_HistoryBlock]) -> int | None:
             return index
 
     return fallback
+
+
+def _is_ephemeral_block(block: _HistoryBlock) -> bool:
+    return all(is_ephemeral_message(item) for item in block.items)
 
 
 def _should_keep_in_tail(
@@ -360,8 +392,19 @@ def _effective_keep_recent_tokens(
     call_args: dict[str, Any] | None,
 ) -> int:
     output_cap = _output_token_cap(call_args)
+
+    # Kept ephemeral context is a fixed cost of the next request, like the
+    # instructions and the output cap.
+    ephemeral_items = [item for item in request.history if is_ephemeral_message(item)]
+    ephemeral_tokens = (
+        _estimate_history_tokens(request, ephemeral_items) if ephemeral_items else 0
+    )
+
     tail_budget = (
-        request.signal.trigger_tokens - request.signal.instructions_tokens - output_cap
+        request.signal.trigger_tokens
+        - request.signal.instructions_tokens
+        - output_cap
+        - ephemeral_tokens
     )
     return min(configured_keep_recent_tokens, max(1, tail_budget))
 
