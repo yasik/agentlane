@@ -263,6 +263,12 @@ prepare_turn(...)
 transform_messages(...)
         |
         v
+validate_request(...)
+        |
+        v
+on_request_prepared(...)
+        |
+        v
 model call completes
         |
         v
@@ -282,6 +288,20 @@ The normal mutation points are:
    response,
 4. `transform_messages(...)` only when you need one-call message surgery after
    the runner has already built the canonical request.
+
+`validate_request(turn, messages)` runs after all message transforms. Use it to
+check the complete request and raise an error before the model call. Validators
+must not mutate the request. If preparation, a message transform, or validation
+fails, the shim manager restores the history from before turn preparation.
+This rollback covers history; it does not undo external side effects or changes
+to instructions and shim state.
+
+`on_request_prepared(turn, messages, error)` observes the result after all
+validators succeed or after history rollback on failure. `error` is `None` on
+success and contains the original exception on failure. Use this callback for
+request diagnostics. It must not change the request. Callback errors are
+ignored, so diagnostics cannot replace the request result or its original
+error.
 
 `on_run_end(...)` is the teardown callback. It receives the final
 `RunResult | None` and the same `transient_state`, and runs once after the

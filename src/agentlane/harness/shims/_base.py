@@ -71,6 +71,25 @@ class BoundShim:
         _ = messages
         return None
 
+    async def validate_request(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> None:
+        """Check the final request after all transforms; raise to reject it.
+
+        Validators must not mutate the request. The manager restores the
+        pre-preparation history when a transform or validator fails.
+        """
+        del turn, messages
+
+    async def on_request_prepared(
+        self,
+        turn: PreparedTurn,
+        messages: list[MessageDict],
+        error: BaseException | None,
+    ) -> None:
+        """Observe request preparation after validation or history rollback."""
+        del turn, messages, error
+
     async def on_model_response(
         self,
         turn: PreparedTurn,
@@ -160,6 +179,20 @@ class DelegatingBoundShim(BoundShim):
     ) -> list[MessageDict] | None:
         return await self._inner.transform_messages(turn, messages)
 
+    async def validate_request(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> None:
+        await self._inner.validate_request(turn, messages)
+
+    async def on_request_prepared(
+        self,
+        turn: PreparedTurn,
+        messages: list[MessageDict],
+        error: BaseException | None,
+    ) -> None:
+        """Observe request preparation after validation or history rollback."""
+        await self._inner.on_request_prepared(turn, messages, error)
+
     async def on_model_response(
         self,
         turn: PreparedTurn,
@@ -205,6 +238,20 @@ class _ForwardingBoundShim(BoundShim):
         messages: list[MessageDict],
     ) -> list[MessageDict] | None:
         return await self._shim.transform_messages(turn, messages)
+
+    async def validate_request(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> None:
+        await self._shim.validate_request(turn, messages)
+
+    async def on_request_prepared(
+        self,
+        turn: PreparedTurn,
+        messages: list[MessageDict],
+        error: BaseException | None,
+    ) -> None:
+        """Observe request preparation after validation or history rollback."""
+        await self._shim.on_request_prepared(turn, messages, error)
 
     async def on_model_response(
         self,
@@ -273,6 +320,21 @@ class Shim(abc.ABC):
         _ = turn
         _ = messages
         return None
+
+    async def validate_request(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> None:
+        """Check the final request without mutation; raise to reject it."""
+        del turn, messages
+
+    async def on_request_prepared(
+        self,
+        turn: PreparedTurn,
+        messages: list[MessageDict],
+        error: BaseException | None,
+    ) -> None:
+        """Observe request preparation after validation or history rollback."""
+        del turn, messages, error
 
     async def on_model_response(
         self,
@@ -364,6 +426,20 @@ class DelegatingShim(Shim):
         messages: list[MessageDict],
     ) -> list[MessageDict] | None:
         return await self._inner.transform_messages(turn, messages)
+
+    async def validate_request(
+        self, turn: PreparedTurn, messages: list[MessageDict]
+    ) -> None:
+        await self._inner.validate_request(turn, messages)
+
+    async def on_request_prepared(
+        self,
+        turn: PreparedTurn,
+        messages: list[MessageDict],
+        error: BaseException | None,
+    ) -> None:
+        """Observe request preparation after validation or history rollback."""
+        await self._inner.on_request_prepared(turn, messages, error)
 
     async def on_model_response(
         self,

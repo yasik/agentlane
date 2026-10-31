@@ -8,6 +8,7 @@ from pytest import MonkeyPatch
 
 from agentlane.harness import (
     AgentDescriptor,
+    AgentSnapshot,
     RunnerHooks,
     RunResult,
     RunState,
@@ -15,6 +16,13 @@ from agentlane.harness import (
     Task,
 )
 from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.compaction import (
+    CompactionShim,
+    CompactionShimConfig,
+    DefaultCompactor,
+    DefaultCompactorConfig,
+    is_summary_item,
+)
 from agentlane.harness.skills import (
     FilesystemSkillLoader,
     LoadedSkill,
@@ -42,7 +50,15 @@ from agentlane.harness.tools import (
     read_tool,
     write_tool,
 )
-from agentlane.models import MessageDict, Model, ModelResponse, ToolCall, Tools
+from agentlane.messaging import AgentId
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    ToolCall,
+    Tools,
+    is_internal_message,
+)
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span
 
@@ -1563,3 +1579,185 @@ def test_skills_shim_active_skill_names_honors_custom_shim_name() -> None:
     shim = SkillsShim(loader=_EmptySkillLoader(), name="docs")
 
     assert shim.active_skill_names(state) == ("report-generator",)
+
+
+def test_active_skill_recovers_complete_content_after_repeated_json_restore() -> None:
+    async def scenario() -> None:
+        loaded = LoadedSkill(
+            manifest=SkillManifest(
+                name="report",
+                description="Write reports.",
+                skill_file=Path("/skills/report/SKILL.md"),
+                root=Path("/skills/report"),
+            ),
+            instructions="First read all evidence.\n"
+            + "Keep every instruction.\n" * 100,
+            resources=(SkillResource(path="references/format.md"),),
+        )
+        loader = _MemorySkillLoader(loaded)
+        shim = SkillsShim(loader=loader, name="report-skills")
+        model = _SequenceModel(
+            [
+                _assistant_response(
+                    None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="activate",
+                            arguments='{"name":"report"}',
+                            name="activate_skill",
+                        )
+                    ],
+                ),
+                _assistant_response("working"),
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(name="Writer", model=model, shims=(shim,))
+        )
+        await agent.run("Write a report")
+        state = agent.run_state
+        assert state is not None
+        assert not any(is_internal_message(item) for item in state.history)
+        assert loader.load_calls == ["report"]
+
+        # A summary that only mentions activation must never replace the full
+        # instructions, resource paths, or relative-path guidance.
+        payload = render_loaded_skill(loaded)
+        for _ in range(2):
+            state.history[:] = [
+                {
+                    "role": "user",
+                    "content": '<summary>Activated <skill_content name="report">.</summary>',
+                }
+            ]
+            snapshot = AgentSnapshot.capture(
+                agent_id=AgentId.from_values("writer", "main"),
+                run_state=state,
+            )
+            state = AgentSnapshot.from_json(
+                json.loads(snapshot.model_dump_json())
+            ).to_run_state()
+            resumed_model = _SequenceModel(
+                [_assistant_response("continue"), _assistant_response("done")]
+            )
+            resumed = DefaultAgent(
+                descriptor=AgentDescriptor(
+                    name="Writer", model=resumed_model, shims=(shim,)
+                ),
+                run_state=state,
+            )
+            await resumed.run("Continue")
+            await resumed.run("Check the result")
+            state = resumed.run_state
+            assert state is not None
+            recovered = [item for item in state.history if is_internal_message(item)]
+            assert len(recovered) == 1
+            assert recovered[0] == {
+                "role": "user",
+                "content": payload,
+                "_agentlane": {
+                    "visibility": "internal",
+                    "origin": "report-skills:active-skill",
+                },
+            }
+            assert (
+                resumed_model.calls[1][: len(resumed_model.calls[0])]
+                == resumed_model.calls[0]
+            )
+
+        helper_model = _SequenceModel([_assistant_response("helper")])
+        helper = DefaultAgent(
+            descriptor=AgentDescriptor(name="Helper", model=helper_model, shims=(shim,))
+        )
+        await helper.run("Separate task")
+        assert payload not in str(helper_model.calls)
+
+    asyncio.run(scenario())
+
+
+def test_missing_active_skill_has_stable_recovery_notice() -> None:
+    async def scenario() -> None:
+        state = RunState(instructions="Help", history=[], responses=[])
+        state.shim_state["skills:active-skill-names"] = ["removed"]
+        model = _SequenceModel(
+            [_assistant_response("continue"), _assistant_response("done")]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Writer",
+                model=model,
+                shims=(SkillsShim(loader=_EmptySkillLoader()),),
+            ),
+            run_state=state,
+        )
+        await agent.run("Continue")
+        await agent.run("Check")
+        result_state = agent.run_state
+        assert result_state is not None
+        notices = [item for item in result_state.history if is_internal_message(item)]
+        assert len(notices) == 1
+        assert "no longer available" in str(notices[0])
+        assert model.calls[1][: len(model.calls[0])] == model.calls[0]
+
+    asyncio.run(scenario())
+
+
+def test_missing_large_active_skill_counts_toward_compaction_trigger() -> None:
+    async def scenario() -> None:
+        loaded = LoadedSkill(
+            manifest=SkillManifest(
+                name="large",
+                description="Complete guidance.",
+                skill_file=Path("/skills/large/SKILL.md"),
+                root=Path("/skills/large"),
+            ),
+            instructions="x" * 180_000,
+            resources=(),
+        )
+        state = RunState(
+            instructions="Help",
+            responses=[],
+            turn_count=3,
+            history=[
+                {"role": "user", "content": "old " * 20_000},
+                {"role": "assistant", "content": "working"},
+            ],
+        )
+        state.shim_state["skills:active-skill-names"] = ["large"]
+        model = _SequenceModel(
+            [_assistant_response("Earlier task context."), _assistant_response("done")]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Writer",
+                model=model,
+                shims=(
+                    SkillsShim(loader=_MemorySkillLoader(loaded)),
+                    CompactionShim(
+                        CompactionShimConfig(
+                            context_window=100_000, trigger_tokens=60_000
+                        ),
+                        DefaultCompactor(
+                            DefaultCompactorConfig(
+                                keep_recent_tokens=1,
+                                keep_recent_messages=1,
+                                summary_max_tokens=100,
+                            )
+                        ),
+                    ),
+                ),
+            ),
+            run_state=state,
+        )
+
+        await agent.run("Continue")
+
+        assert len(model.calls) == 2
+        assert any(is_summary_item(message) for message in model.calls[-1])
+        assert any(
+            message.get("content") == render_loaded_skill(loaded)
+            for message in model.calls[-1]
+        )
+        assert "old " * 20_000 not in str(model.calls[-1])
+
+    asyncio.run(scenario())

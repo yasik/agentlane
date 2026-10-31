@@ -238,6 +238,13 @@ active = shim.active_skill_names(agent.run_state)  # ("report-generator", ...)
 The accessor honors a custom shim `name`, so a shim configured with
 `SkillsShim(name="docs")` reads the activation state it owns.
 
+When an active skill's payload is absent from history, `SkillsShim` restores
+its complete instructions, directory guidance, and resource paths from the
+catalog. This applies after compaction and JSON snapshot restores. The shim
+appends one internal context message and keeps it in history, so ordinary turns
+retain the previous request prefix. If an active skill is no longer in the
+catalog, the shim appends a notice that its instructions cannot be restored.
+
 ## Filesystem Loader
 
 `FilesystemSkillLoader` is the default loader.

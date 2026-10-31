@@ -518,6 +518,12 @@ class Client(Model[TResponseType]):
         call_args: dict[str, Any] = {**self._common_params}
 
         if extra_call_args:
+            # Output-limit aliases describe one setting. A per-call cap must
+            # replace constructor defaults even when it uses a different alias.
+            output_keys = ("max_tokens", "max_output_tokens", "max_completion_tokens")
+            if any(extra_call_args.get(key) is not None for key in output_keys):
+                for key in output_keys:
+                    call_args.pop(key, None)
             call_args.update(extra_call_args)
 
         # If max_retries is greater than 0, set it to 0

@@ -375,11 +375,9 @@ def _summary_model_args(
     summary_max_tokens: int | None,
 ) -> dict[str, Any] | None:
     call_args = dict(request_model_args or {})
-    if (
-        summary_max_tokens is not None
-        and "max_tokens" not in call_args
-        and "max_output_tokens" not in call_args
-    ):
+    for key in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
+        call_args.pop(key, None)
+    if summary_max_tokens is not None:
         call_args["max_tokens"] = summary_max_tokens
 
     return call_args or None
@@ -442,6 +440,9 @@ def _output_token_cap(call_args: dict[str, Any] | None) -> int:
 
 
 def _summary_text(response: ModelResponse) -> str:
+    if not response.choices or response.choices[0].finish_reason != "stop":
+        raise CompactionError("Default compactor received an incomplete summary.")
+
     summary = get_content_or_none(response)
     if summary is None or not summary.strip():
         raise CompactionError("Default compactor received an empty summary response.")

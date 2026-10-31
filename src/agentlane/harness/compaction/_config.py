@@ -36,6 +36,9 @@ class CompactionShimConfig:
     name: str = DEFAULT_SHIM_NAME
     """Stable prefix used for report and attempt-key identity."""
 
+    default_max_tokens: int | None = None
+    """Actual output cap used when model args contain no output limit."""
+
     def __post_init__(self) -> None:
         """Validate compaction trigger settings."""
         if self.context_window <= 0:
@@ -53,6 +56,10 @@ class CompactionShimConfig:
             raise ValueError("on_failure must be 'inject' or 'skip'.")
         if not self.name:
             raise ValueError("name must be non-empty.")
+        if self.default_max_tokens is not None and (
+            isinstance(self.default_max_tokens, bool) or self.default_max_tokens <= 0
+        ):
+            raise ValueError("default_max_tokens must be positive when provided.")
 
     def resolved_trigger_tokens(self) -> int:
         """Return the absolute token count that should trigger compaction."""

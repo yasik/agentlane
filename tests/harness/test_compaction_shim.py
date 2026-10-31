@@ -16,6 +16,7 @@ from agentlane.harness.compaction import (
     DefaultCompactor,
     DefaultCompactorConfig,
     is_summary_item,
+    render_request_messages,
     render_summary_item,
 )
 from agentlane.harness.shims import BoundShim, PreparedTurn, ShimBindingContext
@@ -209,6 +210,11 @@ async def test_compaction_shim_installs_result_and_reports_attempt() -> None:
     assert request.signal.trigger_tokens == 5
     assert request.signal.source == "estimate"
 
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
     report = reports[0]
     assert report.compacted is True
     assert report.items_before == 2
@@ -356,6 +362,11 @@ async def test_compaction_shim_skips_failed_compaction_when_configured() -> None
     await bound.prepare_turn(turn)
 
     assert turn.run_state.history == history
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
     assert reports[0].compacted is False
     assert reports[0].error == "summary failed"
     assert (
@@ -447,6 +458,11 @@ async def test_compaction_shim_reports_noop_result_without_replacing_history() -
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
 
     assert turn.run_state.history == history
     assert reports[0].compacted is False
@@ -489,6 +505,11 @@ async def test_compaction_shim_keeps_successful_replacement_when_observer_fails(
     await bound.prepare_turn(turn)
 
     assert turn.run_state.history == [summary]
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
     assert reports[0].compacted is True
 
 
@@ -577,7 +598,7 @@ async def test_compaction_shim_runs_inside_default_agent_lifecycle() -> None:
 
     assert result.final_output == "done"
     assert compactor.requests[0].history == ("old prompt [t=8]",)
-    assert model.calls[0] == [summary]
+    assert model.calls[0] == [summary, {"role": "user", "content": "old prompt [t=8]"}]
 
 
 @pytest.mark.asyncio
