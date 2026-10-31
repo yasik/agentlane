@@ -27,7 +27,7 @@ from .._events import RunEventStream
 from .._hooks import RunnerHooks
 from .._json_file_state_store import JsonFileStateStore
 from .._lifecycle import AgentDescriptor
-from .._run import RunInput, RunResult, RunState, copy_run_state
+from .._run import RunInput, RunResult, RunState, copy_run_state, durable_run_state
 from .._runner import Runner
 from .._snapshot import AgentSnapshot
 from .._state_store import StateStore
@@ -149,11 +149,12 @@ class DefaultAgent(AgentBase):
             if restored_snapshot is not None
             else agent_id or _default_agent_id(self._descriptor)
         )
-        self._run_state = (
-            restored_snapshot.to_run_state()
-            if restored_snapshot is not None
-            else copy_run_state(run_state)
-        )
+        # A baseline never holds ephemeral context. Snapshots are already clean.
+        self._run_state: RunState | None = None
+        if restored_snapshot is not None:
+            self._run_state = restored_snapshot.to_run_state()
+        elif run_state is not None:
+            self._run_state = durable_run_state(run_state)
 
         # The agent persists one resumable state value and one stable runtime
         # identity locally. Concurrent ``run(...)`` calls on the same agent
@@ -264,7 +265,7 @@ class DefaultAgent(AgentBase):
 
         An agent with no completed run has no state to snapshot. While a run is
         active, this returns the prior committed baseline rather than the
-        private working state.
+        private working state. Snapshots never contain ephemeral messages.
         """
         if self._run_state is None:
             return None

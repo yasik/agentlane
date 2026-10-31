@@ -13,10 +13,18 @@ from agentlane.harness.compaction import (
     ContextSignal,
     DefaultCompactor,
     DefaultCompactorConfig,
+    SummaryPlacement,
     is_summary_item,
     render_summary_item,
 )
-from agentlane.models import MessageDict, Model, ModelResponse, Tools, internal_message
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    Tools,
+    internal_message,
+    is_ephemeral_message,
+)
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span
 
@@ -854,3 +862,158 @@ async def test_internal_tail_does_not_prevent_prior_summary_replacement(
     assert result.history[1:] == [latest, context]
     assert result.dropped_items == (old, summary)
     assert sum(is_summary_item(item) for item in result.history) == 1
+
+
+def _ephemeral(text: str) -> MessageDict:
+    return internal_message(
+        {"role": "user", "content": text}, origin="ui_view", ephemeral=True
+    )
+
+
+def _assert_summarizer_has_no_ephemeral_content(model: _RecordingModel) -> None:
+    assert not any("view" in str(message.get("content")) for message in model.calls[0])
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_context_in_tail_keeps_position_mid_run() -> None:
+    old: list[RunHistoryItem] = [
+        {"role": "user", "content": f"old {index} [t=20]"} for index in range(5)
+    ]
+    latest = {"role": "user", "content": "latest [t=2]"}
+    note = _ephemeral("view [t=2]")
+    tool_round: list[RunHistoryItem] = [
+        make_assistant_response(
+            "calling [t=20]",
+            tool_calls=[make_tool_call(tool_id="call_1", name="echo", arguments="{}")],
+        ),
+        {"role": "tool", "tool_call_id": "call_1", "content": "result [t=20]"},
+    ]
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=4)
+    )
+
+    result = await compactor.compact(_request([*old, latest, note, *tool_round], model))
+
+    # The note follows the user input; it does not use the message floor.
+    assert result.history[1:] == [old[4], latest, note, *tool_round]
+    assert result.dropped_items == tuple(old[:4])
+    _assert_summarizer_has_no_ephemeral_content(model)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("placement", ["before_tail", "after_tail"])
+async def test_ephemeral_context_older_than_tail_moves_to_tail_start(
+    placement: SummaryPlacement,
+) -> None:
+    first_note = _ephemeral("first view [t=2]")
+    steering_note = _ephemeral("steering view [t=2]")
+    tool_round: list[RunHistoryItem] = [
+        make_assistant_response(
+            "calling [t=20]",
+            tool_calls=[
+                make_tool_call(tool_id="call_1", name="echo", arguments="{}"),
+                make_tool_call(tool_id="call_2", name="echo", arguments="{}"),
+            ],
+        ),
+        {"role": "tool", "tool_call_id": "call_1", "content": "one [t=20]"},
+        steering_note,
+        {"role": "tool", "tool_call_id": "call_2", "content": "two [t=20]"},
+    ]
+    old = {"role": "user", "content": "old [t=20]"}
+    middle = [
+        {"role": "assistant", "content": "middle [t=20]"},
+        {"role": "user", "content": "follow-up [t=20]"},
+    ]
+    latest = {"role": "user", "content": "latest [t=20]"}
+    history: list[RunHistoryItem] = [old, first_note, *tool_round, *middle, latest]
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(
+            keep_recent_tokens=1, keep_recent_messages=1, summary_placement=placement
+        )
+    )
+
+    result = await compactor.compact(_request(history, model))
+
+    # The steering note sits inside a mixed tool block and still moves.
+    tail = [first_note, steering_note, latest]
+    summary_index = 0 if placement == "before_tail" else len(tail)
+    assert is_summary_item(result.history[summary_index])
+    assert [item for item in result.history if not is_summary_item(item)] == tail
+    assert result.dropped_items == (
+        old,
+        tool_round[0],
+        tool_round[1],
+        tool_round[3],
+        *middle,
+    )
+    assert not any(is_ephemeral_message(item) for item in result.dropped_items)
+    _assert_summarizer_has_no_ephemeral_content(model)
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_blocks_do_not_anchor_or_count_toward_message_floor() -> None:
+    old: list[RunHistoryItem] = [
+        {"role": "user", "content": f"old {index} [t=20]"} for index in range(4)
+    ]
+    latest = {"role": "user", "content": "latest [t=2]"}
+    notes = [_ephemeral("first view [t=2]"), _ephemeral("second view [t=2]")]
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=2)
+    )
+
+    result = await compactor.compact(_request([*old, latest, *notes], model))
+
+    assert result.history[1:] == [old[3], latest, *notes]
+    assert result.dropped_items == tuple(old[:3])
+
+
+@pytest.mark.asyncio
+async def test_internal_only_fallback_ignores_ephemeral_context() -> None:
+    contexts: list[RunHistoryItem] = [
+        internal_message(
+            {"role": "user", "content": f"context {index} [t=20]"}, origin="test"
+        )
+        for index in range(4)
+    ]
+    note = _ephemeral("view [t=2]")
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(keep_recent_tokens=1, keep_recent_messages=1)
+    )
+
+    result = await compactor.compact(_request([*contexts, note], model))
+
+    assert result.history[1:] == [contexts[-1], note]
+    assert result.dropped_items == tuple(contexts[:-1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_ephemeral", [False, True])
+async def test_ephemeral_tokens_reduce_tail_token_budget(with_ephemeral: bool) -> None:
+    old: list[RunHistoryItem] = [
+        {"role": "user", "content": f"old {index} [t=2]"} for index in range(3)
+    ]
+    recent = {"role": "assistant", "content": "recent [t=10]"}
+    latest = {"role": "user", "content": "latest [t=10]"}
+    notes = [_ephemeral("view [t=25]")] if with_ephemeral else []
+    model = _RecordingModel([make_assistant_response("summary [t=1]")])
+    compactor = DefaultCompactor(
+        DefaultCompactorConfig(
+            keep_recent_tokens=20, keep_recent_messages=1, summary_max_tokens=None
+        )
+    )
+
+    result = await compactor.compact(
+        _request([*old, recent, latest, *notes], model, context_window=41)
+    )
+
+    # Trigger 40 minus 25 note tokens leaves 15 tokens, so `recent` no longer fits.
+    if with_ephemeral:
+        assert result.history[1:] == [latest, *notes]
+        assert result.dropped_items == (*old, recent)
+    else:
+        assert result.history[1:] == [recent, latest]
+        assert result.dropped_items == tuple(old)

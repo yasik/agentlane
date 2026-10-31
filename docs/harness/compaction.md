@@ -66,6 +66,20 @@ If history contains only internal context, the compactor protects its newest
 block. Retained internal messages keep their runtime metadata; the summary
 model receives their contents without runtime metadata fields.
 
+The compactor always keeps
+[ephemeral messages](../models/overview.md#ephemeral-context), because the
+active run still needs them:
+
+- The summary model never receives an ephemeral message, and
+  `CompactionResult.dropped_items` never contains one.
+- An ephemeral message in the retained tail keeps its position. An older
+  ephemeral message moves to the start of the retained tail, in its original
+  order. This also applies to an ephemeral message inside a tool-call block.
+- Ephemeral messages do not anchor the tail and do not count toward
+  `keep_recent_messages` or the tail token count.
+- The compactor subtracts the estimated tokens of ephemeral messages from the
+  tail token budget, in the same way as the instructions and the output cap.
+
 ```python
 from agentlane.harness.compaction import DefaultCompactor, DefaultCompactorConfig
 
@@ -208,6 +222,12 @@ class TailOnlyCompactor:
 Production compactors normally call `render_request_messages(...)` before
 summarizing so the summarizer sees the same canonical conversation the next
 runner turn would have seen.
+
+A custom compactor must keep each ephemeral message in
+`CompactionResult.history` and must not send it to a summarizer. Use
+`is_ephemeral_message(item)` from `agentlane.models` to find these messages.
+The harness does not check this rule. If a compactor removes an ephemeral
+message, the rest of the run does not receive it.
 
 ## Shim Integration
 

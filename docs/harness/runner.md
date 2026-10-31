@@ -212,6 +212,12 @@ Each emitted item is a `RunEvent`, a union tagged by `RunEventKind`:
 itself is compact (`turn_count`, `history_length`, `response_count`, and a copy
 of `shim_state`) rather than the full working state.
 
+Working history contains the
+[ephemeral messages](../models/overview.md#ephemeral-context) of the run, so
+`history_length` at `run_start`, `turn_prepared`, and `tool_round_end` counts
+them. The runner removes them before `run_end`, so `history_length` at
+`run_end` equals the length of the committed history.
+
 ### Tool success and failure
 
 `RunToolEndEvent` carries a framework-derived outcome alongside the raw
@@ -382,6 +388,10 @@ holds `instructions`, `history`, `responses`, persisted `shim_state`
 also one of the accepted `RunInput` forms (alongside a plain `str` and a
 `list[RunHistoryItem]`), so a completed run's `run_state` can be passed back in
 to resume the conversation. The persisted `shim_state` survives across resumes.
+`RunResult.run_state` never contains ephemeral messages. Only
+`RunResult.run_state` and `AgentSnapshot` are durable views of a run. Do not
+persist history that you copy from hooks or from `RunLLMStartEvent.messages`,
+because it can contain ephemeral messages.
 
 `turn_count` counts turns *started*, not completed: the runner increments it at
 the start of each turn, before shims prepare the turn and before the model is

@@ -99,7 +99,11 @@ class CompactionResult:
     """Replacement history and observability details from one compactor."""
 
     history: list[RunHistoryItem]
-    """Replacement history to install when compaction succeeds."""
+    """Replacement history to install when compaction succeeds.
+
+    Keep each ephemeral message from the request history. The active run still
+    needs it, and the harness removes it when the run ends.
+    """
 
     summary_content: str
     """Rendered summary item content or an empty string for no-op results."""
@@ -113,9 +117,16 @@ class CompactionResult:
 
 @runtime_checkable
 class Compactor(Protocol):
-    """The extension seam for custom compaction logic."""
+    """The extension seam for custom compaction logic.
 
-    async def compact(self, request: CompactionRequest) -> CompactionResult: ...
+    Implementations own the replacement history. They must keep ephemeral
+    messages (see `is_ephemeral_message`) in that history and must not send
+    them to a summarizer. Ephemeral context belongs to the active run only.
+    """
+
+    async def compact(self, request: CompactionRequest) -> CompactionResult:
+        """Return replacement history for `request.history`."""
+        ...
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

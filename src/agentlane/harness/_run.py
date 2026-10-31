@@ -4,7 +4,7 @@ This module defines the canonical data shapes that flow between the agent
 lifecycle and the runner.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, TypedDict, cast, overload
@@ -12,7 +12,13 @@ from typing import Any, TypedDict, cast, overload
 from pydantic import BaseModel, JsonValue
 
 from agentlane.messaging import AgentId
-from agentlane.models import MessageDict, ModelResponse, PromptSpec, RunStateView
+from agentlane.models import (
+    MessageDict,
+    ModelResponse,
+    PromptSpec,
+    RunStateView,
+    is_ephemeral_message,
+)
 from agentlane.models.run import DefaultRunContext
 
 from ._serialization import serialize_value
@@ -93,6 +99,9 @@ class RunState:
     appends to this list; whole-list replacement through
     `PreparedTurn.replace_history(...)` is the sanctioned rewrite point for
     compaction and other history-rewrite shims.
+
+    Working history can contain ephemeral messages for the active run. The
+    harness removes them before it commits the state.
     """
 
     responses: list[ModelResponse]
@@ -153,7 +162,10 @@ class RunResult:
     """
 
     run_state: RunState | None = None
-    """Final resumable run state for this completed run when available."""
+    """Final resumable run state for this completed run when available.
+
+    This state does not contain ephemeral messages.
+    """
 
     def to_dict(self) -> RunResultRecord:
         """Return all result fields with strict native inspection conversion.
@@ -188,6 +200,23 @@ def copy_run_state(run_state: RunState | None) -> RunState | None:
         turn_count=run_state.turn_count,
         revision=run_state.revision,
     )
+
+
+def without_ephemeral_messages(
+    history: Sequence[RunHistoryItem],
+) -> list[RunHistoryItem]:
+    """Return history items without run-scoped ephemeral messages, in order."""
+    return [item for item in history if not is_ephemeral_message(item)]
+
+
+def durable_run_state(run_state: RunState) -> RunState:
+    """Return an isolated copy of run state without ephemeral messages.
+
+    Use this at each boundary where working state becomes committed state.
+    """
+    durable_state = copy_run_state(run_state)
+    durable_state.history = without_ephemeral_messages(durable_state.history)
+    return durable_state
 
 
 def copy_shim_state(shim_state: ShimState) -> ShimState:

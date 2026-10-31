@@ -82,8 +82,9 @@ from ._run import (
     RunResult,
     RunState,
     copy_instructions,
-    copy_run_state,
     copy_shim_state,
+    durable_run_state,
+    without_ephemeral_messages,
 )
 from ._stream_base import BaseRunStream
 from ._task import Task
@@ -580,11 +581,13 @@ class RunLoop:
                         raw_response=response,
                     )
 
+                # Ephemeral context ends with the run, so the result state
+                # excludes it.
                 return RunResult(
                     final_output=message.content,
                     responses=list(self.state.responses),
                     turn_count=self.state.turn_count,
-                    run_state=copy_run_state(self.state),
+                    run_state=durable_run_state(self.state),
                 )
 
         return None
@@ -782,6 +785,10 @@ class RunLoop:
         result: RunResult | None,
         run_error: BaseException | None,
     ) -> None:
+        # Remove run-scoped context first, so end-of-run shims, events, and
+        # hooks see the same history that the lifecycle commits.
+        self.state.history = without_ephemeral_messages(self.state.history)
+
         # Attempt every cleanup step even if an earlier step fails.
         cleanup_errors: list[BaseException] = []
         try:

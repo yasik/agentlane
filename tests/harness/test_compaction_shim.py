@@ -13,15 +13,22 @@ from agentlane.harness.compaction import (
     CompactionResult,
     CompactionShim,
     CompactionShimConfig,
+    DefaultCompactor,
+    DefaultCompactorConfig,
     is_summary_item,
     render_summary_item,
 )
 from agentlane.harness.shims import BoundShim, PreparedTurn, ShimBindingContext
-from agentlane.models import MessageDict, Model, ModelResponse
+from agentlane.models import MessageDict, Model, ModelResponse, Tools, internal_message
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import Span
 
-from .tools_test_utils import SequenceModel, make_assistant_response
+from .tools_test_utils import (
+    SequenceModel,
+    echo_tool,
+    make_assistant_response,
+    make_tool_call,
+)
 
 _TOKEN_PATTERN = re.compile(r"\[t=(\d+)]")
 
@@ -601,3 +608,76 @@ async def test_compaction_shim_failure_notice_runs_inside_default_agent_lifecycl
     assert model.calls[0][-1]["role"] == "user"
     assert "Context compaction failed" in str(model.calls[0][-1]["content"])
     assert "summary failed" in str(model.calls[0][-1]["content"])
+
+
+@pytest.mark.asyncio
+async def test_default_compaction_keeps_ephemeral_context_for_the_active_run() -> None:
+    note = {"role": "user", "content": "view [t=5]"}
+    baseline = RunState(
+        instructions=None,
+        history=[
+            {"role": "user", "content": "old question [t=10]"},
+            {"role": "assistant", "content": "old answer [t=10]"},
+            {"role": "user", "content": "older follow-up [t=10]"},
+            {"role": "assistant", "content": "older reply [t=10]"},
+        ],
+        responses=[],
+    )
+    tool_round = make_assistant_response(
+        "calling [t=10]",
+        tool_calls=[
+            make_tool_call(
+                tool_id="call_1", name="echo", arguments='{"text":"result [t=10]"}'
+            )
+        ],
+    )
+    model = SequenceModel(
+        [
+            tool_round,
+            make_assistant_response("summary [t=1]"),
+            make_assistant_response("done"),
+        ]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="CompactingAgent",
+            model=model,
+            tools=Tools(tools=[echo_tool("echo")]),
+            shims=(
+                CompactionShim(
+                    CompactionShimConfig(context_window=1_000, trigger_tokens=60),
+                    DefaultCompactor(
+                        DefaultCompactorConfig(
+                            keep_recent_tokens=1,
+                            keep_recent_messages=1,
+                            summary_max_tokens=None,
+                        )
+                    ),
+                    estimator=_token_estimator,
+                ),
+            ),
+        ),
+        run_state=baseline,
+    )
+
+    result = await agent.run(
+        [
+            "question [t=5]",
+            internal_message(note, origin="ui_view", ephemeral=True),
+        ]
+    )
+
+    # Turn 1 stays below the trigger; turn 2 compacts before its model call.
+    turn_one, summary_request, turn_two = model.calls
+    assert turn_one[-2:] == [{"role": "user", "content": "question [t=5]"}, note]
+    assert note not in summary_request
+    assert {"role": "user", "content": "question [t=5]"} in summary_request
+    assert is_summary_item(turn_two[0])
+    assert turn_two[1] == note
+    assert turn_two[2]["content"] == "calling [t=10]"
+
+    # The committed state keeps the summary and tail, but not the note.
+    assert result.final_output == "done"
+    assert result.run_state is not None
+    assert is_summary_item(result.run_state.history[0])
+    assert all("view [t=5]" not in str(item) for item in result.run_state.history)
