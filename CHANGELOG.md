@@ -5,16 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.25.0] - 2026-10-30
+## [0.25.0] - 2026-11-01
+
+AgentLane `0.25.0` adds internal context for one run and preserves the current user request and task plan through compaction. Applications can select retained context and use a model to rank conversation blocks.
 
 ### Added
 
-- Added the `ephemeral` keyword to `internal_message()` and added `is_ephemeral_message()`. An ephemeral message is internal context for one run: the model receives it on each model call of that run, including tool rounds, and the harness removes it when the run ends.
+- Added the `ephemeral` keyword to `internal_message()` and added `is_ephemeral_message()`. The model receives this internal context on each model call of one run, including tool rounds, and the harness removes it when the run ends ([`40b20a0`](https://github.com/yasik/agentlane/commit/40b20a0)).
+- Added `PreservedContext`, `PreservationSelector`, `RankedPreservationSelector`, and `ModelPreservationRanker` to select conversation blocks and application state before summarization. The framework checks required messages and token budgets ([`7c58b27`](https://github.com/yasik/agentlane/commit/7c58b27)).
+- Added `CompactionShimConfig.default_max_tokens` and final request validation that includes instructions, messages, tool schemas, and the output allowance. Requests that exceed the configured context window raise `ContextOverflowError` before the main-model call ([`7c58b27`](https://github.com/yasik/agentlane/commit/7c58b27)).
 
 ### Changed
 
-- `RunResult.run_state`, committed agent state, `AgentSnapshot` values, and state stores exclude ephemeral messages. A `run_state=` baseline passed to an agent constructor loses its ephemeral messages; a `RunState` passed as run input keeps them for that run.
-- The default compactor keeps ephemeral messages in the retained tail, never sends them to the summary model, and subtracts their tokens from the tail budget.
+- `RunResult.run_state`, committed agent state, snapshots, and state stores exclude ephemeral messages. A `run_state=` baseline passed to an agent constructor loses these messages; a `RunState` passed as run input keeps them for that run ([`40b20a0`](https://github.com/yasik/agentlane/commit/40b20a0)).
+- The default compactor keeps ephemeral messages in the retained tail, excludes them from summary input, and accounts for their tokens in the retention budget ([`40b20a0`](https://github.com/yasik/agentlane/commit/40b20a0)).
+- Default compaction preserves the exact current user request and current task plan, including after snapshot restore. Custom compactors must preserve required messages and handle supplied state projections ([`7c58b27`](https://github.com/yasik/agentlane/commit/7c58b27)).
+- Compaction summaries are internal messages and are omitted from default public event and result serialization. Full summaries remain available in authoritative history and snapshots ([`7c58b27`](https://github.com/yasik/agentlane/commit/7c58b27)).
+- Shims can contribute state during `prepare_turn`, select context during `prepare_request`, and validate the final request after all message transforms ([`7c58b27`](https://github.com/yasik/agentlane/commit/7c58b27)).
+
+### Fixed
+
+- Skill activation reloads the full instructions when compaction or a request transform removes them, even when the skill name remains active in saved state ([`7c58b27`](https://github.com/yasik/agentlane/commit/7c58b27)).
+- LiteLLM per-call output limits replace constructor defaults across output-limit aliases, so the configured summary cap takes effect ([`7c58b27`](https://github.com/yasik/agentlane/commit/7c58b27)).
 
 ## [0.24.0] - 2026-10-29
 
@@ -460,7 +472,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
-[Unreleased]: https://github.com/yasik/agentlane/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/yasik/agentlane/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/yasik/agentlane/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/yasik/agentlane/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/yasik/agentlane/compare/v0.21.0...v0.22.0
