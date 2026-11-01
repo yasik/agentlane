@@ -123,4 +123,5 @@ Read project history and contribution guidance:
 
 - [Changelog](../CHANGELOG.md)
 - [Code style](./code-style/README.md)
+- [Design and review](./code-style/design.md)
 - [Maintain documentation](./code-style/documentation.md)

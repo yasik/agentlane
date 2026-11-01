@@ -63,7 +63,8 @@ Use this page when adding or changing first-party tools, especially tools under
   build `file not found: <resolved path>` from a path you control.
 - Add a catch-all guard at the async handler boundary for tools that touch the
   filesystem, process execution, or external services. The guard should return
-  a stable generic failure message.
+  a stable generic failure message for exceptions. Preserve cancellation and
+  cleanup; do not catch `BaseException` or turn cancellation into a tool result.
 - Validate simple argument constraints before side effects. This keeps errors
   predictable and avoids passing bad values into shared helpers that may raise.
 

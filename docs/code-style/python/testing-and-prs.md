@@ -4,12 +4,14 @@ Use this page for test conventions and review-ready change expectations.
 
 ## Testing conventions
 
+- Select tests using the shared [evidence rules](../design.md#useful-evidence).
 - Use `pytest` for unit tests.
 - Use `pytest-asyncio` for async tests.
 - Use `pytest-cov` for coverage when needed.
 - Name tests with the pattern:
   `test_<what>_<condition>_<expected_result>`
-- Mock external dependencies with `pytest-mock`.
+- Mock external dependencies when isolation is needed. Prefer existing fixtures
+  and installed test tools before adding a mocking dependency.
 - For bridge, transport, and protocol work, add parity tests that compare the
   canonical command/event vocabulary with handlers, encoders, fixtures, and any
   downstream decoder registry. Drift should fail loudly in tests.
@@ -34,11 +36,10 @@ def fixture_my_fixture() -> MyType:
 
 ## Pull request expectations
 
-- Add tests when the change needs them.
 - Update documentation when the public behavior or workflow changes.
-- Run `/usr/bin/make format`.
-- Run `/usr/bin/make lint`.
-- Run the full test suite.
+- Follow the [verification skill](../../../.agents/skills/code-change-verification/SKILL.md)
+  for code, tests, and build/test changes. Documentation-only changes use the
+  [documentation workflow](../documentation.md).
 - Do not mention "Co-Authored" or "Authored By" in commit or PR text.
 
 ## Commit messages

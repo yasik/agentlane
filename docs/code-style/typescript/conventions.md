@@ -1,17 +1,14 @@
 # Conventions
 
-Use these rules for TypeScript across repository packages.
+Use these rules for TypeScript across repository packages, together with the
+shared [design and review rules](../design.md).
 
 ## General Principles
 
-- Keep logic in one function unless it is genuinely composable or reusable.
+- Keep each function focused on one responsibility.
 - Do not extract single-use helpers preemptively. Inline the logic at the call
   site unless the helper is reused, hides a genuinely complex boundary, or has a
   clear independent name that improves the caller.
-- Do not reduce line count at the expense of readability, type enforcement, or
-  extension clarity. A simplification should remove real duplication or make an
-  invariant more explicit; it should not flatten a useful abstraction into a
-  looser one.
 - Avoid `try`/`catch` where possible. When error handling is required, catch at
   the process, I/O, command, or decode boundary that can report the error
   meaningfully; do not swallow implementation defects in low-level helpers.
@@ -24,7 +21,8 @@ Use these rules for TypeScript across repository packages.
   as a lint error.
 - Prefer functional array methods such as `flatMap`, `filter`, and `map` over
   `for` loops.
-- Reduce total variable count by inlining a value that is used only once.
+- Inline single-use values only when the expression remains clear. Keep names
+  that explain a calculation or decision.
 - Define top-level protocol, command, event, and callback entities as named
   types. Do not pass generic records through application methods and repeatedly
   read fields after ad hoc narrowing; validate raw JSON once at the boundary and
