@@ -31,6 +31,14 @@ The `docs-sync` skill calls the portal workflow after it applies documentation
 updates. A read-only audit produces a report without a rebuild. These skills
 run in your coding agent; the website build does not perform an AI style review.
 
+## Explain the design
+
+Concept pages explain the problem, behavior owner, defaults, and a practical
+example. Keep detailed field descriptions in code or API references. Explain
+terms through their effect on the caller and link to the relevant implementation.
+When a review clarifies an important design decision, preserve that explanation
+in the relevant code or guide.
+
 ## Source and route rules
 
 The portal applies the following rules during the build:

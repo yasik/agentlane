@@ -1,6 +1,6 @@
 ---
 name: code-change-verification
-description: Run the mandatory verification stack when changes affect runtime code, tests, or build/test behavior in the OpenAI Agents Python repository.
+description: Run the mandatory verification stack when changes affect runtime code, tests, or build/test behavior in the AgentLane repository.
 ---
 
 # Code Change Verification

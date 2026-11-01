@@ -5,15 +5,13 @@ that gate a change.
 
 ## Testing
 
+- Select tests using the shared [evidence rules](../design.md#useful-evidence).
 - Run package TypeScript tests through the repository target:
   `make test-ts`. Tests live in package-local `tests/` directories as
   `*.test.ts` / `*.test.tsx`.
-- Use package-local `bun run test` only for a focused inner loop. The final
-  verification path should use the repository `make` target or the full
-  verification script.
+- Use package-local `bun run test` for focused checks during development.
+  Follow the PR verification requirements for final checks.
 - Avoid mocks as much as possible.
-- Test the actual implementation. Do not duplicate the logic under test into the
-  test.
 - For protocol and bridge packages, add parity tests that compare the canonical
   command/event registry with fixtures, decoder schemas, process wiring, and
   any Python-side vocabulary exported for downstream packages.
@@ -65,10 +63,11 @@ trees they own.
 
 ## Before You Open a PR
 
-- Run `make check-ts` for TypeScript-only changes; it runs lint, type check,
-  tests, and the package build together.
-- Run the full repository verification script before marking runtime, protocol,
-  or package-tooling changes done.
+- Follow the [verification skill](../../../.agents/skills/code-change-verification/SKILL.md)
+  for code, tests, and build/test changes. Also run `make build-ts` for package
+  changes; the full verification script does not build the TypeScript package.
+  Use `make check-ts` for focused package checks during development.
+- Documentation-only changes use the [documentation workflow](../documentation.md).
 - If a TypeScript package adds a dependency, update its package manifest and
   lockfile in the same change and keep the dependency justified by a real
   simplification, validation, or runtime need.

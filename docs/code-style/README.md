@@ -6,13 +6,15 @@ Read the page that matches the work you are doing instead of treating
 
 ## Pages
 
-1. [Python](./python/README.md): Python style, imports and typing,
+1. [Design and review](./design.md): ownership, simplicity, behavior, and useful
+   verification for all languages.
+2. [Python](./python/README.md): Python style, imports and typing,
    comments, modules, tests, and first-party tool design.
-2. [Workspace packages](./workspace-packages.md): how to add and register a new
+3. [Workspace packages](./workspace-packages.md): how to add and register a new
    workspace package.
-3. [TypeScript](./typescript/README.md): TypeScript tooling,
+4. [TypeScript](./typescript/README.md): TypeScript tooling,
    strictness, exports, and package script expectations.
-4. [Maintain documentation](./documentation.md): root Markdown, writing review,
+5. [Maintain documentation](./documentation.md): root Markdown, writing review,
    and documentation portal checks.
 
 ## Logical blocks and comments

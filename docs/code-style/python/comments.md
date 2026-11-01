@@ -5,6 +5,12 @@ Thoughtful comments explain why code exists, how to use it, and capture non-obvi
 ## Python specific
 
 - Use Google-style docstrings for public functions, classes, and methods.
+- Document public configuration and contract fields: explain their meaning,
+  units, defaults, constraints, and ownership where applicable. Do not repeat
+  information already clear from the field's name and type.
+- For substantial algorithms, describe the high-level flow in the owning
+  class or function docstring. Keep branch and ordering explanations beside
+  the relevant code.
 - Dataclass and Pydantic field comments must use this exact style when inline
   field documentation is needed:
 

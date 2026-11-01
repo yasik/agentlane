@@ -1,6 +1,7 @@
 # Conventions
 
-These rules apply to Python code across the repository.
+These rules apply to Python code across the repository, together with the
+shared [design and review rules](../design.md).
 
 ## Core conventions
 
@@ -10,18 +11,10 @@ These rules apply to Python code across the repository.
   functions, classes, and methods.
 - Prefer explicit, readable code over overly clever or implicit code.
 - Keep implementations simple and Pythonic.
-- Do not reduce line count at the expense of readability, type enforcement, or
-  extension clarity. A simplification should remove real duplication or make an
-  invariant more explicit; it should not flatten a useful abstraction into a
-  looser one.
 - Follow the shared [logical block and comment rules](../README.md#logical-blocks-and-comments).
   Separate input checks, conversion, metadata handling, and output construction
   with blank lines. Put a blank line after a completed guard block before the
   next step, and between a completed loop and its final return.
-- Catch exceptions at the highest practical boundary for the operation, such as
-  request, command-loop, run, worker, or I/O boundaries. Avoid catching broad
-  exceptions inside low-level helpers unless the helper is itself that boundary;
-  let actionable failures surface as typed errors or user-visible diagnostics.
 - Do not model top-level domain, protocol, command, or response entities as
   generic `Mapping`/`dict` values that are passed between methods and read with
   `.get("field")`. Parse raw JSON or external dictionaries once at the trust
@@ -87,7 +80,9 @@ field: FieldType
 - Avoid catching broad exceptions deep in helpers. Low-level code should raise
   typed, actionable errors and let the request, run, command-loop, worker, or
   I/O boundary translate those errors into user-visible diagnostics.
-- Return `None` or an empty collection for "not found" cases instead of raising.
+- Return `None` or an empty collection only when absence is a documented normal
+  result. Do not convert read failures, invalid persisted data, or configuration
+  errors into absence.
 - When a soft limit applies, prefer visible truncation with a pointer to the
   full source, such as the file path, over silently dropping data so the
   consumer can recover the rest.
@@ -100,7 +95,10 @@ field: FieldType
 - Prefer `async` and `await` for I/O-bound operations.
 - Pass `CancellationToken` through async call chains for cancellation support.
 - Use `asyncio.gather()` for concurrent operations when appropriate.
-- Add explicit timeouts around external calls.
+- Respect the owning client's timeout and cancellation contract. Do not add
+  duplicate timeout layers or arbitrary defaults. Expose and document a bound
+  when required; host-controlled approval waits can remain unbounded when that
+  is their explicit contract.
 
 ## Framework-specific conventions
 

@@ -19,7 +19,7 @@ Always talk and write documentation in ASD-STE100 Simplified Technical English.
 - Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
 - If something goes sideways, STOP and re-plan immediately – don't keep pushing
 - Use plan mode for verification steps, not just building
-- Write detailed specs upfront to reduce ambiguity
+- Record design decisions before implementation; scale detail to the change.
 
 ### 2. Subagent Strategy
 
@@ -37,22 +37,28 @@ Always talk and write documentation in ASD-STE100 Simplified Technical English.
 
 ### 4. Verification Before Done
 
-- Never mark a task complete without proving it works
-- Diff behavior between main and your changes when relevant
-- Ask yourself: "Would a staff engineer approve this?"
-- Run tests, check logs, demonstrate correctness
+- Check each requested change against the final diff. Mark a finding resolved
+  only when the change is present and verified. Record unresolved items and why.
+- Read every changed method, including moved code, against the design and
+  readability rules before handing work back.
+- Verify the final code after fixes. Check affected public examples when their
+  API or behavior changes. Report passed, failed, and skipped checks; distinguish
+  mocked verification from live verification. Do not claim completion while
+  required checks fail.
 - After code changes: spawn the `docs-keeper` agent to detect and update affected READMEs and tech specs
 - For public documentation updates, use `.agents/skills/docs-sync/SKILL.md`.
   Apply `dev-docs` to changed prose, then use
   `.agents/skills/docs-portal/SKILL.md` to rebuild and check the website.
   Keep documentation source in root `docs/`.
 
-### 5. Demand Elegance (Balanced)
+### 5. Design and simplification
 
-- For non-trivial changes: pause and ask "is there a more elegant way?"
-- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
-- Skip this for simple, obvious fixes – don't over-engineer
-- Challenge your own work before presenting it
+- Before changing a public API or a component's responsibility, put the use
+  case, behavior owner, and existing code to reuse in the task plan. Include a
+  small client example for API changes. Routine fixes need no separate design.
+- Apply the [design and review rules](docs/code-style/design.md) before
+  implementation and before handoff. Justify additions with required behavior
+  or reachable failures; preserve useful extension points and validation.
 
 ### 6. Autonomous Bug Fixing
 
@@ -64,7 +70,8 @@ Always talk and write documentation in ASD-STE100 Simplified Technical English.
 ## Task Management
 
 1. **Plan First**: Write plan to `docs/plans/<task_name>.md` with checkable items
-2. **Verify Plan**: Check in before starting implementation
+2. **Verify Plan**: Respect requested design review points. Continue already
+   authorized work without asking for the same approval again.
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
 5. **Document Results**: Add review section to `docs/plans/<task_name>.md`
@@ -100,22 +107,19 @@ Always talk and write documentation in ASD-STE100 Simplified Technical English.
 
 ## Local workflow
 
-1. Format, lint and type‑check your changes:
+For code, tests, or build/test changes, follow the
+[code-change-verification skill](.agents/skills/code-change-verification/SKILL.md):
 
-   ```bash
-   /usr/bin/make format
-   /usr/bin/make lint
-   ```
+```bash
+bash .agents/skills/code-change-verification/scripts/run.sh
+```
 
-2. Run the tests:
+The script runs formatting, lint, type checks, and tests. Documentation-only
+changes use the documentation workflow above; they do not require runtime tests.
 
-   ```bash
-   /usr/bin/make tests
-   ```
+For a focused test, use `uv run pytest -s -k <test_name>`.
 
-   To run a single test, use `uv run pytest -s -k <test_name>`.
-
-All python commands should be run via `uv run python ...`
+Run Python scripts with `uv run python ...` and Python tools with `uv run`.
 
 ## Detailed References
 

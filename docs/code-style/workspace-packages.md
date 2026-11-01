@@ -1,68 +1,45 @@
 # Workspace packages
 
-Follow this process when adding a new utility package to the workspace.
+AgentLane bundles its Python extension packages into the root `agentlane`
+distribution. The root [package manifest](../../pyproject.toml) owns their
+version, dependencies, and wheel contents. The TypeScript bridge has a separate
+npm package and follows the [TypeScript guide](./typescript/README.md).
 
-## 1. Create the package structure
+## Add a Python extension
 
-```bash
-mkdir -p packages/<package-name>/src/agentlane_<package-name>
-touch packages/<package-name>/src/agentlane_<package-name>/__init__.py
-touch packages/<package-name>/src/agentlane_<package-name>/py.typed
-```
+Use a package for an integration with a distinct responsibility. Keep shared
+framework primitives in `src/agentlane`, following the
+[ownership rules](./design.md#ownership).
 
-## 2. Create `pyproject.toml`
+1. Create `packages/NAME/src/agentlane_NAME/` with `__init__.py`, `py.typed`,
+   and the implementation modules. Replace `NAME` with the integration name;
+   use underscores in Python import names.
+2. Add a package README and tests in `packages/NAME/tests/`.
+3. Add the source package path to `tool.hatch.build.targets.wheel.packages`
+   in the root manifest. Add `"packages/NAME/src" = ""` to its
+   `tool.hatch.build.targets.wheel.sources` table.
+4. Declare required dependencies in the root `project.dependencies`. Put
+   optional vendor dependencies in a named `project.optional-dependencies`
+   extra and include them in the `all` extra when applicable. Keep core imports
+   usable without optional dependencies.
+5. Update the lockfile with `uv sync --all-extras`. Check that the package README
+   explains installation of any required extra.
 
-Create `packages/<package-name>/pyproject.toml`:
+Bundled Python extensions do not need a separate `pyproject.toml`, a dependency
+on their own distribution name, or a `workspace = true` source entry. A separately
+published distribution requires an explicit packaging and release decision.
 
-```toml
-[project]
-name = "agentlane-<package-name>"
-version = "0.1.0"
-description = "Brief description of the package"
-requires-python = ">=3.12"
-dependencies = [
-  # Add your dependencies here
-]
+## Verify packaging
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/agentlane_<package-name>"]
-
-[tool.hatch.build.targets.wheel.sources]
-"src" = ""
-```
-
-## 3. Register the package in the workspace
-
-Update the root `pyproject.toml`:
-
-```toml
-[project]
-dependencies = [
-  # ... existing dependencies
-  "agentlane-<package-name>",
-]
-
-[tool.uv.sources]
-agentlane-<package-name> = { workspace = true }
-```
-
-## 4. Install and verify
+Follow the [verification workflow](../../.agents/skills/code-change-verification/SKILL.md),
+then build the root distribution with the same command as the
+[publish workflow](../../.github/workflows/pypi-publish.yml):
 
 ```bash
-uv sync
-uv run python -c "import agentlane_<package-name>; print('Package installed')"
+uv build --out-dir dist --no-sources
 ```
 
-## Package guidelines
-
-- Use `agentlane_<name>` for imports and `agentlane-<name>` for package names.
-- Always use the `src/` layout:
-  `packages/<name>/src/agentlane_<name>/`
-- Include the `py.typed` marker.
-- Place tests in `packages/<package-name>/tests/` or alongside the source when
-  that is the established local pattern.
-- Declare only direct dependencies in each package.
+Inspect the wheel for the package and its `py.typed` marker. Install the wheel
+in a clean environment and check the public import with the required extra.
+Check that importing the core still works without that extra; an editable
+checkout alone does not verify distribution contents.
