@@ -74,7 +74,8 @@ That shim does five core things:
 3. contributes one cache-stable `activate_skill(name: str)` tool,
 4. adds the full skill instructions to the model context when the model
    activates a skill,
-5. deduplicates repeated activation through `RunState.shim_state`.
+5. persists active names in `RunState.shim_state` and avoids returning skill
+   content that is already visible in the accepted model request.
 
 ## Before Activation
 
@@ -99,21 +100,21 @@ contains:
 3. a `<skill_resources>` list where each resource includes its skill-relative
    `path` and a `read_path` suitable for a read tool in the same namespace,
 4. one `<skill_content name="<skill-name>">` block that groups those pieces
-   together, where the `name` attribute matches the dedup directive below.
+   together, where the `name` attribute identifies the activated skill.
 
-That tool result becomes part of the normal tool loop and is preserved in the
-conversation history. Later turns in the same run continue with that skill
-content already visible to the model.
+That tool result becomes part of the normal tool loop and conversation history.
+Later turns can use it while the complete payload remains in the model request.
+Compaction or a request transform can remove it.
 
-Repeated activation of the same skill returns a plain tool-result message
-instead of injecting the same skill content again when duplicate tool calls
-arrive in the same model response, through a race, or on a later model turn.
+Repeated activation returns a short tool-result message when the full skill
+payload is already visible. Concurrent calls for the same skill in one tool
+batch return the full payload only once.
 
 On later model turns, the activation tool schema stays stable for prompt-cache
-reuse. The loaded skill content remains available in history, and the repeated
-activation result tells the model to continue using the existing
-`<skill_content>` block instead of calling `activate_skill` for that skill
-again.
+reuse. If compaction removes the full payload, the model can call
+`activate_skill` again when it needs the instructions. The tool returns the
+complete payload even when the skill name remains active in persisted state.
+Loaded payloads are cached per bound shim instance.
 
 ## Hooks Around Skill Activation
 
@@ -238,12 +239,21 @@ active = shim.active_skill_names(agent.run_state)  # ("report-generator", ...)
 The accessor honors a custom shim `name`, so a shim configured with
 `SkillsShim(name="docs")` reads the activation state it owns.
 
-When an active skill's payload is absent from history, `SkillsShim` restores
-its complete instructions, directory guidance, and resource paths from the
-catalog. This applies after compaction and JSON snapshot restores. The shim
-appends one internal context message and keeps it in history, so ordinary turns
-retain the previous request prefix. If an active skill is no longer in the
-catalog, the shim appends a notice that its instructions cannot be restored.
+The default system prompt lists skill catalog metadata. It does not contain
+the full instructions for each skill. Activation checks the final accepted
+model request, including system instructions, for the complete canonical skill
+payload. That payload contains the instructions, directory guidance, and
+resource paths. A full payload embedded within a message counts as present;
+a skill name, catalog entry, tag, or summary mention alone does not.
+
+Missing instructions reload only when the model calls `activate_skill`. The
+shim does not append automatic recovery messages after compaction or snapshot
+restore. Ordinary turns keep the previous request prefix. If a requested skill
+is absent from the catalog, activation returns the not-found result.
+
+Active names and their tool filters persist when instructions leave the
+request. Allowlist and deny rules still apply to `activate_skill`. Keep that
+tool allowed if the model needs to reload instructions after compaction.
 
 ## Filesystem Loader
 
@@ -389,17 +399,15 @@ even when the tool was contributed by another shim.
 
 ## State
 
-Activated skill names are persisted in `RunState.shim_state`.
+Activated skill names persist in `RunState.shim_state` for tool policy and
+inspection. They do not prove that the full instructions remain visible.
+Deduplication checks the final accepted model request, plus payloads already
+supplied in the same tool batch.
 
-That gives three important properties:
-
-1. repeated activation can be deduplicated,
-2. later turns keep a cache-stable activation tool schema,
-3. later turns in the same run continue without reloading the same skill
-   instructions.
-
-The actual skill content remains visible because the activation tool result is
-already part of the persisted conversation history.
+Compaction or request transforms can remove skill content. Explicit activation
+returns the complete payload again when it is absent. The system catalog
+remains the source for discovery; the shim does not automatically restore
+missing bodies or maintain a separate list of skills removed by compaction.
 
 ## Bundled Resource Paths
 

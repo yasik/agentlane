@@ -56,6 +56,7 @@ class CompactionShimConfig:
             raise ValueError("on_failure must be 'inject' or 'skip'.")
         if not self.name:
             raise ValueError("name must be non-empty.")
+
         if self.default_max_tokens is not None and (
             isinstance(self.default_max_tokens, bool) or self.default_max_tokens <= 0
         ):
@@ -82,7 +83,7 @@ class DefaultCompactorConfig:
     """Approximate-token budget for verbatim recent history retained as tail."""
 
     keep_recent_messages: int = DEFAULT_KEEP_RECENT_MESSAGES
-    """Minimum number of newest history items retained as verbatim tail."""
+    """Preferred minimum tail size; the hard context budget can trim optional blocks."""
 
     summary_placement: SummaryPlacement = SUMMARY_BEFORE_TAIL
     """Where the summary item is placed relative to retained recent history."""

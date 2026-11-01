@@ -14,12 +14,13 @@ from agentlane.harness.filesystem import (
     ReadableFileSystem,
     WritableFileSystem,
 )
-from agentlane.models import MessageDict, ToolCall, internal_message
+from agentlane.models import MessageDict, ToolCall
 from agentlane.models.run import RunContext
 
 from .._constants import DEFAULT_AGENT_TOOL_NAME
 from .._render import render_request_messages
-from .._run import RunState, ShimState
+from .._run import RunHistoryItem, RunState, ShimState
+from .._types import PreservedContext
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._agent import agent_tool
 from ._bash import bash_tool
@@ -97,7 +98,25 @@ class _BoundHarnessToolsShim(BoundShim):
         self._current_run_state = turn.run_state
         tool_specs = tuple(definition.tool for definition in self._definitions)
         turn.add_tools(tool_specs)
-        self._restore_plan(turn, render_request_messages(None, turn.run_state.history))
+
+        # Publish current state without editing history. Compaction decides
+        # whether selected blocks already carry it before summarization.
+        snapshot = turn.run_state.shim_state.get(plan_state_key(self._shim_name))
+        if snapshot is not None:
+            # Only the last plan invocation can represent current state. After
+            # compaction, an earlier equal update can survive a later correction.
+            turn.preserved_context.append(
+                PreservedContext(
+                    origin=f"{self._shim_name}:plan",
+                    content=(
+                        "Current task plan (supersedes historical write_plan calls):\n"
+                    )
+                    + json.dumps(snapshot, sort_keys=True),
+                    represented_by=_current_plan_representation(
+                        snapshot, turn.run_state.history
+                    ),
+                )
+            )
 
         if self._prompt_block is None:
             return
@@ -110,38 +129,6 @@ class _BoundHarnessToolsShim(BoundShim):
 
         turn.append_system_instruction(self._prompt_block)
         turn.run_state.shim_state[marker_key] = True
-
-    async def transform_messages(
-        self, turn: PreparedTurn, messages: list[MessageDict]
-    ) -> list[MessageDict] | None:
-        """Restore the latest plan only when its exact state is absent."""
-        message = self._restore_plan(turn, messages)
-
-        return [*messages, message] if message is not None else None
-
-    def _restore_plan(
-        self, turn: PreparedTurn, messages: list[MessageDict]
-    ) -> MessageDict | None:
-        """Supply missing plan state before compaction and after history replacement."""
-        snapshot = turn.run_state.shim_state.get(plan_state_key(self._shim_name))
-        if snapshot is None:
-            return None
-
-        content = "Current task plan:\n" + json.dumps(snapshot, sort_keys=True)
-        if any(message.get("content") == content for message in messages):
-            return None
-        if _plan_is_visible(snapshot, messages):
-            return None
-
-        # Append once after history loss. Keeping this record in history avoids
-        # regenerating a moving context tail on ordinary tool-loop turns.
-        message = internal_message(
-            {"role": "user", "content": content},
-            origin=f"{self._shim_name}:plan",
-        )
-        turn.append_history_item(message)
-
-        return message
 
     def _require_shim_state(self) -> ShimState:
         """Return the persisted shim state for the current run."""
@@ -199,31 +186,50 @@ class HarnessToolsShim(Shim):
         )
 
 
-def _plan_is_visible(snapshot: object, messages: list[MessageDict]) -> bool:
-    """Find the complete latest plan in surviving assistant tool arguments."""
-    for message in reversed(messages):
+def _current_plan_representation(
+    snapshot: object, history: Sequence[RunHistoryItem]
+) -> tuple[MessageDict, ...]:
+    """Use the final plan invocation only when it contains the current state."""
+
+    # Stop at the last plan call without rendering unrelated older history.
+    messages = (
+        message
+        for item in reversed(history)
+        for message in reversed(render_request_messages(None, [item]))
+    )
+    for message in messages:
         if message.get("role") != "assistant":
             continue
+
         calls = message.get("tool_calls")
         if not isinstance(calls, list):
             continue
-        for raw_call in cast(list[object], calls):
+
+        # Inspect calls in reverse order too: one response can update a plan twice.
+        # An unknown or conflicting final update cannot replace owner state.
+        for raw_call in reversed(cast(list[object], calls)):
             try:
                 call = ToolCall.model_validate(raw_call)
-                if call.function.name != PLAN_TOOL_NAME:
-                    continue
-                args: object = json.loads(call.function.arguments)
-            except (ValidationError, ValueError, TypeError):
+            except ValidationError:
+                return ()
+            if call.function.name != PLAN_TOOL_NAME:
                 continue
+
+            try:
+                args: object = json.loads(call.function.arguments)
+            except (ValueError, TypeError):
+                return ()
             if isinstance(args, dict):
                 fields = cast(dict[str, object], args)
                 if {
                     "explanation": fields.get("explanation"),
                     "plan": fields.get("plan"),
                 } == snapshot:
-                    return True
+                    return (message,)
 
-    return False
+            return ()
+
+    return ()
 
 
 def base_harness_tools(

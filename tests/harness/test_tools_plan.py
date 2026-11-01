@@ -2,6 +2,8 @@ import asyncio
 import json
 from typing import Any, cast
 
+import pytest
+
 from agentlane.harness import (
     AgentDescriptor,
     AgentSnapshot,
@@ -9,7 +11,13 @@ from agentlane.harness import (
     RunPlanUpdatedEvent,
 )
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.compaction import render_request_messages
+from agentlane.harness.compaction import (
+    CompactionShim,
+    CompactionShimConfig,
+    DefaultCompactor,
+    DefaultCompactorConfig,
+    render_request_messages,
+)
 from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     PLAN_TOOL_NAME,
@@ -39,6 +47,43 @@ from .tools_test_utils import (
     run_state,
     run_tool,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("last_arguments", ["pending", "completed", "invalid-json"])
+async def test_plan_representation_uses_final_invocation_within_message(
+    last_arguments: str,
+) -> None:
+    shim = HarnessToolsShim((plan_tool(),))
+    bound = await shim.bind(cast(ShimBindingContext, object()))
+    state = run_state(turn_count=3)
+    current = {"plan": [{"step": "Verify", "status": "pending"}]}
+    final = (
+        last_arguments
+        if last_arguments == "invalid-json"
+        else json.dumps({"plan": [{"step": "Verify", "status": last_arguments}]})
+    )
+    response = make_assistant_response(
+        None,
+        tool_calls=[
+            make_tool_call(
+                tool_id="first", name="write_plan", arguments=json.dumps(current)
+            ),
+            make_tool_call(tool_id="last", name="write_plan", arguments=final),
+        ],
+    )
+    state.history.append(response)
+    state.shim_state["harness-tools:plan"] = {"explanation": None, **current}
+    turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+
+    await bound.prepare_turn(turn)
+
+    expected = (
+        tuple(render_request_messages(None, [response]))
+        if last_arguments == "pending"
+        else ()
+    )
+    assert turn.preserved_context[0].represented_by == expected
 
 
 class _StreamingPlanModel(Model[ModelResponse]):
@@ -337,7 +382,7 @@ def test_plan_tool_prompt_metadata_renders_through_shim() -> None:
     asyncio.run(scenario())
 
 
-def test_plan_recovery_after_history_loss_and_json_restore_keeps_prefix() -> None:
+def test_plan_preservation_during_compaction_after_json_restore_keeps_prefix() -> None:
     async def scenario() -> None:
         shim = HarnessToolsShim((plan_tool(),), name="planner")
         model = SequenceModel(
@@ -366,7 +411,19 @@ def test_plan_recovery_after_history_loss_and_json_restore_keeps_prefix() -> Non
         # Repeated history replacement must recover the latest exact plan from
         # the persisted native tool state, including after a new process binds.
         for _ in range(2):
-            state.history.clear()
+            state.history[:] = [
+                {"role": "assistant", "content": "old evidence " * 3000}
+            ]
+            compaction = CompactionShim(
+                CompactionShimConfig(context_window=32000, trigger_tokens=4000),
+                DefaultCompactor(
+                    DefaultCompactorConfig(
+                        keep_recent_tokens=1,
+                        keep_recent_messages=1,
+                        summary_max_tokens=100,
+                    )
+                ),
+            )
             snapshot = AgentSnapshot.capture(
                 agent_id=AgentId.from_values("planner", "main"), run_state=state
             )
@@ -374,11 +431,15 @@ def test_plan_recovery_after_history_loss_and_json_restore_keeps_prefix() -> Non
                 json.loads(snapshot.model_dump_json())
             ).to_run_state()
             resumed_model = SequenceModel(
-                [make_assistant_response("continue"), make_assistant_response("done")]
+                [
+                    make_assistant_response("summary"),
+                    make_assistant_response("continue"),
+                    make_assistant_response("done"),
+                ]
             )
             resumed = DefaultAgent(
                 descriptor=AgentDescriptor(
-                    name="Planner", model=resumed_model, shims=(shim,)
+                    name="Planner", model=resumed_model, shims=(compaction, shim)
                 ),
                 run_state=state,
             )
@@ -386,13 +447,19 @@ def test_plan_recovery_after_history_loss_and_json_restore_keeps_prefix() -> Non
             await resumed.run("Check the result")
             state = resumed.run_state
             assert state is not None
-            recovered = [item for item in state.history if is_internal_message(item)]
+            recovered = [
+                item
+                for item in state.history
+                if is_internal_message(item, origin="agentlane.compaction.context")
+            ]
             assert len(recovered) == 1
-            assert is_internal_message(recovered[0], origin="planner:plan")
+            assert is_internal_message(
+                recovered[0], origin="agentlane.compaction.context"
+            )
             assert '"step": "Verify changes"' in str(recovered[0])
             assert (
-                resumed_model.calls[1][: len(resumed_model.calls[0])]
-                == resumed_model.calls[0]
+                resumed_model.calls[2][: len(resumed_model.calls[1])]
+                == resumed_model.calls[1]
             )
 
         # Sharing a shim definition must not transfer the parent's plan state.
@@ -406,7 +473,7 @@ def test_plan_recovery_after_history_loss_and_json_restore_keeps_prefix() -> Non
     asyncio.run(scenario())
 
 
-def test_plan_prepare_restores_latest_snapshot_despite_older_visible_plan() -> None:
+def test_plan_prepare_contributes_latest_state_without_changing_history() -> None:
     async def scenario() -> None:
         shim = HarnessToolsShim((plan_tool(),))
         bound = await shim.bind(cast(ShimBindingContext, object()))
@@ -432,11 +499,14 @@ def test_plan_prepare_restores_latest_snapshot_despite_older_visible_plan() -> N
 
         await bound.prepare_turn(turn)
 
-        recovered = state.history[-1]
-        assert is_internal_message(recovered, origin="harness-tools:plan")
-        assert isinstance(recovered, dict)
-        assert recovered["content"] == "Current task plan:\n" + json.dumps(
-            latest, sort_keys=True
+        assert not any(is_internal_message(item) for item in state.history)
+        assert len(turn.preserved_context) == 1
+        recovered = turn.preserved_context[0]
+        assert recovered.origin == "harness-tools:plan"
+        assert recovered.represented_by == ()
+        assert recovered.content == (
+            "Current task plan (supersedes historical write_plan calls):\n"
+            + json.dumps(latest, sort_keys=True)
         )
         assert (
             await bound.transform_messages(

@@ -89,19 +89,41 @@ class BoundShimManager:
             self._started_sessions.append(session)
             await session.on_run_start(state, transient_state)
 
-    async def prepare_turn(self, turn: PreparedTurn) -> None:
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        """Notify bound shims after native steering input enters history."""
+        for session in self._sessions:
+            await session.on_input_messages(state, messages)
+
+    async def prepare_turn(
+        self, turn: PreparedTurn, *, prepare_request: bool = True
+    ) -> None:
         """Let bound shims mutate the prepared turn in order."""
-        self._original_history = [
-            copy_history_item(item) for item in turn.run_state.history
-        ]
+
+        # Keep an independent history copy until all transforms and validators
+        # succeed. This rollback covers history, not shim state or tool effects.
+        original_history = [copy_history_item(item) for item in turn.run_state.history]
+        self._original_history = original_history
         try:
             for session in self._sessions:
                 await session.prepare_turn(turn)
             turn.apply_tool_exclusions()
+
+            # An automatic successor is already running. Update tool permissions
+            # above, but do not prepare or report another request for it.
+            if prepare_request:
+                # Every owner has contributed state before compaction selects it.
+                for session in self._sessions:
+                    await session.prepare_request(turn)
+            else:
+                self._original_history = None
         except BaseException as error:
-            turn.replace_history(self._original_history)
+            # The snapshot is already private; transfer it instead of copying it.
+            turn.run_state.history = original_history
             self._original_history = None
-            await self._notify_request_prepared(turn, [], error)
+            if prepare_request:
+                await self._notify_request_prepared(turn, [], error)
             raise
 
     async def transform_messages(
@@ -124,13 +146,16 @@ class BoundShimManager:
                 await session.validate_request(turn, transformed_messages)
         except BaseException as error:
             if self._original_history is not None:
-                turn.replace_history(self._original_history)
+                # A failed final request must not persist a partial replacement,
+                # including when cancellation interrupts preparation.
+                turn.run_state.history = self._original_history
             await self._notify_request_prepared(turn, transformed_messages, error)
             raise
         finally:
             self._original_history = None
 
         await self._notify_request_prepared(turn, transformed_messages, None)
+
         return transformed_messages
 
     async def _notify_request_prepared(

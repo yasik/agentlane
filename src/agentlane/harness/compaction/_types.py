@@ -2,11 +2,12 @@
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, TypedDict, runtime_checkable
 
 from agentlane.models import MessageDict, Model, ModelResponse
 
 from .._run import RunHistoryItem, RunInstructions
+from .._types import PreservedContext as PreservedContext
 
 type SummaryPlacement = Literal["before_tail", "after_tail"]
 """Where a generated summary item is placed relative to the retained tail."""
@@ -92,6 +93,120 @@ class CompactionRequest:
 
     reason: CompactionTrigger
     """Whether the attempt was triggered by accounting or explicit request."""
+
+    required_messages: tuple[MessageDict, ...] = ()
+    """Exact conversation anchors that must remain visible after compaction."""
+
+    preserved_context: tuple[PreservedContext, ...] = ()
+    """Current state supplied by its owners before selection begins."""
+
+    request_overhead_tokens: int = 0
+    """Reserved main-request tokens for tools and model output."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class PreservationBlock:
+    """One indivisible history block offered to a preservation selector."""
+
+    id: int
+    """Attempt-local ID; return this ID to retain the original block."""
+
+    messages: tuple[MessageDict, ...]
+    """Detached rendered messages for inspection or a decision-model call."""
+
+    tokens: int
+    """Estimated input tokens for the whole block."""
+
+    required: bool
+    """Whether conversation continuity requires this block to be retained."""
+
+    retainable: bool
+    """False for old summaries and state projections being replaced."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class PreservationSelection:
+    """Select original blocks and state; the compactor owns final assembly."""
+
+    block_ids: tuple[int, ...]
+    """Retained block IDs; output order is always the original chronology."""
+
+    context: tuple[PreservedContext, ...]
+    """Explicit state choice; copy the default context or pass `()` to omit it."""
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class PreservationRequest:
+    """Detached input to one async preservation decision."""
+
+    blocks: tuple[PreservationBlock, ...]
+    """Original history grouped so a selection cannot split tool interactions."""
+
+    default: PreservationSelection
+    """Default recency selection and owner-supplied context; extend or replace it."""
+
+    token_budget: int
+    """Maximum retained-block and injected-context tokens, after reservations."""
+
+    retention_budget: int
+    """Soft retention allowance shared with recency selection.
+
+    Required anchors can exceed this allowance, but must fit `token_budget`.
+    """
+
+    instructions: tuple[MessageDict, ...]
+    """Rendered system instructions for policies that rank against task context."""
+
+    required_messages: tuple[MessageDict, ...]
+    """Exact anchors, including any that must be reintroduced from saved state."""
+
+    estimate_tokens: Callable[[PreservationSelection], int]
+    """Validate and price a candidate with the same rules as final selection.
+
+    Includes missing anchors and only context not represented by retained blocks.
+    Uses canonical input even if a selector edits its detached inspection view.
+    """
+
+
+class RankingPayloadBlock(TypedDict):
+    """One history block serialized for ranking or background context."""
+
+    id: int
+    required: bool
+    retainable: bool
+    """False for background blocks whose IDs must not be returned."""
+    messages: tuple[MessageDict, ...]
+
+
+class RankingPayload(TypedDict):
+    """Model-ranking input; required blocks and messages provide task context."""
+
+    instructions: tuple[MessageDict, ...]
+    required_messages: tuple[MessageDict, ...]
+    """Exact anchors absent from the blocks sent to the ranking model."""
+    current_state: list[str]
+    """State without a complete representation in blocks or required_messages."""
+    blocks: list[RankingPayloadBlock]
+
+
+class PreservationSelector(Protocol):
+    """Async selection policy; errors abort compaction without installing history."""
+
+    async def __call__(self, request: PreservationRequest, /) -> PreservationSelection:
+        """Select original blocks and current state before summarization."""
+        ...
+
+
+class PreservationRanker(Protocol):
+    """Client-owned relevance policy used by RankedPreservationSelector."""
+
+    async def rank(self, request: PreservationRequest, /) -> Sequence[int]:
+        """Return retainable block IDs in descending relevance order.
+
+        IDs apply only to this attempt. Omitted optional blocks are not retained.
+        Required blocks remain selected regardless of their rank or omission.
+        """
+        ...
 
 
 @dataclass(kw_only=True, slots=True)

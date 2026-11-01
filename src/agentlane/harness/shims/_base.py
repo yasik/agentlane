@@ -1,7 +1,7 @@
 """Base shim contracts for the harness."""
 
 import abc
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -57,9 +57,23 @@ class BoundShim:
         _ = state
         _ = transient_state
 
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        """Handle native steering input after it is committed to history.
+
+        Called only for delivered input, not pending steering receipts or
+        application-injected history. Messages follow their delivery order.
+        """
+        del state, messages
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         """Mutate the prepared turn before one model request is built."""
         _ = turn
+
+    async def prepare_request(self, turn: PreparedTurn) -> None:
+        """Prepare history after all shims contribute instructions, tools, and state."""
+        del turn
 
     async def transform_messages(
         self,
@@ -169,8 +183,16 @@ class DelegatingBoundShim(BoundShim):
     ) -> None:
         await self._inner.on_run_start(state, transient_state)
 
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        await self._inner.on_input_messages(state, messages)
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         await self._inner.prepare_turn(turn)
+
+    async def prepare_request(self, turn: PreparedTurn) -> None:
+        await self._inner.prepare_request(turn)
 
     async def transform_messages(
         self,
@@ -190,7 +212,6 @@ class DelegatingBoundShim(BoundShim):
         messages: list[MessageDict],
         error: BaseException | None,
     ) -> None:
-        """Observe request preparation after validation or history rollback."""
         await self._inner.on_request_prepared(turn, messages, error)
 
     async def on_model_response(
@@ -229,8 +250,16 @@ class _ForwardingBoundShim(BoundShim):
     ) -> None:
         await self._shim.on_run_start(state, transient_state)
 
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        await self._shim.on_input_messages(state, messages)
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         await self._shim.prepare_turn(turn)
+
+    async def prepare_request(self, turn: PreparedTurn) -> None:
+        await self._shim.prepare_request(turn)
 
     async def transform_messages(
         self,
@@ -250,7 +279,6 @@ class _ForwardingBoundShim(BoundShim):
         messages: list[MessageDict],
         error: BaseException | None,
     ) -> None:
-        """Observe request preparation after validation or history rollback."""
         await self._shim.on_request_prepared(turn, messages, error)
 
     async def on_model_response(
@@ -307,9 +335,23 @@ class Shim(abc.ABC):
         _ = state
         _ = transient_state
 
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        """Handle native steering input after it is committed to history.
+
+        Called only for delivered input, not pending steering receipts or
+        application-injected history. Messages follow their delivery order.
+        """
+        del state, messages
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         """Mutate the prepared turn before one model request is built."""
         _ = turn
+
+    async def prepare_request(self, turn: PreparedTurn) -> None:
+        """Prepare history after all ordinary turn preparation is complete."""
+        del turn
 
     async def transform_messages(
         self,
@@ -417,8 +459,16 @@ class DelegatingShim(Shim):
     ) -> None:
         await self._inner.on_run_start(state, transient_state)
 
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        await self._inner.on_input_messages(state, messages)
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         await self._inner.prepare_turn(turn)
+
+    async def prepare_request(self, turn: PreparedTurn) -> None:
+        await self._inner.prepare_request(turn)
 
     async def transform_messages(
         self,
@@ -438,7 +488,6 @@ class DelegatingShim(Shim):
         messages: list[MessageDict],
         error: BaseException | None,
     ) -> None:
-        """Observe request preparation after validation or history rollback."""
         await self._inner.on_request_prepared(turn, messages, error)
 
     async def on_model_response(

@@ -1,8 +1,10 @@
 """Native continuity and final request validation regressions."""
 
+import asyncio
 import re
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from copy import deepcopy
+from typing import Any
 
 import pytest
 
@@ -15,21 +17,43 @@ from agentlane.harness import (
 )
 from agentlane.harness.agents import DefaultAgent
 from agentlane.harness.compaction import (
+    SUMMARY_CLOSE_TAG,
+    SUMMARY_OPEN_TAG,
     CompactionReport,
     CompactionShim,
     CompactionShimConfig,
     ContextOverflowError,
     DefaultCompactor,
     DefaultCompactorConfig,
+    PreservationRequest,
+    PreservationSelection,
     is_summary_item,
     render_request_messages,
 )
 from agentlane.harness.shims import BoundShim, PreparedTurn, ShimBindingContext
 from agentlane.harness.shims._manager import BoundShimManager
-from agentlane.models import MessageDict, ModelResponse, Tools, internal_message
-from agentlane.runtime import SingleThreadedRuntimeEngine
+from agentlane.harness.tools import HarnessToolsShim, plan_tool
+from agentlane.models import (
+    MessageDict,
+    ModelResponse,
+    ModelStreamEvent,
+    ModelStreamEventKind,
+    SteeringInput,
+    SteeringReceipt,
+    Tools,
+    internal_message,
+    is_internal_message,
+)
+from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
+from agentlane.tracing import Span
 
-from .tools_test_utils import SequenceModel, make_assistant_response, named_tool
+from .tools_test_utils import (
+    SequenceModel,
+    echo_tool,
+    make_assistant_response,
+    make_tool_call,
+    named_tool,
+)
 
 
 class _ModelTask(Task):
@@ -70,6 +94,42 @@ def _compaction(
 
 def _evidence() -> list[RunHistoryItem]:
     return [{"role": "assistant", "content": f"evidence {i} [t=10]"} for i in range(5)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["dict", "string", "multipart"])
+@pytest.mark.parametrize("boundary_tags", [False, True])
+async def test_compaction_preserves_user_requests_quoting_summary_tags(
+    shape: str, boundary_tags: bool
+) -> None:
+    text = f"{SUMMARY_OPEN_TAG} explain these delimiters [t=2] {SUMMARY_CLOSE_TAG}"
+    if not boundary_tags:
+        text = f"Debug this: {text}. Keep my exact request."
+    request: MessageDict = {"role": "user", "content": text}
+    if shape == "multipart":
+        request["content"] = [{"type": "text", "text": text}]
+    original: RunHistoryItem = text if shape == "string" else request
+    model = SequenceModel(
+        [make_assistant_response("summary [t=1]"), make_assistant_response("done")]
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="quoted-tags", model=model, shims=(_compaction(),)
+        )
+    )
+
+    result = await agent.run(
+        RunState(
+            instructions="system",
+            history=["Earlier request", original, *_evidence()],
+            responses=[],
+        )
+    )
+
+    assert request in model.calls[-1]
+    assert sum(is_summary_item(message) for message in model.calls[-1]) == 1
+    assert result.run_state is not None
+    assert result.run_state.shim_state["compaction:latest-user"] == request
 
 
 @pytest.mark.asyncio
@@ -134,6 +194,152 @@ async def test_shared_definition_keeps_helper_assignment_separate() -> None:
         assert other not in str(model.calls[-1])
 
 
+@pytest.mark.asyncio
+async def test_required_request_and_tail_leave_nothing_to_summarize() -> None:
+    model = SequenceModel([make_assistant_response("summary [t=1]")] * 2)
+    reports: list[CompactionReport] = []
+    bound = await _compaction(window=90, trigger=70, reports=reports).bind(
+        ShimBindingContext(task=_ModelTask(model))
+    )
+    manager = BoundShimManager((bound,))
+    original: list[RunHistoryItem] = [
+        {"role": "user", "content": "large request [t=80]"},
+        {"role": "assistant", "content": "recent evidence [t=10]"},
+    ]
+    state = RunState(instructions="system", history=deepcopy(original), responses=[])
+    first = PreparedTurn(run_state=state, tools=None, model_args=None)
+    await manager.on_run_start(state, first.transient_state)
+
+    # Required blocks are selected first, so this attempt needs no summary call.
+    for _ in range(2):
+        turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+        await manager.prepare_turn(turn)
+        messages = await manager.transform_messages(
+            turn, render_request_messages(state.instructions, state.history)
+        )
+        assert state.history == original
+        assert _token_estimator(messages) == 90
+
+    assert len(reports) == 2
+    assert all(not report.compacted for report in reports)
+    assert all(report.estimated_tokens_after == 90 for report in reports)
+    assert all(report.error is None for report in reports)
+    assert model.calls == []
+
+
+class _SteeringModel(SequenceModel):
+    def __init__(self, delivery: str) -> None:
+        super().__init__(
+            [
+                make_assistant_response("first evidence [t=20]"),
+                make_assistant_response(
+                    "second evidence [t=30]",
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="continue",
+                            name="echo",
+                            arguments='{"text":"continue"}',
+                        )
+                    ],
+                ),
+                make_assistant_response("summary [t=1]"),
+                make_assistant_response("done"),
+            ]
+        )
+        self.delivery = delivery
+        self.steered = asyncio.Event()
+        self.correction: str = ""
+        self.stream_calls = 0
+
+    async def steer(self, input: SteeringInput) -> SteeringReceipt:
+        assert isinstance(input, str)
+        self.correction = input
+        self.steered.set()
+
+        return SteeringReceipt(
+            input=input, previous_response_id="first", status="accepted"
+        )
+
+    async def stream_response(
+        self,
+        messages: list[MessageDict],
+        extra_call_args: dict[str, object] | None = None,
+        schema: object | None = None,
+        tools: Tools | None = None,
+        cancellation_token: CancellationToken | None = None,
+        parent_span: Span[Any] | None = None,
+        **kwargs: object,
+    ) -> AsyncIterator[ModelStreamEvent]:
+        response = await self.get_response(
+            messages,
+            extra_call_args,
+            schema,
+            tools,
+            cancellation_token,
+            parent_span,
+            **kwargs,
+        )
+        self.stream_calls += 1
+        inputs: list[dict[str, Any]] | None = None
+
+        # Expose the live control channel before waiting for the caller's correction.
+        if self.stream_calls == 1:
+            yield ModelStreamEvent(kind=ModelStreamEventKind.TEXT_DELTA, text="working")
+            await self.steered.wait()
+            if self.delivery != "pending":
+                inputs = [{"role": "user", "content": self.correction}]
+            if self.delivery == "provider":
+                yield ModelStreamEvent(
+                    kind=ModelStreamEventKind.PROVIDER, input_messages=inputs
+                )
+                inputs = None
+
+        yield ModelStreamEvent(
+            kind=ModelStreamEventKind.COMPLETED,
+            response=response,
+            input_messages=inputs,
+            continuation="automatic" if self.stream_calls == 1 else None,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery", ["completed", "provider", "pending"])
+@pytest.mark.parametrize("quote_tags", [False, True])
+async def test_native_steering_updates_compaction_request_only_after_delivery(
+    delivery: str,
+    quote_tags: bool,
+) -> None:
+    model = _SteeringModel(delivery)
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="steered",
+            model=model,
+            tools=Tools(tools=(echo_tool("echo"),)),
+            shims=(_compaction(),),
+        )
+    )
+    initial = {"role": "user", "content": "Build X [t=1]"}
+    correction = {"role": "user", "content": "Stop, build Y instead [t=2]"}
+    if quote_tags:
+        correction["content"] += f" Explain {SUMMARY_OPEN_TAG} and {SUMMARY_CLOSE_TAG}."
+    stream = await agent.run_stream(initial["content"])
+
+    async with asyncio.timeout(5):
+        await anext(stream)
+        await stream.steer(correction["content"])
+        async for _ in stream:
+            pass
+        result = await stream.result()
+
+    expected = initial if delivery == "pending" else correction
+    superseded = correction if delivery == "pending" else initial
+    assert expected in model.calls[-1]
+    assert superseded not in model.calls[-1]
+    assert any(is_summary_item(message) for message in model.calls[-1])
+    assert result.run_state is not None
+    assert result.run_state.shim_state["compaction:latest-user"] == expected
+
+
 class _InjectedContext(BoundShim):
     async def transform_messages(
         self, turn: PreparedTurn, messages: list[MessageDict]
@@ -143,6 +349,7 @@ class _InjectedContext(BoundShim):
                 {"role": "user", "content": "injected [t=100]"}, origin="test"
             )
         )
+
         return [*messages, {"role": "user", "content": "injected [t=100]"}]
 
 
@@ -322,9 +529,14 @@ async def test_preparation_and_transform_errors_restore_original_history(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "alias", ["max_tokens", "max_output_tokens", "max_completion_tokens"]
+    ("alias", "explicit"),
+    [
+        ("max_tokens", None),
+        ("max_tokens", 2048),
+        ("max_output_tokens", 2048),
+        ("max_completion_tokens", 2048),
+    ],
 )
-@pytest.mark.parametrize("explicit", [None, 2048])
 async def test_default_actual_output_cap_normalizes_null_aliases(
     alias: str, explicit: int | None
 ) -> None:
@@ -366,4 +578,278 @@ async def test_malformed_output_caps_fail_before_summary(
     turn = PreparedTurn(run_state=state, tools=None, model_args={alias: value})
     with pytest.raises(ValueError, match="positive integer"):
         await bound.prepare_turn(turn)
+    assert model.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compact_first", [True, False])
+@pytest.mark.parametrize("retain_plan_call", [True, False])
+async def test_plan_decision_precedes_summary_in_both_shim_orders(
+    compact_first: bool,
+    retain_plan_call: bool,
+) -> None:
+    model = SequenceModel([make_assistant_response("summary [t=1]")])
+    context = ShimBindingContext(task=_ModelTask(model))
+    compaction = await CompactionShim(
+        CompactionShimConfig(context_window=100, trigger_tokens=40, on_failure="skip"),
+        DefaultCompactor(
+            DefaultCompactorConfig(
+                keep_recent_tokens=1,
+                keep_recent_messages=3 if retain_plan_call else 1,
+                summary_max_tokens=2,
+            )
+        ),
+        estimator=_token_estimator,
+    ).bind(context)
+    tools = await HarnessToolsShim((plan_tool(),)).bind(context)
+    sessions = (compaction, tools) if compact_first else (tools, compaction)
+    manager = BoundShimManager(sessions)
+    plan = {
+        "explanation": None,
+        "plan": [{"step": "Verify changes", "status": "in_progress"}],
+    }
+    call = make_assistant_response(
+        None,
+        tool_calls=[
+            make_tool_call(
+                tool_id="plan",
+                name="write_plan",
+                arguments='{"plan":[{"step":"Verify changes","status":"in_progress"}]}',
+            )
+        ],
+    )
+    state = RunState(
+        instructions="system",
+        turn_count=3,
+        responses=[],
+        history=[
+            *_evidence(),
+            call,
+            {"role": "tool", "tool_call_id": "plan", "content": "Plan updated [t=1]"},
+            {"role": "user", "content": "Continue [t=1]"},
+        ],
+    )
+    state.shim_state["harness-tools:plan"] = plan
+    turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+    await manager.on_run_start(state, turn.transient_state)
+    await manager.prepare_turn(turn)
+    prepared_history = deepcopy(state.history)
+    messages = await manager.transform_messages(
+        turn,
+        render_request_messages(state.instructions, state.history),
+    )
+
+    assert len(model.calls) == 1
+    assert state.history == prepared_history
+    projections = [
+        item
+        for item in state.history
+        if is_internal_message(item, origin="agentlane.compaction.context")
+    ]
+    assert len(projections) == (0 if retain_plan_call else 1)
+    assert "Verify changes" in str(messages)
+    assert (call in state.history) == retain_plan_call
+    if projections:
+        assert state.history.index(projections[0]) < len(state.history) - 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retain_latest", [False, True])
+async def test_ranked_plan_history_keeps_current_state_across_repeated_compaction(
+    retain_latest: bool,
+) -> None:
+    model = SequenceModel([make_assistant_response("summary [t=1]")] * 2)
+    context = ShimBindingContext(task=_ModelTask(model))
+    history: list[RunHistoryItem] = [*_evidence()]
+    for call_id, status in (
+        ("first-a", "pending"),
+        ("b", "completed"),
+        ("last-a", "pending"),
+    ):
+        history.extend(
+            [
+                make_assistant_response(
+                    None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id=call_id,
+                            name="write_plan",
+                            arguments='{"plan":[{"step":"Verify changes","status":"'
+                            + status
+                            + '"}]}',
+                        )
+                    ],
+                ),
+                {"role": "tool", "tool_call_id": call_id, "content": "Plan updated"},
+            ]
+        )
+    history.append({"role": "user", "content": "Continue [t=1]"})
+
+    # Keep historical evidence, optionally retaining the final correction too.
+    async def select(view: PreservationRequest) -> PreservationSelection:
+        selected_calls = {"first-a", "b"}
+        if retain_latest:
+            selected_calls.add("last-a")
+
+        return PreservationSelection(
+            block_ids=tuple(
+                block.id
+                for block in view.blocks
+                if block.required
+                or any(
+                    message.get("tool_call_id") in selected_calls
+                    for message in block.messages
+                )
+            ),
+            context=view.default.context,
+        )
+
+    compaction = await CompactionShim(
+        CompactionShimConfig(context_window=100, trigger_tokens=40, on_failure="skip"),
+        DefaultCompactor(
+            DefaultCompactorConfig(
+                keep_recent_tokens=1, keep_recent_messages=1, summary_max_tokens=2
+            ),
+            selector=select,
+        ),
+        estimator=_token_estimator,
+    ).bind(context)
+    tools = await HarnessToolsShim((plan_tool(),)).bind(context)
+    manager = BoundShimManager((tools, compaction))
+    state = RunState(instructions="system", history=history, responses=[])
+    state.shim_state["harness-tools:plan"] = {
+        "explanation": None,
+        "plan": [{"step": "Verify changes", "status": "pending"}],
+    }
+    turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+    await manager.on_run_start(state, turn.transient_state)
+
+    # The second attempt must not promote the surviving first A over the later B.
+    for attempt in range(2):
+        turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+        await manager.prepare_turn(turn)
+        await manager.transform_messages(
+            turn, render_request_messages(state.instructions, state.history)
+        )
+
+        projections = [
+            message
+            for message in render_request_messages(None, state.history)
+            if is_internal_message(message, origin="agentlane.compaction.context")
+        ]
+        assert len(model.calls) == attempt + 1
+        assert len(projections) == (0 if retain_latest else 1)
+        assert any(
+            isinstance(item, dict) and item.get("tool_call_id") == "b"
+            for item in state.history
+        )
+        assert (
+            any(
+                isinstance(item, dict) and item.get("tool_call_id") == "last-a"
+                for item in state.history
+            )
+            == retain_latest
+        )
+        if projections:
+            assert '"status": "pending"' in str(projections[0]["content"])
+            assert "supersedes historical write_plan calls" in str(
+                projections[0]["content"]
+            )
+
+        state.history.extend(_evidence())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_run_cancellation_interrupts_compaction_observer(streaming: bool) -> None:
+    entered = asyncio.Event()
+    closed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def observe(report: CompactionReport) -> None:
+        assert report.compacted
+        entered.set()
+        try:
+            await release.wait()
+        finally:
+            closed.set()
+
+    model = SequenceModel([make_assistant_response("summary [t=1]")])
+    compaction = CompactionShim(
+        CompactionShimConfig(context_window=100, trigger_tokens=40),
+        DefaultCompactor(
+            DefaultCompactorConfig(
+                keep_recent_tokens=1, keep_recent_messages=1, summary_max_tokens=2
+            )
+        ),
+        estimator=_token_estimator,
+        on_compact=observe,
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(name="observer", model=model, shims=(compaction,))
+    )
+    state = RunState(
+        instructions="system", history=["request", *_evidence()], responses=[]
+    )
+    token = CancellationToken()
+    stream = (
+        await agent.run_stream(state, cancellation_token=token) if streaming else None
+    )
+    running = asyncio.create_task(
+        stream.result()
+        if stream is not None
+        else agent.run(state, cancellation_token=token)
+    )
+
+    try:
+        async with asyncio.timeout(5):
+            await entered.wait()
+            token.cancel()
+            expected_error = asyncio.CancelledError if streaming else RuntimeError
+            with pytest.raises(expected_error, match=None if streaming else "canceled"):
+                await running
+    finally:
+        running.cancel()
+        await asyncio.gather(running, return_exceptions=True)
+        if stream is not None:
+            await stream.aclose()
+
+    assert closed.is_set()
+    assert not release.is_set()
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_selector_cancellation_rolls_back_owner_preparation() -> None:
+    model = SequenceModel([])
+
+    async def cancel(request: PreservationRequest) -> PreservationSelection:
+        del request
+        raise asyncio.CancelledError()
+
+    class Owner(BoundShim):
+        async def prepare_turn(self, turn: PreparedTurn) -> None:
+            turn.append_history_item({"role": "assistant", "content": "prepared"})
+
+    bound = await CompactionShim(
+        CompactionShimConfig(context_window=100, trigger_tokens=40),
+        DefaultCompactor(
+            DefaultCompactorConfig(
+                summary_max_tokens=2, keep_recent_messages=1, keep_recent_tokens=1
+            ),
+            selector=cancel,
+        ),
+        estimator=_token_estimator,
+    ).bind(ShimBindingContext(task=_ModelTask(model)))
+    manager = BoundShimManager((bound, Owner()))
+    state = RunState(
+        instructions="system", history=["request", *_evidence()], responses=[]
+    )
+    original = deepcopy(state.history)
+    turn = PreparedTurn(run_state=state, tools=None, model_args=None)
+    await manager.on_run_start(state, turn.transient_state)
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager.prepare_turn(turn)
+    assert state.history == original
     assert model.calls == []

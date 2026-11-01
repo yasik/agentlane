@@ -23,6 +23,7 @@ from agentlane.harness.compaction import (
     DefaultCompactorConfig,
     is_summary_item,
 )
+from agentlane.harness.shims import PreparedTurn, Shim
 from agentlane.harness.skills import (
     FilesystemSkillLoader,
     LoadedSkill,
@@ -627,7 +628,10 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
             in system_prompt
         )
         assert "with the skill's name to load its full instructions." in system_prompt
-        assert "Call activate_skill at most once per skill in a run." in system_prompt
+        assert (
+            "Call activate_skill again if those instructions are missing and needed"
+            in system_prompt
+        )
         assert "continue using that existing skill content" in system_prompt
         assert "<available_skills>" in system_prompt
         assert "<name>refund-policy</name>" in system_prompt
@@ -670,8 +674,9 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
             model.calls[2][-1]["content"]
         )
         assert "Continue using the existing" in str(model.calls[2][-1]["content"])
-        assert "do not call `activate_skill` for this skill again" in str(
-            model.calls[2][-1]["content"]
+        assert (
+            "call `activate_skill` again only if its full instructions are missing"
+            in str(model.calls[2][-1]["content"])
         )
 
         second_call_tools = model.call_options[1]["tools"]
@@ -696,6 +701,12 @@ def test_skills_shim_activates_skill_from_custom_loader_and_deduplicates() -> No
 
 
 def test_skills_shim_deduplicates_duplicate_activation_calls_in_same_batch() -> None:
+    class SlowLoader(_MemorySkillLoader):
+        async def load(self, name: str) -> LoadedSkill:
+            await asyncio.sleep(0)
+
+            return await super().load(name)
+
     loaded_skill = LoadedSkill(
         manifest=SkillManifest(
             name="refund-policy",
@@ -706,7 +717,7 @@ def test_skills_shim_deduplicates_duplicate_activation_calls_in_same_batch() -> 
         instructions="# Refund Policy\n\nUse this skill for refund questions.",
         resources=(),
     )
-    loader = _MemorySkillLoader(loaded_skill)
+    loader = SlowLoader(loaded_skill)
     model = _SequenceModel(
         [
             _assistant_response(
@@ -732,6 +743,7 @@ def test_skills_shim_deduplicates_duplicate_activation_calls_in_same_batch() -> 
             name="Support",
             model=model,
             instructions="You are a support assistant.",
+            tools=Tools(tools=[], parallel_tool_calls=True),
             shims=(SkillsShim(loader=loader),),
         )
     )
@@ -750,8 +762,9 @@ def test_skills_shim_deduplicates_duplicate_activation_calls_in_same_batch() -> 
             "content": (
                 "Skill `refund-policy` is already active in this run. "
                 "Continue using the existing "
-                '`<skill_content name="refund-policy">`; do not call '
-                "`activate_skill` for this skill again."
+                '`<skill_content name="refund-policy">`; call `activate_skill` '
+                "again only if its full instructions are missing "
+                "from context and needed for the task."
             ),
         }
         assert isinstance(model.call_options[1]["tools"], Tools)
@@ -1432,8 +1445,9 @@ def test_skills_shim_returns_already_active_when_other_skills_remain() -> None:
         assert "Skill `refund-policy` is already active in this run." in str(
             repeated_activation_result["content"]
         )
-        assert "do not call `activate_skill` for this skill again" in str(
-            repeated_activation_result["content"]
+        assert (
+            "call `activate_skill` again only if its full instructions are missing"
+            in str(repeated_activation_result["content"])
         )
 
         if agent.run_state is None:
@@ -1581,7 +1595,10 @@ def test_skills_shim_active_skill_names_honors_custom_shim_name() -> None:
     assert shim.active_skill_names(state) == ("report-generator",)
 
 
-def test_active_skill_recovers_complete_content_after_repeated_json_restore() -> None:
+@pytest.mark.parametrize("skills_first", [False, True])
+def test_active_skill_reloads_on_demand_after_compaction_and_json_restore(
+    skills_first: bool,
+) -> None:
     async def scenario() -> None:
         loaded = LoadedSkill(
             manifest=SkillManifest(
@@ -1596,86 +1613,199 @@ def test_active_skill_recovers_complete_content_after_repeated_json_restore() ->
         )
         loader = _MemorySkillLoader(loaded)
         shim = SkillsShim(loader=loader, name="report-skills")
-        model = _SequenceModel(
-            [
-                _assistant_response(
-                    None,
-                    tool_calls=[
-                        _make_tool_call(
-                            tool_id="activate",
-                            arguments='{"name":"report"}',
-                            name="activate_skill",
-                        )
-                    ],
+        activation = _assistant_response(
+            None,
+            tool_calls=[
+                _make_tool_call(
+                    tool_id="activate",
+                    arguments='{"name":"report"}',
+                    name="activate_skill",
                 ),
-                _assistant_response("working"),
-            ]
+                _make_tool_call(
+                    tool_id="duplicate",
+                    arguments='{"name":"report"}',
+                    name="activate_skill",
+                ),
+            ],
         )
+        model = _SequenceModel([activation, _assistant_response("working")])
         agent = DefaultAgent(
             descriptor=AgentDescriptor(name="Writer", model=model, shims=(shim,))
         )
         await agent.run("Write a report")
         state = agent.run_state
         assert state is not None
-        assert not any(is_internal_message(item) for item in state.history)
         assert loader.load_calls == ["report"]
-
-        # A summary that only mentions activation must never replace the full
-        # instructions, resource paths, or relative-path guidance.
         payload = render_loaded_skill(loaded)
-        for _ in range(2):
-            state.history[:] = [
-                {
-                    "role": "user",
-                    "content": '<summary>Activated <skill_content name="report">.</summary>',
-                }
-            ]
+        compaction = CompactionShim(
+            CompactionShimConfig(context_window=50_000, trigger_tokens=10_000),
+            DefaultCompactor(
+                DefaultCompactorConfig(
+                    keep_recent_tokens=1, keep_recent_messages=1, summary_max_tokens=100
+                )
+            ),
+        )
+        shims = (shim, compaction) if skills_first else (compaction, shim)
+
+        for cycle in range(2):
+            state.history.append({"role": "assistant", "content": "evidence " * 10_000})
             snapshot = AgentSnapshot.capture(
-                agent_id=AgentId.from_values("writer", "main"),
-                run_state=state,
+                agent_id=AgentId.from_values("writer", "main"), run_state=state
             )
             state = AgentSnapshot.from_json(
                 json.loads(snapshot.model_dump_json())
             ).to_run_state()
             resumed_model = _SequenceModel(
-                [_assistant_response("continue"), _assistant_response("done")]
+                [
+                    _assistant_response(
+                        "Task progress; use the report skill when needed."
+                    ),
+                    _assistant_response("Continue without the skill."),
+                    activation,
+                    _assistant_response("done"),
+                    _assistant_response("checked"),
+                ]
             )
             resumed = DefaultAgent(
                 descriptor=AgentDescriptor(
-                    name="Writer", model=resumed_model, shims=(shim,)
+                    name="Writer", model=resumed_model, shims=shims
                 ),
                 run_state=state,
             )
             await resumed.run("Continue")
+            state = resumed.run_state
+            assert state is not None
+            summaries = [item for item in state.history if is_summary_item(item)]
+            assert len(summaries) == 1
+            assert is_internal_message(summaries[0])
+            summary = str(summaries[0])
+            assert "<previously_used_skills>" not in summary
+            assert "Write reports." not in summary
+            assert "/skills/report" not in summary
+            assert all(
+                payload not in str(message.get("content", ""))
+                for message in resumed_model.calls[1]
+            )
+            assert loader.load_calls == ["report"] * (cycle + 1)
+            assert str(state.instructions).count("<name>report</name>") == 1
+
+            # Activation reloads the full payload once, despite two calls in one
+            # response. A later ordinary turn keeps the existing request prefix.
+            await resumed.run("Use the report skill again")
             await resumed.run("Check the result")
             state = resumed.run_state
             assert state is not None
-            recovered = [item for item in state.history if is_internal_message(item)]
-            assert len(recovered) == 1
-            assert recovered[0] == {
-                "role": "user",
-                "content": payload,
-                "_agentlane": {
-                    "visibility": "internal",
-                    "origin": "report-skills:active-skill",
-                },
-            }
+            assert shim.active_skill_names(state) == ("report",)
+            assert loader.load_calls == ["report"] * (cycle + 2)
             assert (
-                resumed_model.calls[1][: len(resumed_model.calls[0])]
-                == resumed_model.calls[0]
+                sum(
+                    str(message.get("content", "")).count(payload)
+                    for message in resumed_model.calls[3]
+                )
+                == 1
+            )
+            assert (
+                resumed_model.calls[4][: len(resumed_model.calls[3])]
+                == resumed_model.calls[3]
+            )
+            assert not any(
+                is_internal_message(item) and not is_summary_item(item)
+                for item in state.history
             )
 
         helper_model = _SequenceModel([_assistant_response("helper")])
         helper = DefaultAgent(
-            descriptor=AgentDescriptor(name="Helper", model=helper_model, shims=(shim,))
+            descriptor=AgentDescriptor(name="Helper", model=helper_model, shims=shims)
         )
         await helper.run("Separate task")
         assert payload not in str(helper_model.calls)
+        assert "<previously_used_skills>" not in str(helper_model.calls)
 
     asyncio.run(scenario())
 
 
-def test_missing_active_skill_has_stable_recovery_notice() -> None:
+@pytest.mark.parametrize("use_skill_system_prompt", [False, True])
+def test_active_skill_in_system_instructions_is_not_loaded_twice(
+    use_skill_system_prompt: bool,
+) -> None:
+    async def scenario() -> None:
+        loaded = LoadedSkill(
+            manifest=SkillManifest(
+                name="report",
+                description="Write reports.",
+                skill_file=Path("/skills/report/SKILL.md"),
+                root=Path("/skills/report"),
+            ),
+            instructions="Read the evidence before writing.",
+            resources=(),
+        )
+        payload = render_loaded_skill(loaded)
+        system_prompt = f"Help the user.\n\n{payload}\n\nCite the evidence."
+        state = RunState(
+            instructions="Help the user." if use_skill_system_prompt else system_prompt,
+            history=[],
+            responses=[],
+            turn_count=0 if use_skill_system_prompt else 3,
+        )
+        state.shim_state["skills:active-skill-names"] = ["report"]
+        snapshot = AgentSnapshot.capture(
+            agent_id=AgentId.from_values("writer", "main"), run_state=state
+        )
+        state = AgentSnapshot.from_json(
+            json.loads(snapshot.model_dump_json())
+        ).to_run_state()
+        model = _SequenceModel(
+            [
+                _assistant_response("continue"),
+                _assistant_response(
+                    None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="preloaded",
+                            name="activate_skill",
+                            arguments='{"name":"report"}',
+                        )
+                    ],
+                ),
+                _assistant_response("done"),
+            ]
+        )
+        loader = _MemorySkillLoader(loaded)
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Writer",
+                model=model,
+                shims=(
+                    SkillsShim(
+                        loader=loader,
+                        system_prompt=(
+                            system_prompt if use_skill_system_prompt else None
+                        ),
+                    ),
+                ),
+            ),
+            run_state=state,
+        )
+
+        await agent.run("Continue")
+        assert loader.load_calls == []
+        await agent.run("Check")
+
+        for messages in model.calls:
+            assert (
+                sum(
+                    str(message.get("content", "")).count(payload)
+                    for message in messages
+                )
+                == 1
+            )
+        assert not any(is_internal_message(item) for item in state.history)
+        assert "already active" in str(model.calls[-1][-1]["content"])
+
+    asyncio.run(scenario())
+
+
+def test_missing_active_skill_does_not_inject_recovery_content() -> None:
     async def scenario() -> None:
         state = RunState(instructions="Help", history=[], responses=[])
         state.shim_state["skills:active-skill-names"] = ["removed"]
@@ -1695,14 +1825,14 @@ def test_missing_active_skill_has_stable_recovery_notice() -> None:
         result_state = agent.run_state
         assert result_state is not None
         notices = [item for item in result_state.history if is_internal_message(item)]
-        assert len(notices) == 1
-        assert "no longer available" in str(notices[0])
+        assert notices == []
+        assert result_state.shim_state["skills:active-skill-names"] == ["removed"]
         assert model.calls[1][: len(model.calls[0])] == model.calls[0]
 
     asyncio.run(scenario())
 
 
-def test_missing_large_active_skill_counts_toward_compaction_trigger() -> None:
+def test_missing_large_active_skill_does_not_trigger_compaction_or_load() -> None:
     async def scenario() -> None:
         loaded = LoadedSkill(
             manifest=SkillManifest(
@@ -1724,15 +1854,14 @@ def test_missing_large_active_skill_counts_toward_compaction_trigger() -> None:
             ],
         )
         state.shim_state["skills:active-skill-names"] = ["large"]
-        model = _SequenceModel(
-            [_assistant_response("Earlier task context."), _assistant_response("done")]
-        )
+        loader = _MemorySkillLoader(loaded)
+        model = _SequenceModel([_assistant_response("done")])
         agent = DefaultAgent(
             descriptor=AgentDescriptor(
                 name="Writer",
                 model=model,
                 shims=(
-                    SkillsShim(loader=_MemorySkillLoader(loaded)),
+                    SkillsShim(loader=loader),
                     CompactionShim(
                         CompactionShimConfig(
                             context_window=100_000, trigger_tokens=60_000
@@ -1752,12 +1881,184 @@ def test_missing_large_active_skill_counts_toward_compaction_trigger() -> None:
 
         await agent.run("Continue")
 
-        assert len(model.calls) == 2
-        assert any(is_summary_item(message) for message in model.calls[-1])
+        assert len(model.calls) == 1
+        assert loader.load_calls == []
+        assert not any(is_summary_item(message) for message in model.calls[0])
+        assert loaded.instructions not in str(model.calls[0])
+
+    asyncio.run(scenario())
+
+
+def test_skill_can_reload_when_final_transform_hides_its_instructions() -> None:
+    class HideSkillContent(Shim):
+        @property
+        def name(self) -> str:
+            return "hide-skill-content"
+
+        async def transform_messages(
+            self, turn: PreparedTurn, messages: list[MessageDict]
+        ) -> list[MessageDict] | None:
+            del turn
+
+            return [
+                (
+                    {**message, "content": "Skill content omitted from this request."}
+                    if message.get("role") == "tool"
+                    and message.get("name") == "activate_skill"
+                    else message
+                )
+                for message in messages
+            ]
+
+    async def scenario() -> None:
+        loaded = LoadedSkill(
+            manifest=_make_manifest("report"),
+            instructions="Use evidence.",
+            resources=(),
+        )
+        loader = _MemorySkillLoader(loaded)
+        activation = _assistant_response(
+            None,
+            tool_calls=[
+                _make_tool_call(
+                    tool_id="activate",
+                    name="activate_skill",
+                    arguments='{"name":"report"}',
+                )
+            ],
+        )
+        model = _SequenceModel([activation, activation, _assistant_response("done")])
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Writer",
+                model=model,
+                shims=(SkillsShim(loader=loader), HideSkillContent()),
+            )
+        )
+        await agent.run("Write a report")
+        state = agent.run_state
+        assert state is not None
+        payload = render_loaded_skill(loaded)
+
+        # Both requested loads reach authoritative history even though the
+        # transform removes each payload before the next model call.
+        assert (
+            sum(
+                isinstance(item, dict) and item.get("content") == payload
+                for item in state.history
+            )
+            == 2
+        )
+        assert loader.load_calls == ["report"]
+        assert all(
+            payload not in str(message.get("content", ""))
+            for message in model.calls[-1]
+        )
+
+    asyncio.run(scenario())
+
+
+def test_skill_load_failure_does_not_block_a_later_activation() -> None:
+    class FailingOnceLoader(_MemorySkillLoader):
+        async def load(self, name: str) -> LoadedSkill:
+            if not self.load_calls:
+                self.load_calls.append(name)
+                raise OSError("Skill source temporarily unavailable")
+
+            return await super().load(name)
+
+    async def scenario() -> None:
+        loaded = LoadedSkill(
+            manifest=_make_manifest("report"),
+            instructions="Use evidence.",
+            resources=(),
+        )
+        loader = FailingOnceLoader(loaded)
+        activation = _assistant_response(
+            None,
+            tool_calls=[
+                _make_tool_call(
+                    tool_id="activate",
+                    name="activate_skill",
+                    arguments='{"name":"report"}',
+                )
+            ],
+        )
+        model = _SequenceModel([activation, activation, _assistant_response("done")])
+        shim = SkillsShim(loader=loader)
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(name="Writer", model=model, shims=(shim,))
+        )
+        with pytest.raises(RuntimeError, match="temporarily unavailable"):
+            await agent.run("Write a report")
+        if agent.run_state is not None:
+            assert shim.active_skill_names(agent.run_state) == ()
+
+        await agent.run("Try again")
+        state = agent.run_state
+        assert state is not None
+        assert shim.active_skill_names(state) == ("report",)
+        assert loader.load_calls == ["report", "report"]
         assert any(
             message.get("content") == render_loaded_skill(loaded)
             for message in model.calls[-1]
         )
-        assert "old " * 20_000 not in str(model.calls[-1])
+
+    asyncio.run(scenario())
+
+
+def test_active_skill_tool_policy_survives_missing_instructions(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        loaded = LoadedSkill(
+            manifest=SkillManifest(
+                name="reader",
+                description="Read documents.",
+                skill_file=Path("/skills/reader/SKILL.md"),
+                root=Path("/skills/reader"),
+                tools=("read", "activate_skill"),
+                disallowed_tools=("write",),
+            ),
+            instructions="Read evidence before answering.",
+            resources=(),
+        )
+        state = RunState(instructions="Help", history=[], responses=[], turn_count=3)
+        state.shim_state["skills:active-skill-names"] = ["reader"]
+        model = _SequenceModel(
+            [
+                _assistant_response(
+                    None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="reload",
+                            name="activate_skill",
+                            arguments='{"name":"reader"}',
+                        )
+                    ],
+                ),
+                _assistant_response("done"),
+            ]
+        )
+        agent = DefaultAgent(
+            descriptor=AgentDescriptor(
+                name="Reader",
+                model=model,
+                shims=(
+                    HarnessToolsShim(
+                        (read_tool(cwd=tmp_path), write_tool(cwd=tmp_path))
+                    ),
+                    SkillsShim(loader=_MemorySkillLoader(loaded)),
+                ),
+            ),
+            run_state=state,
+        )
+        await agent.run("Read the documents")
+        assert all(
+            _tool_option_names(options["tools"]) == ["read", "activate_skill"]
+            for options in model.call_options
+        )
+        assert any(
+            message.get("content") == render_loaded_skill(loaded)
+            for message in model.calls[-1]
+        )
 
     asyncio.run(scenario())

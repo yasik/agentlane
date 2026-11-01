@@ -1,15 +1,12 @@
-"""Default compactor implementation for harness conversation compaction."""
+"""Compact history by selecting what to preserve before generating a summary."""
 
-from collections.abc import Iterable
-from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from agentlane.models import (
     MessageDict,
     MessageRole,
     ModelResponse,
     get_content_or_none,
-    is_internal_message,
     provider_messages,
 )
 
@@ -17,22 +14,46 @@ from .._run import RunHistoryItem
 from ._config import DefaultCompactorConfig
 from ._constants import MIN_BLOCKS_TO_SUMMARIZE, MIN_SHRINK_RATIO, SUMMARY_AFTER_TAIL
 from ._errors import CompactionError, ContextOverflowError
+from ._preservation import Preservation, select_preservation
 from ._render import render_request_messages
-from ._summary import is_summary_item, render_summary_item
-from ._types import CompactionRequest, CompactionResult, SummaryPlacement
+from ._summary import render_summary_item
+from ._types import (
+    CompactionRequest,
+    CompactionResult,
+    PreservationSelector,
+    SummaryPlacement,
+)
 
 
 class DefaultCompactor:
-    """Stock summary-plus-tail compactor for persisted harness history."""
+    """Replace older conversation history with a summary and retained context.
 
-    def __init__(self, config: DefaultCompactorConfig | None = None) -> None:
+    Preservation decides which complete conversation blocks and owner-supplied
+    state must remain visible. The default policy keeps recent history and exact
+    required messages. A client selector can change the optional blocks and state
+    to retain; the framework still validates required blocks and token limits.
+
+    The compactor returns a replacement candidate without installing it. The
+    compaction shim installs that candidate, and the harness validates the full
+    request after all message transforms before accepting the replacement.
+    """
+
+    def __init__(
+        self,
+        config: DefaultCompactorConfig | None = None,
+        *,
+        selector: PreservationSelector | None = None,
+    ) -> None:
         """Initialize the compactor with validated stock defaults.
 
         Args:
             config: Optional summary prompt, bridge, tail budget, placement,
                 and output-cap settings. `None` uses `DefaultCompactorConfig`.
+            selector: Optional async policy that extends or replaces the default
+                block and state selection before summarization.
         """
         self._config = config or DefaultCompactorConfig()
+        self._selector = selector
 
     @property
     def config(self) -> DefaultCompactorConfig:
@@ -40,12 +61,28 @@ class DefaultCompactor:
         return self._config
 
     async def compact(self, request: CompactionRequest) -> CompactionResult:
-        """Return replacement history with an older-head summary plus tail."""
+        """Select preserved context, summarize older history, and assemble once.
+
+        First reserve room for summary output, then select and validate the
+        blocks and state to retain. Skip summary generation when there is no
+        useful history to compact. These decisions precede the summary call.
+
+        Summarize the older history, including retained older evidence needed
+        to understand it; leave the retained recent suffix out of that input.
+        Check that the summary request fits and require a complete, nonempty
+        response. Combine the tagged summary with the selected context in the
+        configured order, then require a sufficient reduction in history size.
+
+        Return the candidate and removed items for the caller to install and
+        report. Selection, generation, or size errors leave the input unchanged.
+        """
         call_args = _summary_model_args(
             request_model_args=request.model_args,
             summary_max_tokens=self._config.summary_max_tokens,
         )
-        split = _split_history_for_summary(
+
+        # Decide all retention and state projections before spending a summary call.
+        preservation = await select_preservation(
             request=request,
             keep_recent_tokens=_effective_keep_recent_tokens(
                 request=request,
@@ -53,13 +90,16 @@ class DefaultCompactor:
                 call_args=call_args,
             ),
             keep_recent_messages=self._config.keep_recent_messages,
+            summary_tokens=_output_token_cap(call_args),
+            summary_bridge=self._config.summary_bridge,
+            selector=self._selector,
         )
-        if _should_skip_compaction(request=request, split=split):
+        if _should_skip_compaction(request=request, preservation=preservation):
             return _no_op_result(request.history)
 
         summarizer_messages = render_request_messages(
             request.instructions,
-            split.compacted_history,
+            preservation.summary_input,
         )
         summarizer_messages.insert(
             0,
@@ -80,9 +120,11 @@ class DefaultCompactor:
             bridge=self._config.summary_bridge,
             summary_text=summary_text,
         )
+
+        # Assemble exactly once; no later restoration changes this candidate.
         replacement_history = _replacement_history(
             summary_item=summary_item,
-            tail_history=split.tail_history,
+            retained_history=preservation.retained_history,
             placement=self._config.summary_placement,
         )
         _raise_if_replacement_does_not_shrink(
@@ -93,239 +135,28 @@ class DefaultCompactor:
         return CompactionResult(
             history=replacement_history,
             summary_content=str(summary_item["content"]),
-            dropped_items=tuple(split.compacted_history),
+            dropped_items=tuple(preservation.dropped_items),
             summarizer_response=summarizer_response,
         )
-
-
-@dataclass(slots=True)
-class _HistoryBlock:
-    """Internal atomic unit for summary/tail splitting."""
-
-    items: list[RunHistoryItem]
-    is_summary: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _HistorySplit:
-    """Internal split between summarized history and retained tail."""
-
-    compacted_history: list[RunHistoryItem]
-    tail_history: list[RunHistoryItem]
-    compacted_block_count: int
-    has_compacted_summary: bool
-
-
-def _split_history_for_summary(
-    *,
-    request: CompactionRequest,
-    keep_recent_tokens: int,
-    keep_recent_messages: int,
-) -> _HistorySplit:
-    tail_blocks_reversed: list[_HistoryBlock] = []
-    compacted_blocks_reversed: list[_HistoryBlock] = []
-    compacted_block_count = 0
-    has_compacted_summary = False
-    tail_tokens = 0
-    tail_items = 0
-    tail_closed = False
-    blocks = _history_blocks(request.history)
-    tail_anchor = _tail_anchor(blocks)
-
-    # Walk newest-to-oldest so the retained tail is always a contiguous suffix.
-    # Once a real block falls outside both recency budgets, every older real
-    # block must be summarized; otherwise compaction could leave holes in the
-    # conversation that make the model see cause without effect.
-    for index in range(len(blocks) - 1, -1, -1):
-        block = blocks[index]
-
-        # A previous summary is treated as old compressed context, not as fresh
-        # tail. Recompaction should replace summaries instead of stacking them.
-        if block.is_summary:
-            compacted_blocks_reversed.append(block)
-            has_compacted_summary = True
-            if tail_blocks_reversed:
-                tail_closed = True
-            continue
-
-        # After the tail is closed, avoid estimating older blocks. They are
-        # already committed to the summarizer side of the split.
-        protected = tail_anchor is not None and index >= tail_anchor
-        if tail_closed and not protected:
-            compacted_blocks_reversed.append(block)
-            compacted_block_count += 1
-            continue
-
-        block_tokens = _estimate_history_tokens(request, block.items)
-        should_keep = protected or _should_keep_in_tail(
-            tail_items=tail_items,
-            tail_tokens=tail_tokens,
-            block_tokens=block_tokens,
-            keep_recent_messages=keep_recent_messages,
-            keep_recent_tokens=keep_recent_tokens,
-        )
-        if should_keep:
-            tail_blocks_reversed.append(block)
-            tail_tokens += block_tokens
-            tail_items += len(block.items)
-            continue
-
-        compacted_blocks_reversed.append(block)
-        compacted_block_count += 1
-        tail_closed = True
-
-    return _HistorySplit(
-        compacted_history=_flatten_blocks(reversed(compacted_blocks_reversed)),
-        tail_history=_flatten_blocks(reversed(tail_blocks_reversed)),
-        compacted_block_count=compacted_block_count,
-        has_compacted_summary=has_compacted_summary,
-    )
-
-
-def _tail_anchor(blocks: list[_HistoryBlock]) -> int | None:
-    """Protect the newest conversation block and any trailing internal context."""
-    fallback: int | None = None
-    for index in range(len(blocks) - 1, -1, -1):
-        block = blocks[index]
-        if block.is_summary:
-            continue
-
-        # With no ordinary conversation, protect only the newest context block.
-        if fallback is None:
-            fallback = index
-        if not all(is_internal_message(item) for item in block.items):
-            return index
-
-    return fallback
-
-
-def _should_keep_in_tail(
-    *,
-    tail_items: int,
-    tail_tokens: int,
-    block_tokens: int,
-    keep_recent_messages: int,
-    keep_recent_tokens: int,
-) -> bool:
-    # The message floor is evaluated before the token ceiling. That deliberately
-    # favors conversational continuity over an exact tail budget: the later
-    # overflow and shrink checks still protect the model context if the minimum
-    # recent items are too large to compact safely.
-    if tail_items < keep_recent_messages:
-        return True
-
-    return tail_tokens + block_tokens <= keep_recent_tokens
-
-
-def _history_blocks(history: tuple[RunHistoryItem, ...]) -> list[_HistoryBlock]:
-    blocks: list[_HistoryBlock] = []
-    index = 0
-    while index < len(history):
-        item = history[index]
-
-        if _tool_result_call_id(item) is not None:
-            # Tool results must stay attached to nearby context. A tool result
-            # without a visible assistant opener is malformed history, but
-            # gluing it to the previous block is safer than splitting it into a
-            # standalone tail item the model cannot attribute to a call.
-            if blocks:
-                blocks[-1].items.append(item)
-            else:
-                blocks.append(_HistoryBlock(items=[item], is_summary=False))
-            index += 1
-            continue
-
-        tool_call_ids = _assistant_tool_call_ids(item)
-        if not tool_call_ids:
-            blocks.append(_HistoryBlock(items=[item], is_summary=is_summary_item(item)))
-            index += 1
-            continue
-
-        # Assistant tool calls and their matching tool results are one atomic
-        # block. Keeping only one side would produce an invalid request for
-        # providers that require tool-call/result pairing.
-        block_items = [item]
-        remaining_tool_call_ids = tool_call_ids
-        index += 1
-        while index < len(history):
-            tool_call_id = _tool_result_call_id(history[index])
-            if tool_call_id not in remaining_tool_call_ids:
-                break
-
-            block_items.append(history[index])
-            remaining_tool_call_ids.remove(tool_call_id)
-            index += 1
-            if not remaining_tool_call_ids:
-                break
-
-        blocks.append(_HistoryBlock(items=block_items, is_summary=False))
-
-    return blocks
-
-
-def _flatten_blocks(blocks: Iterable[_HistoryBlock]) -> list[RunHistoryItem]:
-    return [item for block in blocks for item in block.items]
-
-
-def _assistant_tool_call_ids(item: RunHistoryItem) -> set[str]:
-    if isinstance(item, ModelResponse):
-        if not item.choices:
-            return set()
-        tool_calls = item.choices[0].message.tool_calls or []
-        return {tool_call.id for tool_call in tool_calls if tool_call.id}
-
-    if not isinstance(item, dict) or item.get("role") != MessageRole.ASSISTANT.value:
-        return set()
-
-    raw_tool_calls = item.get("tool_calls")
-    if not isinstance(raw_tool_calls, list):
-        return set()
-
-    ids: list[str] = []
-    for raw_tool_call in cast(list[object], raw_tool_calls):
-        if not isinstance(raw_tool_call, dict):
-            continue
-
-        tool_call = cast(dict[str, object], raw_tool_call)
-        tool_call_id = tool_call.get("id")
-        if isinstance(tool_call_id, str) and tool_call_id:
-            ids.append(tool_call_id)
-
-    return set(ids)
-
-
-def _tool_result_call_id(item: RunHistoryItem) -> str | None:
-    if not isinstance(item, dict) or item.get("role") != MessageRole.TOOL.value:
-        return None
-
-    tool_call_id = item.get("tool_call_id")
-    if isinstance(tool_call_id, str) and tool_call_id:
-        return tool_call_id
-
-    return None
-
-
-def _estimate_history_tokens(
-    request: CompactionRequest,
-    history: list[RunHistoryItem],
-) -> int:
-    return request.estimator(render_request_messages(None, history))
 
 
 def _should_skip_compaction(
     *,
     request: CompactionRequest,
-    split: _HistorySplit,
+    preservation: Preservation,
 ) -> bool:
-    if not split.compacted_history:
+    if not preservation.dropped_items:
         return True
     if request.signal.estimated_tokens >= request.signal.trigger_tokens:
         return False
-    if split.compacted_block_count == 0:
+
+    if preservation.compacted_block_count == 0:
         return True
-    if split.has_compacted_summary:
+
+    if preservation.has_compacted_context:
         return False
-    return split.compacted_block_count < MIN_BLOCKS_TO_SUMMARIZE
+
+    return preservation.compacted_block_count < MIN_BLOCKS_TO_SUMMARIZE
 
 
 def _no_op_result(history: tuple[RunHistoryItem, ...]) -> CompactionResult:
@@ -342,9 +173,14 @@ def _summary_model_args(
     request_model_args: dict[str, Any] | None,
     summary_max_tokens: int | None,
 ) -> dict[str, Any] | None:
+    # Copy shared options, but remove every alias for the main response cap.
+    # Otherwise a provider can select that cap instead of the summary cap, or
+    # reject the request because it has two output limits. Keep main args intact.
     call_args = dict(request_model_args or {})
     for key in ("max_tokens", "max_output_tokens", "max_completion_tokens"):
         call_args.pop(key, None)
+
+    # None leaves the summary call without an explicit per-call output limit.
     if summary_max_tokens is not None:
         call_args["max_tokens"] = summary_max_tokens
 
@@ -359,7 +195,10 @@ def _effective_keep_recent_tokens(
 ) -> int:
     output_cap = _output_token_cap(call_args)
     tail_budget = (
-        request.signal.trigger_tokens - request.signal.instructions_tokens - output_cap
+        request.signal.trigger_tokens
+        - request.signal.instructions_tokens
+        - request.request_overhead_tokens
+        - output_cap
     )
     return min(configured_keep_recent_tokens, max(1, tail_budget))
 
@@ -388,33 +227,36 @@ def _output_token_cap(call_args: dict[str, Any] | None) -> int:
     if call_args is None:
         return 0
 
-    for key in ("max_tokens", "max_output_tokens"):
-        max_tokens = call_args.get(key)
-        if isinstance(max_tokens, int) and max_tokens > 0:
-            return max_tokens
+    max_tokens = call_args.get("max_tokens")
+    if isinstance(max_tokens, int) and max_tokens > 0:
+        return max_tokens
 
     return 0
 
 
 def _summary_text(response: ModelResponse) -> str:
+    # A truncated or interrupted summary can omit facts from the history it
+    # replaces. Keep the original history unless generation completed normally.
     if not response.choices or response.choices[0].finish_reason != "stop":
         raise CompactionError("Default compactor received an incomplete summary.")
 
     summary = get_content_or_none(response)
     if summary is None or not summary.strip():
         raise CompactionError("Default compactor received an empty summary response.")
+
     return summary.strip()
 
 
 def _replacement_history(
     *,
     summary_item: MessageDict,
-    tail_history: list[RunHistoryItem],
+    retained_history: list[RunHistoryItem],
     placement: SummaryPlacement,
 ) -> list[RunHistoryItem]:
     if placement == SUMMARY_AFTER_TAIL:
-        return [*tail_history, summary_item]
-    return [summary_item, *tail_history]
+        return [*retained_history, summary_item]
+
+    return [summary_item, *retained_history]
 
 
 def _raise_if_replacement_does_not_shrink(

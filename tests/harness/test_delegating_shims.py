@@ -8,6 +8,7 @@ compose with the delegated default.
 
 import asyncio
 import inspect
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -124,9 +125,19 @@ class _RecordingBoundShim(BoundShim):
         del state, transient_state
         self.calls.append("on_run_start")
 
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        del state, messages
+        self.calls.append("on_input_messages")
+
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         del turn
         self.calls.append("prepare_turn")
+
+    async def prepare_request(self, turn: PreparedTurn) -> None:
+        del turn
+        self.calls.append("prepare_request")
 
     async def transform_messages(
         self,
@@ -176,7 +187,9 @@ def test_delegating_bound_shim_forwards_unoverridden_callbacks() -> None:
         response = make_assistant_response("done")
 
         await delegate.on_run_start(turn.run_state, transient)
+        await delegate.on_input_messages(turn.run_state, [])
         await delegate.prepare_turn(turn)
+        await delegate.prepare_request(turn)
         result = await delegate.transform_messages(turn, [])
         await delegate.on_model_response(turn, response)
         await delegate.on_run_end(None, transient)
@@ -184,7 +197,9 @@ def test_delegating_bound_shim_forwards_unoverridden_callbacks() -> None:
 
         assert inner.calls == [
             "on_run_start",
+            "on_input_messages",
             "prepare_turn",
+            "prepare_request",
             "transform_messages",
             "on_model_response",
             "on_run_end",
@@ -246,6 +261,16 @@ class _RecordingShim(Shim):
         del turn
         self.calls.append("prepare_turn")
 
+    async def prepare_request(self, turn: PreparedTurn) -> None:
+        del turn
+        self.calls.append("prepare_request")
+
+    async def on_input_messages(
+        self, state: RunState, messages: Sequence[MessageDict]
+    ) -> None:
+        del state, messages
+        self.calls.append("on_input_messages")
+
 
 def _make_binding_context() -> ShimBindingContext:
     """Build one real shim binding context backed by a runtime task."""
@@ -270,7 +295,22 @@ def test_delegating_shim_forwards_name_and_callbacks() -> None:
 
         turn = _make_prepared_turn()
         await delegate.prepare_turn(turn)
-        assert inner.calls == ["bind", "prepare_turn"]
+        await delegate.prepare_request(turn)
+        await delegate.on_input_messages(turn.run_state, [])
+        assert inner.calls == [
+            "bind",
+            "prepare_turn",
+            "prepare_request",
+            "on_input_messages",
+        ]
+
+        # The base binding adapter must forward the new callback as well.
+        adapter = await Shim.bind(inner, _make_binding_context())
+        await adapter.prepare_request(turn)
+        assert inner.calls[-1] == "prepare_request"
+        await adapter.on_input_messages(turn.run_state, [])
+        assert inner.calls[-1] == "on_input_messages"
+        assert inner.calls.count("on_input_messages") == 2
 
     asyncio.run(scenario())
 
