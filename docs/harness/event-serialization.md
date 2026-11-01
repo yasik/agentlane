@@ -36,6 +36,7 @@ including model requests and result history. If a mapping value is an internal
 message, serialization keeps its key and replaces the value with `None` (`null`
 in JSON). For example, a result whose `final_output` is an internal message
 retains `final_output: null`. Ordinary messages remain visible by default.
+Ephemeral messages are internal messages, so serialization omits them too.
 
 Live state, hooks, and `AgentSnapshot` retain internal messages and their runtime
 metadata. Use snapshots for authoritative storage and restoration. The host

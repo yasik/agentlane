@@ -87,6 +87,34 @@ the metadata. Event `to_dict()` and `dumps()` and result `to_dict()` omit
 internal messages by default. For details, see
 [Internal messages](../harness/event-serialization.md#internal-messages).
 
+### Ephemeral context
+
+Set `ephemeral=True` for context that applies to one run only, for example the
+screen that the user sees when they send a message:
+
+```python
+from agentlane.models import internal_message, is_ephemeral_message
+
+view = internal_message(
+    {"role": "user", "content": "The user views report.csv."},
+    origin="ui_view",
+    ephemeral=True,
+)
+assert is_ephemeral_message(view, origin="ui_view")
+```
+
+An ephemeral message is always an internal message. The metadata contains
+`"ephemeral": true` in addition to the visibility and origin fields. Without
+`ephemeral=True`, the metadata does not change. `is_ephemeral_message()`
+returns `True` only for an internal message whose flag is exactly `True`.
+
+The model receives an ephemeral message on each model call of the run that
+contains it, including tool rounds. When the run ends, the harness removes the
+message. `RunResult.run_state`, the committed agent state, `AgentSnapshot`
+values, and state stores do not contain it. The next run does not receive it.
+For the harness rules, see
+[Input And Recovery](../harness/agents.md#input-and-recovery).
+
 ## Prompts, Tools, And Output
 
 The three pieces fit together:

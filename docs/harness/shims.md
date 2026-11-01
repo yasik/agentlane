@@ -175,6 +175,48 @@ result `to_dict()` omit internal messages automatically, including messages
 in nested history and model requests. For details, see
 [Internal messages](event-serialization.md#internal-messages).
 
+### Run-scoped context
+
+Use an ephemeral message (`internal_message(..., ephemeral=True)`) for context
+that is not correct after the run, such as the current UI view. The model
+receives it on each model call of the run. The harness removes it from the
+state that the run commits. See
+[Ephemeral context](../models/overview.md#ephemeral-context).
+
+A host can send the message after the user input in list input:
+`agent.run([user_text, view])`. A shim can append it to `state.history` in
+`on_run_start(...)`. The message then follows the run input:
+
+```python
+from agentlane.harness.shims import Shim
+from agentlane.models import internal_message
+
+
+class ViewContextShim(Shim):
+    @property
+    def name(self) -> str:
+        return "ui-view"
+
+    async def on_run_start(self, state, transient_state) -> None:
+        state.history.append(
+            internal_message(
+                {"role": "user", "content": "The user views report.csv."},
+                origin="ui_view",
+                ephemeral=True,
+            )
+        )
+```
+
+Do not append ephemeral context in `prepare_turn(...)`. That hook runs on each
+turn, so the history then contains one copy for each turn.
+
+Prompt caching: during the run, the message stays at the same position, so
+each model call of the run can use the cached request prefix. The next run
+does not contain the message, so the request prefix changes at its old
+position. The provider then does not use the cache for the messages after
+that position. For context that changes slowly, use a persistent internal
+message and append it only when its contents change.
+
 ## Shim State
 
 Shims have two state buckets.

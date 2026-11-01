@@ -149,7 +149,7 @@ class PreservationRequest:
     """Maximum retained-block and injected-context tokens, after reservations."""
 
     retention_budget: int
-    """Soft retention allowance shared with recency selection.
+    """Soft recent-history allowance plus fixed ephemeral context.
 
     Required anchors can exceed this allowance, but must fit `token_budget`.
     """
@@ -164,6 +164,7 @@ class PreservationRequest:
     """Validate and price a candidate with the same rules as final selection.
 
     Includes missing anchors and only context not represented by retained blocks.
+    Includes all ephemeral messages, including those in omitted blocks.
     Uses canonical input even if a selector edits its detached inspection view.
     """
 
@@ -214,7 +215,11 @@ class CompactionResult:
     """Replacement history and observability details from one compactor."""
 
     history: list[RunHistoryItem]
-    """Replacement history to install when compaction succeeds."""
+    """Replacement history to install when compaction succeeds.
+
+    Keep each ephemeral message from the request history. The active run still
+    needs it, and the harness removes it when the run ends.
+    """
 
     summary_content: str
     """Rendered summary item content or an empty string for no-op results."""
@@ -228,9 +233,16 @@ class CompactionResult:
 
 @runtime_checkable
 class Compactor(Protocol):
-    """The extension seam for custom compaction logic."""
+    """The extension seam for custom compaction logic.
 
-    async def compact(self, request: CompactionRequest) -> CompactionResult: ...
+    Implementations own the replacement history. They must keep ephemeral
+    messages (see `is_ephemeral_message`) in that history and must not send
+    them to a summarizer. Ephemeral context belongs to the active run only.
+    """
+
+    async def compact(self, request: CompactionRequest) -> CompactionResult:
+        """Return replacement history for `request.history`."""
+        ...
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)

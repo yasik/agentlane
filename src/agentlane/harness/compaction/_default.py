@@ -7,6 +7,7 @@ from agentlane.models import (
     MessageRole,
     ModelResponse,
     get_content_or_none,
+    is_ephemeral_message,
     provider_messages,
 )
 
@@ -32,6 +33,7 @@ class DefaultCompactor:
     state must remain visible. The default policy keeps recent history and exact
     required messages. A client selector can change the optional blocks and state
     to retain; the framework still validates required blocks and token limits.
+    Run-scoped ephemeral messages always remain and never enter the summary.
 
     The compactor returns a replacement candidate without installing it. The
     compaction shim installs that candidate, and the harness validates the full
@@ -194,11 +196,21 @@ def _effective_keep_recent_tokens(
     call_args: dict[str, Any] | None,
 ) -> int:
     output_cap = _output_token_cap(call_args)
+
+    # Run-scoped context is a fixed request cost, outside the recent-tail budget.
+    ephemeral_messages = render_request_messages(
+        None, [item for item in request.history if is_ephemeral_message(item)]
+    )
+    ephemeral_tokens = (
+        request.estimator(ephemeral_messages) if ephemeral_messages else 0
+    )
+
     tail_budget = (
         request.signal.trigger_tokens
         - request.signal.instructions_tokens
         - request.request_overhead_tokens
         - output_cap
+        - ephemeral_tokens
     )
     return min(configured_keep_recent_tokens, max(1, tail_budget))
 

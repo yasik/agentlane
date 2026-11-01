@@ -71,6 +71,20 @@ If history contains only internal context, the compactor protects its newest
 block. Retained internal messages keep their runtime metadata; the summary
 model receives their contents without runtime metadata fields.
 
+The compactor always keeps
+[ephemeral messages](../models/overview.md#ephemeral-context), because the
+active run still needs them:
+
+- The summary model never receives an ephemeral message, and
+  `CompactionResult.dropped_items` never contains one.
+- An ephemeral message in the retained tail keeps its position. An older
+  ephemeral message moves to the start of the retained tail, in its original
+  order. This also applies to an ephemeral message inside a tool-call block.
+- Ephemeral messages do not anchor the tail and do not count toward
+  `keep_recent_messages` or the tail token count.
+- The compactor subtracts the estimated tokens of ephemeral messages from the
+  tail token budget, in the same way as the instructions and the output cap.
+
 ```python
 from agentlane.harness.compaction import DefaultCompactor, DefaultCompactorConfig
 
@@ -230,6 +244,12 @@ results, including intervening steering messages and context. Overlapping tool
 rounds stay together, so a selector cannot retain a result without its call.
 Required blocks cannot be removed or split.
 
+Blocks that contain only ephemeral messages are required. If you omit an
+optional tool block, the compactor still keeps its ephemeral messages.
+`request.estimate_tokens(selection)` includes these fixed messages, and the
+summary model never receives them. Selectors and rankers can use their content
+to judge relevance, but cannot remove it from the active run.
+
 Start with `request.default.block_ids` and `request.default.context` to extend
 the defaults. To replace them, choose your own retainable blocks and context,
 while keeping all required blocks. `context` is a required constructor argument:
@@ -255,9 +275,10 @@ optional tail blocks to fit the hard budget. Required anchors and complete
 tool groups can still make a selection impossible; that attempt fails without
 a summary call or history replacement.
 
-`retention_budget` is the soft allowance from `keep_recent_tokens`, reduced when
-needed to leave room below the compaction trigger. Required anchors can exceed
-this allowance, but the complete selection must still fit `token_budget`.
+`retention_budget` covers the soft recent-history allowance and fixed ephemeral
+context. The recent-history allowance comes from `keep_recent_tokens`, reduced
+when needed to leave room below the compaction trigger. Required anchors can
+exceed this allowance, but the complete selection must still fit `token_budget`.
 
 A pending tool call and its intervening messages can form an indivisible block
 that exceeds the budget. Automatic successors do not split or compact that
@@ -329,9 +350,9 @@ retained context, not to the ranking request.
 Pass the ranker to `RankedPreservationSelector`. This concrete selector keeps all
 required blocks and `request.default.context`, then adds ranked optional blocks
 that fit both `retention_budget` and `token_budget`. It replaces the default
-recency preference. An omitted optional block is not retained. A block that
-exceeds the budget is skipped so a
-later block can still fit. Already-selected IDs are ignored. Invalid types,
+recency preference. Only ephemeral messages survive from an omitted optional
+block. A block that exceeds the budget is skipped so a later block can still
+fit. Already-selected IDs are ignored. Invalid types,
 unknown IDs, and unretainable IDs raise `CompactionError` before summarization.
 
 The framework owns budget checks and state deduplication. Retaining a block can
@@ -463,6 +484,12 @@ class ApplicationCompactor:
 Production compactors normally call `render_request_messages(...)` before
 summarizing so the summarizer sees the same canonical conversation the next
 runner turn would have seen.
+
+A custom compactor must keep each ephemeral message in
+`CompactionResult.history` and must not send it to a summarizer. Use
+`is_ephemeral_message(item)` from `agentlane.models` to find these messages.
+The harness does not check this rule. If a compactor removes an ephemeral
+message, the rest of the run does not receive it.
 
 ## Shim Integration
 

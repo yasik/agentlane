@@ -60,6 +60,28 @@ When you ask an agent for its current run state through
 [`Agent.run_state`](../../src/agentlane/harness/_agent.py), you get a snapshot
 of the resumable state for that concrete agent instance.
 
+List input can contain run-scoped context. Put an
+[ephemeral message](../models/overview.md#ephemeral-context) after the user
+input:
+
+```python
+from agentlane.models import internal_message
+
+view = internal_message(
+    {"role": "user", "content": "The user views report.csv."},
+    origin="ui_view",
+    ephemeral=True,
+)
+result = await agent.run(["Summarize this file.", view])
+```
+
+The model receives the message on each model call of that run. When the run
+ends, the agent commits the state without it. The persisted baseline never
+contains ephemeral messages. If you pass a `RunState` with ephemeral messages
+to the agent constructor, the agent removes them from that baseline. A
+`RunState` that you pass as run input starts a run, so that run keeps its
+ephemeral messages.
+
 ## Tools And Handoffs
 
 An agent's model-visible tool surface is built from three sources:

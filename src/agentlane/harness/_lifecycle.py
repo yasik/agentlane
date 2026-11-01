@@ -11,6 +11,8 @@ Key invariants maintained here:
 - **Copy-on-write**: every runner turn receives a private working copy of
   ``RunState``. The persisted baseline is updated only after a successful
   return.
+- **Durable baseline**: the baseline never contains ephemeral messages. Run
+  input can contain them; the lifecycle removes them when it commits a run.
 - **Fair drain**: queued inputs are processed one-at-a-time in FIFO order.
   The lifecycle never batches multiple inputs into a single runner call.
 """
@@ -63,6 +65,8 @@ from ._run import (
     copy_history_item,
     copy_instructions,
     copy_run_state,
+    durable_run_state,
+    without_ephemeral_messages,
 )
 from ._stream import RunStream
 from ._stream_base import close_stream_callback
@@ -361,8 +365,11 @@ class AgentLifecycle:
         self._descriptor = descriptor
         self._configured_hooks = hooks
 
-        # Defensive copy so the caller's original is never mutated.
-        self._run_state = copy_run_state(run_state)
+        # Defensive copy so the caller's original is never mutated. A baseline
+        # never holds ephemeral context, because no run owns it.
+        self._run_state = (
+            durable_run_state(run_state) if run_state is not None else None
+        )
 
         self._pending_inputs: deque[_QueuedRunInput] = deque()
         self._is_running = False
@@ -656,8 +663,12 @@ class AgentLifecycle:
                     # the baseline always reflects a completed turn. Handoff
                     # may complete through a delegated child agent, so the
                     # runner can return a different final run state than the
-                    # local working copy that started the turn.
+                    # local working copy that started the turn. Ephemeral
+                    # context ends with the run, so the commit removes it.
                     committed_state = copy_run_state(result.run_state) or working_state
+                    committed_state.history = without_ephemeral_messages(
+                        committed_state.history
+                    )
                     committed_state.revision = working_state.revision + 1
                     self._run_state = committed_state
                     result.run_state = copy_run_state(committed_state)

@@ -147,6 +147,46 @@ async def test_model_ranker_selects_evidence_before_summary(
 
 
 @pytest.mark.asyncio
+async def test_model_ranking_keeps_ephemeral_context_out_of_summary() -> None:
+    history = _history()
+    notes = [
+        internal_message(
+            {"role": "user", "content": f"Current view {index}"},
+            origin="ui_view",
+            ephemeral=True,
+        )
+        for index in range(3)
+    ]
+    # Cover old context, a note inside a discarded tool span, and trailing context.
+    history = [
+        history[0],
+        notes[0],
+        *history[1:3],
+        notes[1],
+        *history[3:],
+        notes[2],
+    ]
+    decision = SequenceModel([make_assistant_response('{"block_ids": []}')])
+    summary = SequenceModel([make_assistant_response("Earlier investigation failed")])
+
+    result = await DefaultCompactor(
+        _config(),
+        selector=RankedPreservationSelector(ModelPreservationRanker(decision)),
+    ).compact(_request(history, summary))
+
+    assert len(decision.calls) == 1
+    assert len(summary.calls) == 1
+    for note in notes:
+        assert result.history.count(note) == 1
+        assert note not in result.dropped_items
+        assert note["content"] not in str(summary.calls[0])
+    assert any(
+        isinstance(item, dict) and item.get("tool_call_id") == "read"
+        for item in result.dropped_items
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("representation", "retain_evidence"),
     [

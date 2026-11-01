@@ -213,6 +213,10 @@ high-level run events instead of only model stream events.
 If the descriptor declares shims, `DefaultAgent` binds them once for that
 concrete agent instance and reuses those bound sessions across repeated runs.
 
+Ephemeral messages apply to one run only. A run sends them on each model call,
+and the committed `RunState` does not contain them. The next run does not
+receive them. See [Ephemeral context](../models/overview.md#ephemeral-context).
+
 ## Persistent State Path
 
 Pass `state_path=` to make a `DefaultAgent` survive process restarts without
@@ -238,6 +242,7 @@ propagate to the caller.
 
 `run(...)`, `run_stream(...)`, and `run_events(...)` all use the same persistence
 path. `fork(...)` remains isolated and does not overwrite the primary state.
+The saved file does not contain ephemeral messages.
 `reset()` removes the persisted file. It raises `RuntimeError` if a primary run
 is active.
 
@@ -318,6 +323,24 @@ time, rendered instructions, canonical model-ready history, raw model
 responses, JSON-safe shim state, and turn count. Prompt templates are stored
 as rendered content. Unsupported schema versions and non-JSON shim values
 raise errors.
+
+Snapshots never contain ephemeral messages. `AgentSnapshot.capture(...)`
+removes them from the state that it captures, and persistent internal messages
+stay. A restored agent can send new run-scoped context with its next input:
+
+```python
+from agentlane.models import internal_message
+
+view = internal_message(
+    {"role": "user", "content": "The user views the risk chart."},
+    origin="ui_view",
+    ephemeral=True,
+)
+result = await restored.run(["Explain the largest risk.", view])
+```
+
+The model receives `view` during this run only. The next snapshot does not
+contain it.
 
 The restoring process supplies the live descriptor, model, tools, and shims.
 The snapshot stores committed run state and logical identity. Use

@@ -17,7 +17,7 @@ from agentlane.messaging import AgentId
 from agentlane.models import ModelResponse, render_instruction_text
 
 from ._render import render_request_messages
-from ._run import RunHistoryItem, RunState, ShimState
+from ._run import RunHistoryItem, RunState, ShimState, without_ephemeral_messages
 
 
 class _RunStatePayload(BaseModel):
@@ -85,7 +85,10 @@ class AgentSnapshot(BaseModel):
 
     @classmethod
     def capture(cls, *, agent_id: AgentId, run_state: RunState) -> Self:
-        """Capture one live run state as a canonical snapshot value."""
+        """Capture one live run state as a canonical snapshot value.
+
+        The snapshot omits ephemeral messages, because they end with their run.
+        """
         instructions = run_state.instructions
         if instructions is not None and not isinstance(instructions, str):
             instructions = render_instruction_text(instructions)
@@ -98,7 +101,9 @@ class AgentSnapshot(BaseModel):
             state=_RunStatePayload.model_validate(
                 {
                     "instructions": instructions,
-                    "history": render_request_messages(None, run_state.history),
+                    "history": render_request_messages(
+                        None, without_ephemeral_messages(run_state.history)
+                    ),
                     "responses": run_state.responses,
                     "shim_state": run_state.shim_state,
                     "turn_count": run_state.turn_count,

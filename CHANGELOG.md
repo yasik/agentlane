@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.25.0] - 2026-10-30
+
+### Added
+
+- Added the `ephemeral` keyword to `internal_message()` and added `is_ephemeral_message()`. An ephemeral message is internal context for one run: the model receives it on each model call of that run, including tool rounds, and the harness removes it when the run ends.
+
+### Changed
+
+- `RunResult.run_state`, committed agent state, `AgentSnapshot` values, and state stores exclude ephemeral messages. A `run_state=` baseline passed to an agent constructor loses its ephemeral messages; a `RunState` passed as run input keeps them for that run.
+- The default compactor keeps ephemeral messages in the retained tail, never sends them to the summary model, and subtracts their tokens from the tail budget.
 
 ## [0.24.0] - 2026-10-29
 

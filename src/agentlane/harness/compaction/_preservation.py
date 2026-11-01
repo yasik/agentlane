@@ -10,6 +10,7 @@ from agentlane.models import (
     MessageDict,
     MessageRole,
     internal_message,
+    is_ephemeral_message,
     is_internal_message,
 )
 
@@ -36,6 +37,10 @@ class _HistoryBlock:
 
     items: list[RunHistoryItem]
     messages: list[MessageDict]
+
+    @property
+    def ephemeral(self) -> bool:
+        return all(is_ephemeral_message(item) for item in self.items)
 
     @property
     def replaceable(self) -> bool:
@@ -74,6 +79,8 @@ def _select_recent_blocks(
     # block goes to the summarizer. Prior summaries never become fresh tail.
     for index in range(len(blocks) - 1, -1, -1):
         block = blocks[index]
+        if block.ephemeral:
+            continue
         if block.replaceable:
             if retained_ids:
                 tail_closed = True
@@ -94,7 +101,7 @@ def _select_recent_blocks(
         ):
             retained_ids.append(index)
             tail_tokens += tokens
-            tail_items += len(block.items)
+            tail_items += sum(not is_ephemeral_message(item) for item in block.items)
         else:
             tail_closed = True
 
@@ -106,7 +113,7 @@ def _tail_anchor(blocks: list[_HistoryBlock]) -> int | None:
     fallback: int | None = None
     for index in range(len(blocks) - 1, -1, -1):
         block = blocks[index]
-        if block.replaceable:
+        if block.replaceable or block.ephemeral:
             continue
 
         # With no ordinary conversation, protect only the newest context block.
@@ -191,17 +198,30 @@ async def select_preservation(
     _validate_context(request.preserved_context)
 
     anchor = _tail_anchor(blocks)
+    ephemeral_messages = [
+        message
+        for block in blocks
+        for message in block.messages
+        if is_ephemeral_message(message)
+    ]
 
     # Reuse per-block costs without estimating older blocks the default never
     # considers. Combined candidate estimates still use the complete messages.
     @cache
-    def block_tokens(index: int) -> int:
-        return request.estimator(blocks[index].messages)
+    def block_tokens(index: int, *, include_ephemeral: bool = True) -> int:
+        messages = blocks[index].messages
+        if not include_ephemeral:
+            messages = [
+                message for message in messages if not is_ephemeral_message(message)
+            ]
+
+        return request.estimator(messages) if messages else 0
 
     required_ids = {
         index
         for index, block in enumerate(blocks)
-        if not block.replaceable and anchor is not None and index >= anchor
+        if block.ephemeral
+        or (not block.replaceable and anchor is not None and index >= anchor)
     }
     missing_anchors: list[MessageDict] = []
     for message in request.required_messages:
@@ -238,12 +258,12 @@ async def select_preservation(
         ]
     )
     older_anchor_tokens = sum(
-        block_tokens(index)
+        block_tokens(index, include_ephemeral=False)
         for index in required_ids
         if anchor is None or index < anchor
     )
     recent_ids = _select_recent_blocks(
-        block_tokens=block_tokens,
+        block_tokens=lambda index: block_tokens(index, include_ephemeral=False),
         keep_recent_tokens=max(
             0, keep_recent_tokens - context_tokens - older_anchor_tokens
         ),
@@ -262,8 +282,8 @@ async def select_preservation(
         messages = [
             message
             for index, block in enumerate(blocks)
-            if index in ids
             for message in block.messages
+            if index in ids or is_ephemeral_message(message)
         ]
         context = _render_context(selection.context, [*messages, *missing_anchors])
         context.extend(missing_anchors)
@@ -305,7 +325,14 @@ async def select_preservation(
                     ),
                     default=default,
                     token_budget=max(0, budget),
-                    retention_budget=keep_recent_tokens,
+                    # The estimator includes fixed ephemeral context; only the
+                    # optional tail uses the reduced recency allowance.
+                    retention_budget=keep_recent_tokens
+                    + (
+                        request.estimator(ephemeral_messages)
+                        if ephemeral_messages
+                        else 0
+                    ),
                     instructions=tuple(
                         render_request_messages(request.instructions, [])
                     ),
@@ -340,18 +367,27 @@ async def select_preservation(
 
     retained: list[RunHistoryItem] = [*context]
     dropped: list[RunHistoryItem] = []
-    summary_input: list[RunHistoryItem] = [*missing_anchors]
+    summary_input: list[RunHistoryItem] = [
+        message for message in missing_anchors if not is_ephemeral_message(message)
+    ]
     compacted_block_count = 0
     has_compacted_context = False
     for index, block in enumerate(blocks):
         if index in selected_ids:
             retained.extend(block.items)
         else:
-            dropped.extend(block.items)
+            # Run-scoped context survives even when its containing tool block
+            # is dropped. It remains fixed input, never summary material.
+            retained.extend(item for item in block.items if is_ephemeral_message(item))
+            dropped.extend(
+                item for item in block.items if not is_ephemeral_message(item)
+            )
             compacted_block_count += not block.replaceable
             has_compacted_context |= block.replaceable
         if index not in selected_ids or index <= last_dropped_conversation:
-            summary_input.extend(block.items)
+            summary_input.extend(
+                item for item in block.items if not is_ephemeral_message(item)
+            )
 
     return Preservation(
         dropped_items=dropped,
