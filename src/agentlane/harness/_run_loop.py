@@ -220,6 +220,19 @@ class _PendingToolCall:
     delivered: bool = False
 
 
+def _steering_offset(history: Sequence[RunHistoryItem]) -> int:
+    """Place delivered steering before the tool results that resume a response."""
+    offset = len(history)
+    while (
+        offset
+        and isinstance(history[offset - 1], dict)
+        and cast(MessageDict, history[offset - 1]).get("role") == MessageRole.TOOL.value
+    ):
+        offset -= 1
+
+    return offset
+
+
 async def _ready_tool_messages(
     pending: dict[str, _PendingToolCall],
     required_ids: tuple[str, ...] = (),
@@ -287,11 +300,12 @@ class RunLoop:
         self.run_events = run_events
         self.control_stream = control_stream
 
-        # Keep tool budgets and pending results local to this run.
+        # Keep tool budgets, pending results, and accepted input local to this run.
         self.transient_state = DefaultRunContext()
         self.tool_call_counts: dict[str, int] = {}
         self.tool_round_trips = 0
         self.pending_calls: dict[str, _PendingToolCall] = {}
+        self._request_messages: list[MessageDict] = []
         self.inherited_turn: PreparedTurn | None = None
         self.shims = _shim_manager(self.agent)
 
@@ -377,7 +391,9 @@ class RunLoop:
         # Let shims adjust the turn before applying tool restrictions.
         if self.shims is not None:
             async with cancellation_scope(self.cancellation_token):
-                await self.shims.prepare_turn(turn)
+                await self.shims.prepare_turn(
+                    turn, prepare_request=self.inherited_turn is None
+                )
 
         # An automatic successor keeps the previous turn's tool handlers.
         if self.inherited_turn is not None:
@@ -436,12 +452,19 @@ class RunLoop:
         turn: PreparedTurn,
         span: Span[Any],
     ) -> tuple[ModelResponse, ModelStreamEvent]:
-        # Render the current history, then let shims prepare the model input.
-        messages = render_request_messages(
-            turn.run_state.instructions, turn.run_state.history
-        )
-        if self.shims is not None:
-            messages = await self.shims.transform_messages(turn, messages)
+        # A successor already uses the accepted projection, including context
+        # that transforms added without persisting it. Do not rewrite or validate
+        # that input as if this were another request to the provider.
+        if self.inherited_turn is not None:
+            messages = self._request_messages
+        else:
+            messages = render_request_messages(
+                turn.run_state.instructions, turn.run_state.history
+            )
+            if self.shims is not None:
+                async with cancellation_scope(self.cancellation_token):
+                    messages = await self.shims.transform_messages(turn, messages)
+            self._request_messages = messages
 
         # Use terminal calls only when the model does not need live events.
         if self.emit is None and not model.requires_streaming:
@@ -537,6 +560,22 @@ class RunLoop:
         if transition[0] is not _NextStep.HANDOFF:
             self.state.history.append(response)
             self.state.history.extend(completed.input_messages or [])
+
+            # Mirror the input the provider already accepted for its successor.
+            # Only committed output and delivered steering extend that input.
+            if self.inherited_turn is not None:
+                self._request_messages = [
+                    *self._request_messages,
+                    *render_request_messages(
+                        None, [response, *(completed.input_messages or [])]
+                    ),
+                ]
+
+            # Capture steering only after delivery. A queued receipt does not
+            # mean the model has received the new request.
+            if completed.input_messages and self.shims is not None:
+                await self.shims.on_input_messages(self.state, completed.input_messages)
+
             if tool_calls:
                 self.tool_round_trips += 1
 
@@ -926,18 +965,25 @@ class RunLoop:
                 ):
                     # Queued steering precedes the tool outputs that resume the
                     # response.
-                    offset = len(self.state.history)
-                    while (
-                        offset
-                        and isinstance(self.state.history[offset - 1], dict)
-                        and cast(MessageDict, self.state.history[offset - 1]).get(
-                            "role"
-                        )
-                        == MessageRole.TOOL.value
-                    ):
-                        offset -= 1
-
+                    offset = _steering_offset(self.state.history)
                     self.state.history[offset:offset] = event.input_messages
+
+                    # Keep the accepted projection in sync too. This response
+                    # may start another automatic successor after queued input
+                    # was delivered on its explicit tool continuation.
+                    offset = _steering_offset(self._request_messages)
+                    self._request_messages = [
+                        *self._request_messages[:offset],
+                        *render_request_messages(None, event.input_messages),
+                        *self._request_messages[offset:],
+                    ]
+
+                    # This provider event confirms delivery during the stream.
+                    # Save the request now so later compaction preserves it.
+                    if self.shims is not None:
+                        await self.shims.on_input_messages(
+                            self.state, event.input_messages
+                        )
 
                 # Start a complete async call before waiting for more model output.
                 if event.async_tool_call is not None:
@@ -1451,7 +1497,7 @@ def _tool_result_message(
 def _shim_manager(agent: Task) -> BoundShimManager | None:
     """Return the bound shim manager exposed by the task, if any."""
     manager = getattr(agent, "bound_shim_manager", None)
-    if not isinstance(manager, BoundShimManager):
+    if not isinstance(manager, BoundShimManager) or not manager.sessions:
         return None
 
     return manager

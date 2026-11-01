@@ -248,7 +248,7 @@ Use it when a shim needs state to survive:
 
 ## Lifecycle
 
-One bound shim session follows this order:
+For an explicit model request, one bound shim session follows this order:
 
 ```text
 bind once per concrete agent instance
@@ -260,7 +260,16 @@ on_run_start(...)
 prepare_turn(...)
         |
         v
+prepare_request(...)
+        |
+        v
 transform_messages(...)
+        |
+        v
+validate_request(...)
+        |
+        v
+on_request_prepared(...)
         |
         v
 model call completes
@@ -272,16 +281,59 @@ on_model_response(...)
 on_run_end(...)
 ```
 
+For an automatic successor that the provider has already started, the harness
+still runs `prepare_turn(...)` and applies tool permissions, exclusions, and
+limits. It skips `prepare_request(...)`, `transform_messages(...)`,
+`validate_request(...)`, and `on_request_prepared(...)` for that successor.
+Those request callbacks resume before the next explicit model request.
+
+The successor retains the exact transformed input of the accepted request,
+including transient context. Completed model responses and delivered steering
+messages extend that input. Turn preparation can update local state, but it
+cannot change the input that the provider has already accepted.
+
 The normal mutation points are:
 
 1. `on_run_start(...)` for per-run setup that mutates the working state before
    the first turn. It receives the working `RunState` and `transient_state`.
 2. `prepare_turn(...)` for instruction updates, tool changes, and history
    appends before the next model call,
-3. `on_model_response(...)` for updating shim-owned state from the completed
+3. `prepare_request(...)` for history preparation after every shim has supplied
+   instructions, tools, and state in `prepare_turn(...)`,
+4. `on_model_response(...)` for updating shim-owned state from the completed
    response,
-4. `transform_messages(...)` only when you need one-call message surgery after
+5. `transform_messages(...)` only when you need one-call message surgery after
    the runner has already built the canonical request.
+
+To supply current state for compaction, append a `PreservedContext` value to
+`turn.preserved_context` in `prepare_turn(...)`. Use a unique `origin` for your
+state owner and complete model-facing `content`. The `origin` labels an entry
+inside the compaction context envelope. The compactor selects and budgets these
+projections before summary generation. Publishing a projection
+does not append it to history on ordinary turns. For details and selector
+examples, see [Compaction](./compaction.md#select-preserved-context).
+
+`on_input_messages(state, messages)` runs when native steering input is
+committed to history during a model call or with a completed response. The
+messages follow delivery order, and shims receive them in descriptor order.
+Use this callback to update shim state from delivered input. Pending steering
+receipts and application history edits do not trigger it. Use `on_run_start`
+to initialize state from the invocation's starting history.
+
+`validate_request(turn, messages)` runs after all message transforms. Use it to
+check the complete request and raise an error before the model call. Validators
+must not mutate the request. If preparation, a message transform, or validation
+fails, the shim manager restores the history from before turn preparation.
+This rollback covers history; it does not undo external side effects or changes
+to instructions and shim state.
+
+`on_request_prepared(turn, messages, error)` observes the result after all
+validators succeed or after history rollback on failure. `error` is `None` on
+success and contains the original exception on failure. Use this callback for
+request diagnostics. It must not change the request. Ordinary callback errors
+are ignored, so diagnostics cannot replace the request result or its original
+error. Cancellation propagates, but does not roll back a request that passed
+validation.
 
 `on_run_end(...)` is the teardown callback. It receives the final
 `RunResult | None` and the same `transient_state`, and runs once after the

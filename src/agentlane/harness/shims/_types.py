@@ -8,6 +8,7 @@ from agentlane.models.run import DefaultRunContext, RunContext
 
 from .._run import RunHistoryItem, RunInstructions, RunState, copy_history_item
 from .._tooling import merge_tools
+from .._types import PreservedContext
 from ._errors import ToolNameCollisionError
 
 
@@ -41,6 +42,11 @@ class PreparedTurn:
     ends. Shims that need resumable state should write to
     `PreparedTurn.run_state.shim_state` instead.
     """
+
+    preserved_context: list[PreservedContext] = field(
+        default_factory=list[PreservedContext]
+    )
+    """Owner-supplied state for compaction; collect during `prepare_turn`."""
 
     _excluded_tool_names: set[str] = field(
         default_factory=set[str], init=False, repr=False

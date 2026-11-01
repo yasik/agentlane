@@ -46,3 +46,17 @@ rejected by the normal tool argument validation path.
 When used through `HarnessToolsShim`, the latest plan update is persisted in
 `RunState.shim_state` under `harness-tools:plan` for the default shim name.
 Custom shim names use the same pattern: `{shim_name}:plan`.
+
+During turn preparation, `HarnessToolsShim` supplies the persisted explanation
+and all plan steps as `PreservedContext`. The default compaction selection keeps
+this state. If the final `write_plan` invocation contains the current plan and
+is retained, no extra entry is needed. An older identical update cannot suppress
+current state because an intervening update can conflict with it. Otherwise,
+the compactor includes the plan in its combined internal context message before
+checking budgets and shrinkage.
+The current plan projection takes precedence over historical `write_plan` calls.
+
+This also applies to state loaded from a JSON snapshot when compaction runs.
+Ordinary turns do not append plan recovery messages. A custom preservation
+selector can omit the default plan context; a custom compactor owns how it
+handles the supplied projection.

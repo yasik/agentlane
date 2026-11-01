@@ -18,11 +18,14 @@ from ._errors import CompactionError, ContextOverflowError
 from ._estimate import (
     estimate_message_tokens,
 )
+from ._model_ranker import ModelPreservationRanker
 from ._prompt import (
     DEFAULT_COMPACTION_PROMPT,
+    DEFAULT_RANKING_PROMPT,
     DEFAULT_SUMMARY_BRIDGE,
     DEFAULT_SUMMARY_ITEM_TEMPLATE,
 )
+from ._ranked import RankedPreservationSelector
 from ._render import render_request_messages
 from ._shim import CompactionShim
 from ._summary import is_summary_item, render_summary_item
@@ -34,6 +37,14 @@ from ._types import (
     ContextSignal,
     OnCompact,
     OnFailure,
+    PreservationBlock,
+    PreservationRanker,
+    PreservationRequest,
+    PreservationSelection,
+    PreservationSelector,
+    PreservedContext,
+    RankingPayload,
+    RankingPayloadBlock,
     SummaryPlacement,
     TokenEstimator,
 )
@@ -41,6 +52,7 @@ from ._types import (
 __all__ = [
     "BYTES_PER_TOKEN",
     "DEFAULT_COMPACTION_PROMPT",
+    "DEFAULT_RANKING_PROMPT",
     "DEFAULT_KEEP_RECENT_MESSAGES",
     "DEFAULT_KEEP_RECENT_TOKENS",
     "DEFAULT_SUMMARY_BRIDGE",
@@ -63,8 +75,18 @@ __all__ = [
     "ContextSignal",
     "DefaultCompactor",
     "DefaultCompactorConfig",
+    "ModelPreservationRanker",
     "OnCompact",
     "OnFailure",
+    "PreservedContext",
+    "PreservationBlock",
+    "PreservationRanker",
+    "PreservationRequest",
+    "PreservationSelection",
+    "PreservationSelector",
+    "RankedPreservationSelector",
+    "RankingPayload",
+    "RankingPayloadBlock",
     "SummaryPlacement",
     "TokenEstimator",
     "estimate_message_tokens",

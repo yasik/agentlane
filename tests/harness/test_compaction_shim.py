@@ -1,6 +1,6 @@
 import re
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -16,10 +16,18 @@ from agentlane.harness.compaction import (
     DefaultCompactor,
     DefaultCompactorConfig,
     is_summary_item,
+    render_request_messages,
     render_summary_item,
 )
 from agentlane.harness.shims import BoundShim, PreparedTurn, ShimBindingContext
-from agentlane.models import MessageDict, Model, ModelResponse, Tools, internal_message
+from agentlane.models import (
+    MessageDict,
+    Model,
+    ModelResponse,
+    Tools,
+    internal_message,
+    provider_messages,
+)
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 from agentlane.tracing import Span
 
@@ -157,6 +165,7 @@ async def test_compaction_shim_skips_when_request_is_below_trigger() -> None:
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert compactor.requests == []
     assert reports == []
@@ -199,6 +208,7 @@ async def test_compaction_shim_installs_result_and_reports_attempt() -> None:
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert turn.run_state.history == [summary, history[-1]]
     request = compactor.requests[0]
@@ -209,6 +219,11 @@ async def test_compaction_shim_installs_result_and_reports_attempt() -> None:
     assert request.signal.trigger_tokens == 5
     assert request.signal.source == "estimate"
 
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
     report = reports[0]
     assert report.compacted is True
     assert report.items_before == 2
@@ -246,6 +261,7 @@ async def test_compaction_shim_uses_reported_usage_when_it_exceeds_estimate() ->
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     signal = compactor.requests[0].signal
     assert signal.reported_tokens == 14
@@ -269,6 +285,7 @@ async def test_compaction_shim_does_not_trigger_from_reported_usage_alone() -> N
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert compactor.requests == []
     assert turn.run_state.history == history
@@ -300,6 +317,7 @@ async def test_compaction_shim_uses_local_estimate_when_reported_usage_is_lower(
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     signal = compactor.requests[0].signal
     assert signal.reported_tokens == 14
@@ -327,6 +345,7 @@ async def test_compaction_shim_runs_default_compactor_when_no_compactor_is_suppl
     bound = await _bound_shim(shim, model)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert len(model.calls) == 1
     assert model.calls[0][1]["content"] == "Base instruction [t=1]"
@@ -354,8 +373,14 @@ async def test_compaction_shim_skips_failed_compaction_when_configured() -> None
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert turn.run_state.history == history
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
     assert reports[0].compacted is False
     assert reports[0].error == "summary failed"
     assert (
@@ -391,6 +416,7 @@ async def test_compaction_shim_skips_compactor_failure_when_observer_fails() -> 
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert turn.run_state.history == history
     assert reports[0].compacted is False
@@ -412,6 +438,7 @@ async def test_compaction_shim_injects_failed_compaction_notice_by_default() -> 
     messages: list[MessageDict] = [{"role": "user", "content": "next prompt"}]
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
     transformed = await bound.transform_messages(turn, messages)
 
     assert turn.run_state.history == [{"role": "user", "content": "old [t=8]"}]
@@ -447,6 +474,12 @@ async def test_compaction_shim_reports_noop_result_without_replacing_history() -
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
 
     assert turn.run_state.history == history
     assert reports[0].compacted is False
@@ -487,8 +520,14 @@ async def test_compaction_shim_keeps_successful_replacement_when_observer_fails(
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert turn.run_state.history == [summary]
+    await bound.on_request_prepared(
+        turn,
+        render_request_messages(turn.run_state.instructions, turn.run_state.history),
+        None,
+    )
     assert reports[0].compacted is True
 
 
@@ -520,6 +559,7 @@ async def test_compaction_shim_skips_malformed_compactor_result_when_configured(
     bound = await _bound_shim(shim)
 
     await bound.prepare_turn(turn)
+    await bound.prepare_request(turn)
 
     assert turn.run_state.history == history
     assert reports[0].compacted is False
@@ -546,15 +586,19 @@ async def test_compaction_shim_requires_configured_model() -> None:
 
 @pytest.mark.asyncio
 async def test_compaction_shim_runs_inside_default_agent_lifecycle() -> None:
+    history: list[RunHistoryItem] = [
+        "old prompt [t=8]",
+        {"role": "assistant", "content": "old evidence [t=8]"},
+    ]
     summary = render_summary_item(
         bridge="Continue.",
         summary_text="summary [t=1]",
     )
     compactor = _RecordingCompactor(
         CompactionResult(
-            history=[summary],
+            history=[summary, history[0]],
             summary_content=str(summary["content"]),
-            dropped_items=("old prompt [t=8]",),
+            dropped_items=tuple(history[1:]),
             summarizer_response=None,
         )
     )
@@ -573,11 +617,70 @@ async def test_compaction_shim_runs_inside_default_agent_lifecycle() -> None:
         )
     )
 
-    result = await agent.run("old prompt [t=8]")
+    result = await agent.run(RunState(instructions=None, history=history, responses=[]))
 
     assert result.final_output == "done"
-    assert compactor.requests[0].history == ("old prompt [t=8]",)
-    assert model.calls[0] == [summary]
+    assert compactor.requests[0].history == tuple(history)
+    assert model.calls[0] == provider_messages(
+        [summary, {"role": "user", "content": "old prompt [t=8]"}]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on_failure", ["skip", "inject"])
+async def test_custom_compactor_missing_anchor_keeps_history_through_lifecycle(
+    on_failure: Literal["skip", "inject"],
+) -> None:
+    history: list[RunHistoryItem] = [
+        "exact request [t=8]",
+        {"role": "assistant", "content": "old evidence [t=8]"},
+    ]
+    summary = render_summary_item(bridge="Continue.", summary_text="summary [t=1]")
+    compactor = _RecordingCompactor(
+        CompactionResult(
+            history=[summary],
+            summary_content=str(summary["content"]),
+            dropped_items=tuple(history),
+            summarizer_response=None,
+        )
+    )
+    reports: list[CompactionReport] = []
+    model = SequenceModel([make_assistant_response("done")])
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="MissingAnchor",
+            model=model,
+            shims=(
+                CompactionShim(
+                    CompactionShimConfig(
+                        context_window=20, trigger_tokens=5, on_failure=on_failure
+                    ),
+                    compactor,
+                    estimator=_token_estimator,
+                    on_compact=reports.append,
+                ),
+            ),
+        )
+    )
+
+    result = await agent.run(RunState(instructions=None, history=history, responses=[]))
+
+    error = "Compactor omitted a required user message."
+    original_messages = render_request_messages(None, history)
+    assert compactor.requests[0].required_messages == (original_messages[0],)
+    assert result.run_state is not None
+    assert result.run_state.history[: len(history)] == history
+    assert not any(is_summary_item(item) for item in result.run_state.history)
+    assert model.calls[0][: len(history)] == original_messages
+    assert len(reports) == 1
+    assert reports[0].compacted is False
+    assert reports[0].error == error
+    assert reports[0].items_after == len(history)
+    if on_failure == "skip":
+        assert model.calls[0] == original_messages
+    else:
+        assert len(model.calls[0]) == len(history) + 1
+        assert error in str(model.calls[0][-1]["content"])
 
 
 @pytest.mark.asyncio
@@ -671,10 +774,12 @@ async def test_default_compaction_keeps_ephemeral_context_for_the_active_run() -
     turn_one, summary_request, turn_two = model.calls
     assert turn_one[-2:] == [{"role": "user", "content": "question [t=5]"}, note]
     assert note not in summary_request
-    assert {"role": "user", "content": "question [t=5]"} in summary_request
+
+    # The current request stays exact in the retained suffix, outside the summary.
+    assert {"role": "user", "content": "question [t=5]"} not in summary_request
     assert is_summary_item(turn_two[0])
-    assert turn_two[1] == note
-    assert turn_two[2]["content"] == "calling [t=10]"
+    assert turn_two[1:3] == [{"role": "user", "content": "question [t=5]"}, note]
+    assert turn_two[3]["content"] == "calling [t=10]"
 
     # The committed state keeps the summary and tail, but not the note.
     assert result.final_output == "done"

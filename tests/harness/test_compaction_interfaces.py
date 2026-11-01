@@ -1,5 +1,5 @@
 import importlib
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 
@@ -14,6 +14,7 @@ from agentlane.harness.compaction import (
     SUMMARY_CLOSE_TAG,
     SUMMARY_OPEN_TAG,
     CompactionError,
+    CompactionRequest,
     CompactionResult,
     CompactionShim,
     CompactionShimConfig,
@@ -21,12 +22,36 @@ from agentlane.harness.compaction import (
     ContextSignal,
     DefaultCompactor,
     DefaultCompactorConfig,
+    PreservedContext,
     estimate_message_tokens,
     is_summary_item,
     render_request_messages,
     render_summary_item,
 )
+from agentlane.harness.shims import PreparedTurn
 from agentlane.models import MessageDict
+
+
+def test_preservation_contracts_resolve_runtime_type_hints() -> None:
+    assert get_type_hints(PreparedTurn)["preserved_context"] == list[PreservedContext]
+    assert (
+        get_type_hints(CompactionRequest)["preserved_context"]
+        == tuple[PreservedContext, ...]
+    )
+
+
+@pytest.mark.parametrize("surrounding", ["", " \n  "])
+def test_legacy_summary_requires_boundary_marker_lines(surrounding: str) -> None:
+    summary = {
+        "role": "user",
+        "content": f"{surrounding}{SUMMARY_OPEN_TAG}\nEarlier work\n"
+        f"{SUMMARY_CLOSE_TAG}{surrounding}",
+    }
+
+    assert is_summary_item(summary)
+    assert not is_summary_item(
+        {"role": "user", "content": f"{SUMMARY_OPEN_TAG} quoted {SUMMARY_CLOSE_TAG}"}
+    )
 
 
 def test_context_signal_reports_remaining_tokens_and_used_fraction() -> None:

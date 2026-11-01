@@ -1,11 +1,17 @@
 """First-party harness shim for skill discovery and activation."""
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from agentlane.models import Tool, ToolExecutionContext, Tools
+from agentlane.models import (
+    MessageDict,
+    Tool,
+    ToolExecutionContext,
+    Tools,
+)
 from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
@@ -51,6 +57,10 @@ class _BoundSkillsShim(BoundShim):
         self._system_prompt = system_prompt
         self._tool_name = tool_name
         self._current_run_state: RunState | None = None
+        self._loaded_skill_content: dict[str, str] = {}
+        self._request_messages: list[MessageDict] = []
+        self._supplied_skill_names: set[str] = set()
+        self._activation_lock = asyncio.Lock()
         self._tool = _build_activate_skill_tool(
             tool_name=tool_name,
             handler=self._activate_skill,
@@ -66,9 +76,10 @@ class _BoundSkillsShim(BoundShim):
 
     async def prepare_turn(self, turn: PreparedTurn) -> None:
         self._current_run_state = turn.run_state
-        if len(self._catalog) == 0:
-            return
-        if turn.run_state.turn_count == 1:
+
+        # The system catalog survives compaction. Full instructions remain in
+        # tool results and can be loaded again only when the model needs them.
+        if len(self._catalog) > 0 and turn.run_state.turn_count == 1:
             skills_prompt = render_skills_system_prompt(
                 template=self._system_prompt,
                 context=SkillsSystemPromptContext(
@@ -78,6 +89,9 @@ class _BoundSkillsShim(BoundShim):
             )
             turn.append_system_instruction(skills_prompt)
 
+        if len(self._catalog) == 0:
+            return
+
         turn.add_tools((self._tool,))
         turn.tools = apply_active_skill_tool_filters(
             tools=turn.tools,
@@ -85,6 +99,21 @@ class _BoundSkillsShim(BoundShim):
             shim_state=turn.run_state.shim_state,
             active_names_key=active_skill_names_key(self._shim_name),
         )
+
+    async def on_request_prepared(
+        self,
+        turn: PreparedTurn,
+        messages: list[MessageDict],
+        error: BaseException | None,
+    ) -> None:
+        """Track instruction visibility after every request transform."""
+        del turn
+
+        # History can contain instructions removed by a request transform.
+        # Deduplicate against what the model actually receives, including system
+        # content. Forget same-batch deliveries at the next request boundary.
+        self._request_messages = messages if error is None else []
+        self._supplied_skill_names.clear()
 
     async def _activate_skill(
         self,
@@ -103,24 +132,28 @@ class _BoundSkillsShim(BoundShim):
                 f" Available skills: {available_skill_names}."
             )
 
-        shim_state = self._require_shim_state()
-        active_names_key = active_skill_names_key(self._shim_name)
-        if skill_name in _active_skill_names(
-            shim_state=shim_state, key=active_names_key
-        ):
-            return _already_active_message(skill_name)
+        # Tool calls can run concurrently before either result reaches history.
+        # Serialize activation so only one call supplies a missing payload.
+        async with self._activation_lock:
+            if skill_name in self._supplied_skill_names:
+                return _already_active_message(skill_name, self._tool_name)
 
-        loaded_skill = await self._catalog.load(skill_name)
-        appended = await shim_state.append_if_unique(
-            active_names_key,
-            skill_name,
-            lambda value: value,
-        )
+            content = self._loaded_skill_content.get(skill_name)
+            if content is None:
+                content = render_loaded_skill(await self._catalog.load(skill_name))
+                self._loaded_skill_content[skill_name] = content
 
-        if not appended:
-            return _already_active_message(skill_name)
+            # Activation persists for tool policy even when compaction drops the
+            # instructions. A failed load must not mark a new skill as active.
+            await self._require_shim_state().append_if_unique(
+                active_skill_names_key(self._shim_name), skill_name, lambda value: value
+            )
+            if _skill_content_is_visible(content, self._request_messages):
+                return _already_active_message(skill_name, self._tool_name)
 
-        return render_loaded_skill(loaded_skill)
+            self._supplied_skill_names.add(skill_name)
+
+            return content
 
     def _require_shim_state(self) -> ShimState:
         """Return the persisted shim state for the current run."""
@@ -272,7 +305,7 @@ def _active_skill_names(
     shim_state: ShimState,
     key: str,
 ) -> tuple[str, ...]:
-    """Return the currently active skill names for deduplication."""
+    """Return persisted activation names for tool policy and inspection."""
     raw_value = shim_state.get(key, [])
     if not isinstance(raw_value, list):
         return ()
@@ -281,12 +314,34 @@ def _active_skill_names(
     return tuple(values)
 
 
-def _already_active_message(skill_name: str) -> str:
+def _skill_content_is_visible(content: str, messages: list[MessageDict]) -> bool:
+    """Require the full payload, not a name or partial tag in a summary."""
+    for message in messages:
+        existing = message.get("content")
+        if isinstance(existing, str) and content in existing:
+            return True
+
+        if isinstance(existing, list):
+            for part in cast(list[object], existing):
+                if (
+                    isinstance(part, dict)
+                    and isinstance(
+                        text := cast(dict[str, object], part).get("text"), str
+                    )
+                    and content in text
+                ):
+                    return True
+
+    return False
+
+
+def _already_active_message(skill_name: str, tool_name: str) -> str:
     """Return a directive idempotent response for repeated activation."""
     return (
         f"Skill `{skill_name}` is already active in this run. "
         f'Continue using the existing `<skill_content name="{skill_name}">`; '
-        "do not call `activate_skill` for this skill again."
+        f"call `{tool_name}` again only if its full instructions are missing "
+        "from context and needed for the task."
     )
 
 

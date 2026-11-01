@@ -24,6 +24,7 @@ from agentlane.models import (
     Tools,
     internal_message,
     is_ephemeral_message,
+    provider_messages,
 )
 from agentlane.runtime import CancellationToken
 from agentlane.tracing import Span
@@ -180,7 +181,7 @@ async def test_default_compactor_summarizes_old_head_and_retains_recent_tail() -
 
 
 @pytest.mark.asyncio
-async def test_default_compactor_can_place_summary_after_tail_and_preserve_max_tokens() -> (
+async def test_default_compactor_can_place_summary_after_tail_with_own_output_cap() -> (
     None
 ):
     history: list[RunHistoryItem] = [
@@ -209,7 +210,7 @@ async def test_default_compactor_can_place_summary_after_tail_and_preserve_max_t
 
     assert result.history[0] == history[-1]
     assert is_summary_item(result.history[1])
-    assert model.call_args == [{"temperature": 0.2, "max_tokens": 12}]
+    assert model.call_args == [{"temperature": 0.2, "max_tokens": 64}]
 
 
 @pytest.mark.asyncio
@@ -269,7 +270,13 @@ async def test_default_compactor_leaves_summary_output_uncapped_when_config_is_n
 
 
 @pytest.mark.asyncio
-async def test_default_compactor_preserves_native_max_output_tokens() -> None:
+@pytest.mark.parametrize(
+    "alias", ["max_tokens", "max_output_tokens", "max_completion_tokens"]
+)
+@pytest.mark.parametrize("summary_cap", [2, None])
+async def test_default_compactor_ignores_main_output_aliases(
+    alias: str, summary_cap: int | None
+) -> None:
     history: list[RunHistoryItem] = [
         {"role": "user", "content": "old user [t=4]"},
         {"role": "assistant", "content": "old assistant [t=4]"},
@@ -281,7 +288,7 @@ async def test_default_compactor_preserves_native_max_output_tokens() -> None:
         DefaultCompactorConfig(
             keep_recent_tokens=1,
             keep_recent_messages=1,
-            summary_max_tokens=64,
+            summary_max_tokens=summary_cap,
         )
     )
 
@@ -289,17 +296,20 @@ async def test_default_compactor_preserves_native_max_output_tokens() -> None:
         _request(
             history,
             model,
-            model_args={"max_output_tokens": 2},
+            model_args={alias: 9000},
             context_window=14,
         )
     )
 
     assert is_summary_item(result.history[0])
-    assert model.call_args == [{"max_output_tokens": 2}]
+    if summary_cap is None:
+        assert model.call_args == [None]
+    else:
+        assert model.call_args == [{"max_tokens": summary_cap}]
 
 
 @pytest.mark.asyncio
-async def test_default_compactor_default_tail_budget_adapts_to_context_window() -> None:
+async def test_default_compactor_rejects_when_history_and_summary_cannot_fit() -> None:
     history: list[RunHistoryItem] = [
         {"role": "user", "content": "old user [t=1200]"},
         {"role": "assistant", "content": "old assistant [t=1200]"},
@@ -311,11 +321,10 @@ async def test_default_compactor_default_tail_budget_adapts_to_context_window() 
     model = _RecordingModel([make_assistant_response("default summary [t=1]")])
     compactor = DefaultCompactor()
 
-    result = await compactor.compact(_request(history, model, context_window=7201))
+    with pytest.raises(ContextOverflowError, match="summarization request"):
+        await compactor.compact(_request(history, model, context_window=7201))
 
-    assert result.history[1:] == history[-4:]
-    assert result.dropped_items == tuple(history[:2])
-    assert model.call_args == [{"max_tokens": 4096}]
+    assert model.calls == []
 
 
 @pytest.mark.asyncio
@@ -549,7 +558,9 @@ async def test_default_compactor_recompacts_prior_summary_with_one_fresh_block()
 
     result = await compactor.compact(_request(history, model))
 
-    assert model.calls[0][2:] == history[:-1]
+    assert model.calls[0][2:] == provider_messages(
+        [prior_summary, {"role": "user", "content": "fresh older turn [t=4]"}]
+    )
     assert result.dropped_items == tuple(history[:-1])
     assert result.history[1:] == history[-1:]
 
@@ -600,7 +611,7 @@ async def test_default_compactor_recompacts_oversized_prior_summary_when_trigger
 
     result = await compactor.compact(_request(history, model, context_window=14))
 
-    assert model.calls[0][2:] == [prior_summary]
+    assert model.calls[0][2:] == provider_messages([prior_summary])
     assert result.dropped_items == (prior_summary,)
     assert result.history[1:] == history[-1:]
 
@@ -686,7 +697,7 @@ async def test_default_compactor_replaces_prior_summary_when_recompacting() -> N
 
     result = await compactor.compact(_request(history, model))
 
-    assert prior_summary in model.calls[0]
+    assert provider_messages([prior_summary])[0] in model.calls[0]
     assert result.dropped_items == tuple(history[:-1])
     assert len([item for item in result.history if is_summary_item(item)]) == 1
     assert "new summary [t=1]" in _message_content(result.history[0])

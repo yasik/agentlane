@@ -21,7 +21,11 @@ from agentlane.harness import (
     RunStateSnapshotEvent,
 )
 from agentlane.harness.agents import DefaultAgent
-from agentlane.harness.compaction import render_request_messages
+from agentlane.harness.compaction import (
+    is_summary_item,
+    render_request_messages,
+    render_summary_item,
+)
 from agentlane.harness.shims import Shim
 from agentlane.harness.tools import HarnessToolsShim, agent_tool
 from agentlane.messaging import AgentId
@@ -128,6 +132,32 @@ def test_old_snapshot_and_ordinary_messages_remain_public() -> None:
     event = RunLLMStartEvent(task_name="test", task_id="1", messages=messages)
     assert event.to_dict()["payload"]["messages"] == messages
     assert provider_messages(messages) == messages
+
+
+def test_summary_is_hidden_from_transcript_but_available_for_explicit_display() -> None:
+    summary = render_summary_item(bridge="Continue", summary_text="Earlier findings")
+    state = RunState(instructions=None, history=[summary], responses=[])
+    result = RunResult(final_output="Done", responses=[], turn_count=1, run_state=state)
+
+    assert is_internal_message(summary, origin="agentlane.compaction")
+    assert "Earlier findings" not in json.dumps(result.to_dict())
+    assert (
+        "Earlier findings"
+        not in RunLLMStartEvent(
+            task_name="test", task_id="1", messages=[summary]
+        ).dumps()
+    )
+    snapshot = AgentSnapshot.capture(
+        agent_id=AgentId.from_values("assistant", "main"), run_state=state
+    )
+    restored = AgentSnapshot.from_json(snapshot.to_json()).to_run_state()
+    assert [item for item in restored.history if is_summary_item(item)] == [summary]
+    assert provider_messages([summary]) == [
+        {"role": "user", "content": summary["content"]}
+    ]
+
+    # Legacy snapshots remain identifiable without runtime metadata.
+    assert is_summary_item(provider_messages([summary])[0])
 
 
 def test_default_result_serialization_filters_nested_message_containers() -> None:

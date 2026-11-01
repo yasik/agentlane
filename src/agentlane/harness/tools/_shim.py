@@ -1,20 +1,26 @@
 """Shim integration for first-party harness tool definitions."""
 
+import json
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from itertools import chain
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
+
+from pydantic import ValidationError
 
 from agentlane.harness.filesystem import (
     FileReader,
     ReadableFileSystem,
     WritableFileSystem,
 )
+from agentlane.models import MessageDict, ToolCall
 from agentlane.models.run import RunContext
 
 from .._constants import DEFAULT_AGENT_TOOL_NAME
-from .._run import RunState, ShimState
+from .._render import render_request_messages
+from .._run import RunHistoryItem, RunState, ShimState
+from .._types import PreservedContext
 from ..shims import BoundShim, PreparedTurn, Shim, ShimBindingContext
 from ._agent import agent_tool
 from ._bash import bash_tool
@@ -93,6 +99,25 @@ class _BoundHarnessToolsShim(BoundShim):
         tool_specs = tuple(definition.tool for definition in self._definitions)
         turn.add_tools(tool_specs)
 
+        # Publish current state without editing history. Compaction decides
+        # whether selected blocks already carry it before summarization.
+        snapshot = turn.run_state.shim_state.get(plan_state_key(self._shim_name))
+        if snapshot is not None:
+            # Only the last plan invocation can represent current state. After
+            # compaction, an earlier equal update can survive a later correction.
+            turn.preserved_context.append(
+                PreservedContext(
+                    origin=f"{self._shim_name}:plan",
+                    content=(
+                        "Current task plan (supersedes historical write_plan calls):\n"
+                    )
+                    + json.dumps(snapshot, sort_keys=True),
+                    represented_by=_current_plan_representation(
+                        snapshot, turn.run_state.history
+                    ),
+                )
+            )
+
         if self._prompt_block is None:
             return
         if turn.run_state.turn_count != 1:
@@ -159,6 +184,52 @@ class HarnessToolsShim(Shim):
                 prompt_guidelines=self._prompt_guidelines,
             ),
         )
+
+
+def _current_plan_representation(
+    snapshot: object, history: Sequence[RunHistoryItem]
+) -> tuple[MessageDict, ...]:
+    """Use the final plan invocation only when it contains the current state."""
+
+    # Stop at the last plan call without rendering unrelated older history.
+    messages = (
+        message
+        for item in reversed(history)
+        for message in reversed(render_request_messages(None, [item]))
+    )
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+
+        calls = message.get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+
+        # Inspect calls in reverse order too: one response can update a plan twice.
+        # An unknown or conflicting final update cannot replace owner state.
+        for raw_call in reversed(cast(list[object], calls)):
+            try:
+                call = ToolCall.model_validate(raw_call)
+            except ValidationError:
+                return ()
+            if call.function.name != PLAN_TOOL_NAME:
+                continue
+
+            try:
+                args: object = json.loads(call.function.arguments)
+            except (ValueError, TypeError):
+                return ()
+            if isinstance(args, dict):
+                fields = cast(dict[str, object], args)
+                if {
+                    "explanation": fields.get("explanation"),
+                    "plan": fields.get("plan"),
+                } == snapshot:
+                    return (message,)
+
+            return ()
+
+    return ()
 
 
 def base_harness_tools(

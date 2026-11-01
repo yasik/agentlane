@@ -2,14 +2,16 @@
 
 import asyncio
 import json
-from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import asynccontextmanager
+import re
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from contextlib import asynccontextmanager, suppress
 from types import TracebackType
 from typing import Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from agentlane_openai import ResponsesClient
+from agentlane_openai._response_adapter import response_to_model_response
 from openai.types.responses import (
     Response,
     ResponseCompletedEvent,
@@ -23,10 +25,25 @@ from openai.types.responses import (
     ResponseTextDeltaEvent,
 )
 
-from agentlane.harness import AgentDescriptor, RunResult
+from agentlane.harness import AgentDescriptor, RunResult, RunState
 from agentlane.harness.agents import DefaultAgent
+from agentlane.harness.compaction import (
+    CompactionReport,
+    CompactionShim,
+    CompactionShimConfig,
+    DefaultCompactor,
+    DefaultCompactorConfig,
+    render_request_messages,
+)
 from agentlane.harness.shims import PreparedTurn, Shim
-from agentlane.models import Config, ModelBehaviorError, RateLimiter, Tool, Tools
+from agentlane.models import (
+    Config,
+    MessageDict,
+    ModelBehaviorError,
+    RateLimiter,
+    Tool,
+    Tools,
+)
 from agentlane.models.run import RunContext
 from agentlane.runtime import CancellationToken
 
@@ -511,7 +528,10 @@ async def test_handoff_routes_controls_or_rejects_pending_steering(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_queued_steering_uses_one_tool_continuation(asynchronous: bool) -> None:
+@pytest.mark.parametrize("automatic_successor", [False, True])
+async def test_queued_steering_uses_one_tool_continuation(
+    asynchronous: bool, automatic_successor: bool
+) -> None:
     executions: list[str] = []
 
     async def echo(text: str) -> str:
@@ -557,11 +577,12 @@ async def test_queued_steering_uses_one_tool_continuation(asynchronous: bool) ->
                     type="response.created", response=child, sequence_number=5
                 )
             )
-            connection.events.put_nowait(
-                ResponseCompletedEvent(
-                    type="response.completed", response=child, sequence_number=6
+            if not automatic_successor:
+                connection.events.put_nowait(
+                    ResponseCompletedEvent(
+                        type="response.completed", response=child, sequence_number=6
+                    )
                 )
-            )
 
     connection.response.create.side_effect = create
 
@@ -621,13 +642,45 @@ async def test_queued_steering_uses_one_tool_continuation(asynchronous: bool) ->
             )
         )
 
+        # A later automatic successor must retain the previously queued native input.
+        second_receipt = None
+        if automatic_successor:
+            async for stream_event in stream:
+                if stream_event.provider_event_type == "response.created":
+                    break
+            second_receipt = await stream.steer("final direction")
+            grandchild = make_response(
+                "updated", "resp_3", previous_response_id=child.id
+            )
+            for event in [
+                ResponseSteerAcceptedEvent.model_validate(
+                    {
+                        "type": "response.steer.accepted",
+                        "sequence_number": 6,
+                        "steer": {"id": "steer_2", "previous_response_id": child.id},
+                    }
+                ),
+                ResponseCompletedEvent(
+                    type="response.completed", response=child, sequence_number=7
+                ),
+                ResponseCreatedEvent(
+                    type="response.created", response=grandchild, sequence_number=8
+                ),
+                ResponseCompletedEvent(
+                    type="response.completed", response=grandchild, sequence_number=9
+                ),
+            ]:
+                connection.events.put_nowait(event)
+
         # Check single execution, receipt application, and input order in run history.
         result = await stream.result()
 
         assert executions == ["ok"]
         assert connection.response.create.await_count == 2
         assert str(receipt.status) == "applied"
-        assert result.final_output == "finished"
+        assert result.final_output == ("updated" if automatic_successor else "finished")
+        if second_receipt is not None:
+            assert str(second_receipt.status) == "applied"
         assert result.run_state is not None
         assert result.run_state.history[2] == {
             "role": "user",
@@ -980,3 +1033,198 @@ async def test_automatic_successor_keeps_handler_and_checks_permissions(
         assert str(receipt.status) == "applied"
 
     assert connection.closed
+
+
+@pytest.mark.asyncio
+async def test_automatic_successor_defers_compaction_until_tool_result_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    stopped = asyncio.Event()
+    executions: list[str] = []
+    transformed_turns: list[int] = []
+    reports: list[CompactionReport] = []
+
+    async def lookup() -> str:
+        executions.append("lookup")
+        started.set()
+        try:
+            await release.wait()
+
+            return "lookup result [t=1]"
+        finally:
+            stopped.set()
+
+    class RequestContext(Shim):
+        @property
+        def name(self) -> str:
+            return "request-context"
+
+        async def transform_messages(
+            self, turn: PreparedTurn, messages: list[MessageDict]
+        ) -> list[MessageDict]:
+            transformed_turns.append(turn.run_state.turn_count)
+
+            return [
+                *messages,
+                {"role": "user", "content": "Transient request context"},
+            ]
+
+    def estimate(messages: Sequence[MessageDict]) -> int:
+        return sum(
+            int(match)
+            for message in messages
+            for match in re.findall(r"\[t=(\d+)]", str(message.get("content", "")))
+        )
+
+    connection = Connection()
+    client = ResponsesClient(
+        Config(api_key="test", model="test"), websocket=True, async_tools=["lookup"]
+    )
+    cast(Any, client)._openai_client.responses.connect = MagicMock(
+        return_value=connection
+    )
+    summarize = AsyncMock(
+        return_value=response_to_model_response(make_response("summary [t=1]"))
+    )
+    monkeypatch.setattr(client, "get_response", summarize)
+    call = ResponseFunctionToolCall.model_validate(
+        {
+            "type": "function_call",
+            "call_id": "pending",
+            "name": "lookup",
+            "arguments": "{}",
+            "async": True,
+        }
+    )
+    parent = make_response("parent evidence [t=30]")
+    parent.output.append(call)
+    child = make_response("child evidence", "resp_2", previous_response_id=parent.id)
+    correction = "Keep this exact correction. [t=2]"
+
+    async def create(**kwargs: Any) -> None:
+        if connection.response.create.await_count == 1:
+            connection.events.put_nowait(
+                ResponseCreatedEvent(
+                    type="response.created", response=parent, sequence_number=0
+                )
+            )
+            connection.events.put_nowait(
+                ResponseOutputItemDoneEvent(
+                    type="response.output_item.done",
+                    item=call,
+                    output_index=1,
+                    sequence_number=1,
+                )
+            )
+            return
+
+        # A changed history starts a fresh request with the complete call/result pair.
+        assert connection.response.create.await_count == 2
+        assert "previous_response_id" not in kwargs
+        assert sum(item.get("call_id") == "pending" for item in kwargs["input"]) == 2
+        assert correction in str(kwargs["input"])
+        assert "summary [t=1]" in str(kwargs["input"])
+        connection.events.put_nowait(
+            ResponseCompletedEvent(
+                type="response.completed",
+                response=make_response("done", "resp_3"),
+                sequence_number=7,
+            )
+        )
+
+    connection.response.create.side_effect = create
+    compaction = CompactionShim(
+        CompactionShimConfig(context_window=100, trigger_tokens=60),
+        DefaultCompactor(
+            DefaultCompactorConfig(
+                keep_recent_tokens=1, keep_recent_messages=1, summary_max_tokens=2
+            )
+        ),
+        estimator=estimate,
+        on_compact=reports.append,
+    )
+    agent = DefaultAgent(
+        descriptor=AgentDescriptor(
+            name="live",
+            model=client,
+            tools=Tools([lookup]),
+            shims=[compaction, RequestContext()],
+        )
+    )
+    state = RunState(
+        instructions="system",
+        history=[
+            "Original request [t=1]",
+            {"role": "assistant", "content": "Earlier evidence [t=40]"},
+        ],
+        responses=[],
+    )
+    stream = await agent.run_stream(state)
+    try:
+        async with asyncio.timeout(5):
+            await started.wait()
+            receipt = await stream.steer(correction)
+
+            # Crossing the threshold must not rewrite the already-started successor.
+            for event in [
+                ResponseSteerAcceptedEvent.model_validate(
+                    {
+                        "type": "response.steer.accepted",
+                        "sequence_number": 2,
+                        "steer": {"id": "steer_1", "previous_response_id": parent.id},
+                    }
+                ),
+                ResponseCompletedEvent(
+                    type="response.completed", response=parent, sequence_number=3
+                ),
+                ResponseCreatedEvent(
+                    type="response.created", response=child, sequence_number=4
+                ),
+                ResponseTextDeltaEvent(
+                    type="response.output_text.delta",
+                    item_id="msg_child",
+                    output_index=0,
+                    content_index=0,
+                    delta="child started",
+                    logprobs=[],
+                    sequence_number=5,
+                ),
+            ]:
+                connection.events.put_nowait(event)
+
+            async for stream_event in stream:
+                if stream_event.text == "child started":
+                    break
+
+            assert transformed_turns == [1]
+            assert reports == []
+            summarize.assert_not_awaited()
+            assert not stopped.is_set()
+            release.set()
+            connection.events.put_nowait(
+                ResponseCompletedEvent(
+                    type="response.completed", response=child, sequence_number=6
+                )
+            )
+            result = await stream.result()
+    finally:
+        await stream.aclose()
+        with suppress(Exception, asyncio.CancelledError):
+            await stream.result()
+
+    assert result.final_output == "done"
+    assert executions == ["lookup"]
+    assert stopped.is_set() and connection.closed
+    assert str(receipt.status) == "applied"
+    assert transformed_turns == [1, 3]
+    assert len(reports) == 1 and reports[0].compacted
+    assert reports[0].estimated_tokens_after <= 100
+    summarize.assert_awaited_once()
+    assert result.run_state is not None
+    messages = render_request_messages(None, result.run_state.history)
+    assert messages.count({"role": "user", "content": correction}) == 1
+    assert [
+        message["tool_call_id"] for message in messages if message.get("role") == "tool"
+    ] == ["pending"]
