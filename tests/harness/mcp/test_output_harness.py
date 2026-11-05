@@ -43,7 +43,7 @@ _SERVER_NAME = "Clinical Notes"
 _TOOL_NAME = "get/document"
 _VISIBLE_NAME = "clinical_notes__get_document"
 _CONTINUATION = re.compile(
-    r"\n\n\[Showing lines [^\n]+ Use offset=(\d+) to continue\.\]$"
+    r"\n\n\[Showing lines? [^\n]+ Use offset=(\d+)(?:, column=(\d+))? to continue\.\]$"
 )
 
 
@@ -116,12 +116,18 @@ def _call(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("json_text", [False, True])
 async def test_runner_reads_complete_saved_output_through_native_pagination(
-    output_peer: _Peer, tmp_path: Path
+    output_peer: _Peer, tmp_path: Path, json_text: bool
 ) -> None:
     transcript = "BEGIN_TRANSCRIPT\n" + "Я🙂界" * 11_000 + "\x00\x07\nEND_TRANSCRIPT"
+    text = (
+        json.dumps({"transcript": transcript}, ensure_ascii=False)
+        if json_text
+        else transcript
+    )
     output_peer.result = types.CallToolResult(
-        content=[types.TextContent(text=transcript)],
+        content=[types.TextContent(text=text)],
         structured_content={"separate_fact": "STRUCTURED_ONLY"},
     )
     filesystem = MountedFileSystem({"saved": LocalFileSystem(tmp_path)})
@@ -161,28 +167,39 @@ async def test_runner_reads_complete_saved_output_through_native_pagination(
 
     pages: list[str] = []
     offset = 1
+    column = 1
+    continued_within_line = False
     while True:
         page = await asyncio.to_thread(
             run_tool,
             read_tool(reader=filesystem),
             path=read_path,
             offset=offset,
+            column=column,
             limit=7,
         )
         continuation = _CONTINUATION.search(page)
-        pages.append(page[: continuation.start()] if continuation else page)
+        body = page[: continuation.start()] if continuation else page
+        pages.append(("\n" if pages and column == 1 else "") + body)
         if continuation is None:
             break
         next_offset = int(continuation.group(1))
-        assert next_offset > offset
+        next_column = int(continuation.group(2) or 1)
+        assert (next_offset, next_column) > (offset, column)
+        continued_within_line |= next_column > 1
         offset = next_offset
+        column = next_column
 
     assert len(pages) > 1
     local_path = tmp_path / PurePosixPath(read_path).relative_to("/saved")
     saved = local_path.read_text(encoding="utf-8")
-    assert "\n".join(pages) == saved
-    restored = json.loads("".join(pages).replace("\n", ""))
-    assert restored["content"][0]["text"] == transcript
+    assert continued_within_line
+    assert "".join(pages) == saved
+    restored = json.loads("".join(pages))
+    if json_text:
+        assert json.loads(restored["content"][0]["text"])["transcript"] == transcript
+    else:
+        assert restored["content"][0]["text"] == transcript
     assert restored["structuredContent"] == {"separate_fact": "STRUCTURED_ONLY"}
     assert output_peer.calls == [(_TOOL_NAME, {"meeting_id": "meeting-7"})]
     assert list((tmp_path / "tool-results").iterdir()) == [local_path]
@@ -232,7 +249,7 @@ async def test_child_inherits_overflow_storage(
         ).run("Ask the child to read the meeting.")
 
     assert output_peer.calls == [(_TOOL_NAME, {"meeting_id": "child-meeting"})]
-    (read_path,) = (tmp_path / "tool-results").glob("*.txt")
+    (read_path,) = (tmp_path / "tool-results").glob("*.json")
     assert f"tool-results/{read_path.name}" in json.dumps(child_model.calls[-1])
     assert list((tmp_path / "tool-results").iterdir()) == [read_path]
     assert len(output_peer.opened) == 1
@@ -522,10 +539,10 @@ async def test_structured_content_policy_applies_with_and_without_storage(
         finally:
             await lease.release()
 
-    paths = tuple(tmp_path.rglob("*.txt"))
+    paths = tuple(tmp_path.rglob("*.json"))
     if storage and size > 512:
         (path,) = paths
-        payload = json.loads("".join(path.read_text().splitlines()))
+        payload = json.loads(path.read_text())
         assert payload["content"][0]["text"] == "transcript " + "x" * size
         assert "[Full MCP result: " in response
     else:
@@ -543,7 +560,7 @@ def test_shim_validates_resolved_reference_for_each_server(extra_chars: int) -> 
     filesystem = MountedFileSystem({"saved": MemoryFileSystem()})
     directory = '/saved/results/../é\n"quoted"'
     resolved = filesystem.resolve_path(directory)
-    reference = f"\n\n[Full MCP result: {json.dumps(str(resolved / ('0' * 36 + '.txt')), ensure_ascii=False)}]"
+    reference = f"\n\n[Full MCP result: {json.dumps(str(resolved / ('0' * 36 + '.json')), ensure_ascii=False)}]"
     limit = max(128, len(reference) + 1)
     # Extend the resolved path to exercise the exact JSON-escaped boundary.
     directory += "x" * (limit + extra_chars - len(reference))
@@ -568,7 +585,7 @@ async def test_lease_validates_reference_before_discovery(
     output_peer: _Peer, extra_chars: int
 ) -> None:
     directory = 'results/é\n"quoted"'
-    reference = f"\n\n[Full MCP result: {json.dumps(directory + '/' + '0' * 36 + '.txt', ensure_ascii=False)}]"
+    reference = f"\n\n[Full MCP result: {json.dumps(directory + '/' + '0' * 36 + '.json', ensure_ascii=False)}]"
     directory += "x" * (128 + extra_chars - len(reference))
     async with MCPClientManager() as manager:
         lease = await acquire_lease(

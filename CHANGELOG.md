@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Save large MCP results as indented `.json` files with complete string values and the sanitized MCP envelope. Inline previews retain their compact format and size limits.
+- Read long lines in bounded parts with the optional `column` argument. Continuation notes provide the line and Unicode character position for the next call.
+
 ## [0.25.0] - 2026-11-01
 
 AgentLane `0.25.0` adds internal context for one run and preserves the current user request and task plan through compaction. Applications can select retained context and use a model to rank conversation blocks.
