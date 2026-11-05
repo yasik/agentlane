@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any, cast
 
@@ -9,6 +10,7 @@ import pytest
 from agentlane_space import SpaceError, SpaceErrorKind, space_harness_tools
 from conftest import LocalSpace, sandbox_for
 
+from agentlane.harness.filesystem import BinaryReader, LocalFileSystem
 from agentlane.harness.tools import BASE_TOOL_NAMES, base_harness_tools
 from agentlane.models import Tool, ToolCall, ToolExecutor, ToolFailure, Tools
 from agentlane.runtime import CancellationToken
@@ -35,7 +37,9 @@ async def test_all_environment_tools_use_guest_cwd_and_preserve_host_tools(
     async with sandbox_for(service) as sandbox:
         await sandbox.check(cwd=str(guest))
         definitions = space_harness_tools(sandbox, cwd=str(guest))
-        assert tuple(d.tool.name for d in definitions) == BASE_TOOL_NAMES
+        assert tuple(d.tool.name for d in definitions) == tuple(
+            name for name in BASE_TOOL_NAMES if name != "jq"
+        )
         tools = {d.tool.name: cast(Tool[Any, Any], d.tool) for d in definitions}
         assert not isinstance(tools["agent"], Tool)
         assert tools["write_plan"].retry_on_timeout
@@ -71,6 +75,29 @@ async def test_all_environment_tools_use_guest_cwd_and_preserve_host_tools(
             d.tool.schema["parameters"] == local[d.tool.name]["parameters"]
             for d in definitions
         )
+
+
+@pytest.mark.asyncio
+async def test_jq_selection_rejects_before_host_reads_or_guest_dispatch(
+    local_space: LocalSpace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def reject_read(
+        self: LocalFileSystem, path: str
+    ) -> AbstractContextManager[BinaryReader]:
+        raise AssertionError(f"unexpected host read: {path}")
+
+    async with sandbox_for(local_space) as sandbox:
+        await sandbox.check(cwd=str(tmp_path))
+        monkeypatch.setattr(LocalFileSystem, "open_read", reject_read)
+
+        for include in (("jq",), ("read", "jq"), "jq"):
+            with pytest.raises(ValueError, match="SPACE does not support the jq tool"):
+                space_harness_tools(sandbox, cwd=str(tmp_path), include=include)
+
+        # Exclusion remains a valid selector and does not introduce a tool.
+        definitions = space_harness_tools(sandbox, cwd=str(tmp_path), exclude=("jq",))
+        assert all(definition.tool.name != "jq" for definition in definitions)
+        assert len(local_space.commands) == 1
 
 
 @pytest.mark.asyncio
@@ -170,6 +197,10 @@ async def test_missing_check_and_invalid_selectors_fail_before_dispatch(
         with pytest.raises(ValueError):
             space_harness_tools(
                 sandbox, cwd=str(tmp_path), include=("read",), exclude=("read",)
+            )
+        with pytest.raises(ValueError, match="include/exclude selectors overlap: jq"):
+            space_harness_tools(
+                sandbox, cwd=str(tmp_path), include=("jq",), exclude=("jq",)
             )
         assert len(service.commands) == 1
 

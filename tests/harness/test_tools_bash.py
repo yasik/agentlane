@@ -29,6 +29,7 @@ from agentlane.harness.tools import (
     BashExecutionResult,
     HarnessToolDefinition,
     HarnessToolsShim,
+    LocalBashExecutor,
     ToolOperation,
     ToolPermissionDecision,
     ToolPermissionOutcome,
@@ -188,6 +189,116 @@ def test_bash_tool_runs_successful_command(tmp_path: Path) -> None:
     output = _run_bash("printf 'hello\\n'", cwd=tmp_path)
 
     assert output == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [b"", b"first\x00line\n\xc3\xa9\n"])
+async def test_local_executor_sends_stdin_bytes_and_closes_pipe(
+    tmp_path: Path, data: bytes
+) -> None:
+    command = shlex.join(
+        [sys.executable, "-c", "import sys; print(sys.stdin.buffer.read().hex())"]
+    )
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command=command, cwd=tmp_path, stdin=data, timeout_seconds=2
+        ),
+        CancellationToken(),
+    )
+
+    assert result.exit_code == 0
+    assert not result.timed_out
+    assert result.output.text == f"{data.hex()}\n"
+
+
+@pytest.mark.asyncio
+async def test_local_executor_drains_output_while_sending_large_stdin(
+    tmp_path: Path,
+) -> None:
+    data = b"input-value\n" * 100_000
+    code = (
+        "import sys; "
+        "sys.stdout.write('x' * 131072); sys.stdout.flush(); "
+        "data = sys.stdin.buffer.read(); "
+        "print('\\nreceived=' + str(len(data)) + ',valid=' + "
+        "str(data == b'input-value\\n' * 100000))"
+    )
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command=shlex.join([sys.executable, "-c", code]),
+            cwd=tmp_path,
+            stdin=data,
+            timeout_seconds=3,
+        ),
+        CancellationToken(),
+    )
+
+    try:
+        assert result.exit_code == 0
+        assert not result.timed_out
+        assert result.output.text.endswith(f"\nreceived={len(data)},valid=True\n")
+        assert result.output_truncated
+        assert result.full_output_path is not None
+        assert "x" * 131072 in result.full_output_path.read_text(encoding="utf-8")
+    finally:
+        if result.full_output_path is not None:
+            result.full_output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_local_executor_accepts_exit_before_stdin_is_consumed(
+    tmp_path: Path,
+) -> None:
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command="printf done",
+            cwd=tmp_path,
+            stdin=b"unused" * 200_000,
+            timeout_seconds=2,
+        ),
+        CancellationToken(),
+    )
+
+    assert result.exit_code == 0
+    assert result.output.text == "done"
+    assert not result.timed_out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["timeout", "token", "task"])
+async def test_local_executor_stops_while_stdin_is_blocked(
+    tmp_path: Path, stop: str
+) -> None:
+    initial_tasks = asyncio.all_tasks()
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command="sleep 5",
+                cwd=tmp_path,
+                stdin=b"unused" * 200_000,
+                timeout_seconds=0.1 if stop == "timeout" else None,
+            ),
+            token,
+        )
+    )
+    if stop != "timeout":
+        await asyncio.sleep(0.1)
+        if stop == "token":
+            token.cancel()
+        else:
+            task.cancel()
+
+    if stop == "task":
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+    else:
+        result = await asyncio.wait_for(task, timeout=3)
+        assert result.timed_out == (stop == "timeout")
+        assert result.cancelled == (stop == "token")
+        assert result.exit_code is not None
+
+    assert asyncio.all_tasks() == initial_tasks
 
 
 def test_bash_tool_rejects_invalid_default_timeout() -> None:

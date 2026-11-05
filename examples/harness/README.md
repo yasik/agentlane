@@ -27,12 +27,13 @@ harness directly.
 20. [mcp_meeting_assistant](./mcp_meeting_assistant/): `DefaultAgent` that uses OpenRouter and MCP tools to search and read local meeting notes.
 21. [openai_steering](./openai_steering/): change an active OpenAI response and verify the applied steering receipt, successor, and committed history.
 22. [openai_async_tools](./openai_async_tools/): native async functions with measured tool overlap, concurrent model text, and verified results.
+23. [jq_json](./jq_json/): query local and mounted JSON files with jq, without a model.
 
 ## Run
 
 Most harness demos require `OPENAI_API_KEY` in the environment:
 
-The `process_bridge_stdio` and `mounted_filesystem` demos do not call a model
+The `process_bridge_stdio`, `mounted_filesystem`, and `jq_json` demos do not call a model
 provider and need no API key. The `claude_agent_sdk_coworker` demo also needs
 `ANTHROPIC_API_KEY` and the `claude-agent-sdk` extra. The MCP meeting assistant
 uses `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` instead.

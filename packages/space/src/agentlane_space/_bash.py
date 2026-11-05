@@ -58,6 +58,9 @@ class SpaceBashExecutor:
         cancellation_token: CancellationToken,
     ) -> BashExecutionResult:
         """Run a command and retain its complete output in the guest."""
+        if request.stdin is not None:
+            raise ValueError("SPACE bash execution does not support stdin.")
+
         if len(request.command.encode("utf-8")) > _MAX_COMMAND_BYTES:
             raise SpaceError(
                 "SPACE bash commands must not exceed 48 KiB of UTF-8.",

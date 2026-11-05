@@ -37,7 +37,7 @@ stream protocols and concrete implementations.
 | Protocol | Methods | Consumers |
 | --- | --- | --- |
 | `FilePathResolver` | `resolve_path(path, *, cwd="/")` | Optional logical path rules for file tools and skill loading |
-| `FileReader` | `open_read(path)` | Read and patch tools |
+| `FileReader` | `open_read(path)` | Read, jq, and patch tools |
 | `FileWriter` | `open_write(path)` | Patch writes |
 | `FileStat` | `stat(path)` | File inspection and permission decisions |
 | `DirectoryLister` | `list_directory(path)` | Directory traversal |
@@ -125,10 +125,10 @@ The base factory keeps the process workspace separate from injected storage:
 from agentlane.harness.tools import base_harness_tools
 
 tools = base_harness_tools(
-    cwd="/workspace",       # Files visible to grep and bash in their environment.
+    cwd="/workspace",       # Process directory for grep, bash, and jq.
     reader=storage,
     writer=storage,
-    storage_cwd="skills",   # Storage directory for read, write, find, and patch.
+    storage_cwd="skills",   # Storage directory for read, jq, write, find, and patch.
 )
 ```
 
@@ -145,8 +145,12 @@ bash cwd passes to custom executors without host symlink resolution or tilde
 expansion; relative paths are resolved by that executor. The base tools add
 prompt guidance about the separate storage and process path namespaces.
 
-Neither tool consumes the reader or writer. A logical mount does not create an
-operating-system mount. If commands need remote data, the host must expose it
+Jq also uses the command executor, but reads its selected input through
+`FileReader` and sends the bytes through stdin. Its imports and output logs
+use the executor filesystem. See [jq](tools/jq.md) for limits and configuration.
+
+Neither grep nor bash consumes the reader or writer. A logical mount does not
+create an operating-system mount. If commands need remote data, the host must expose it
 to their process filesystem. AgentLane does not copy remote files for search.
 
 ## Mixed Local and Remote Filesystems
@@ -237,7 +241,8 @@ namespace policy. Operation grants and approval callbacks still apply.
 Read checks `READ_FILE`, find checks `SEARCH_FILES`, and patch checks
 `MODIFY_FILE` before accessing data. Write inspects metadata to distinguish
 creation from overwrite, then checks permissions before opening a writer.
-Grep and bash retain their process-tool permission behavior. See
+Jq checks both `READ_FILE` for the storage path and `EXECUTE_COMMAND` for its
+process. Grep and bash retain their process-tool permission behavior. See
 [Tool permissions](tools/permissions.md).
 
 Skill loading calls the adapter directly. Tool policies do not govern skill

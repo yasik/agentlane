@@ -50,6 +50,7 @@ from agentlane.harness.tools import (
     find_tool,
     format_tool_permission_result,
     grep_tool,
+    jq_tool,
     patch_tool,
     plan_tool,
     parse_tool_permission_grants,
@@ -66,7 +67,7 @@ output-limit constants (`TEXT_MAX_BYTES`, `TEXT_MAX_LINES`, `BASH_MAX_BYTES`,
 `BASH_MAX_LINES`, `GREP_DEFAULT_LIMIT`, `GREP_MAX_LINE_LENGTH`,
 `FIND_DEFAULT_LIMIT`, `LS_DEFAULT_LIMIT`) plus `TruncatedOutput` and
 `truncate_output`, and the bash-executor contract types (`BashExecutor`,
-`LocalBashExecutor`, `BashExecutionRequest`, `BashExecutionResult`,
+`StdinBashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`, `BashExecutionResult`,
 `BashShellConfig`, `resolve_bash_shell`). See [bash](./bash.md) for the
 executor contracts.
 
@@ -83,7 +84,7 @@ Use the definition when you want prompt snippets and guidelines to be rendered
 by `HarnessToolsShim`. Use `definition.tool` when you need the underlying model
 tool schema.
 
-The current standard set is `read`, `find`, `grep`, `patch`, `write`,
+The current standard set is `read`, `jq`, `find`, `grep`, `patch`, `write`,
 `write_plan`, `bash`, and `agent`. The public base-tools set currently does not
 include `ls`.
 
@@ -101,19 +102,20 @@ workspace_tools = base_harness_tools(
 )
 ```
 
-Pass `reader=` to read and find, `writer=` to write, and both to patch.
+Pass `reader=` to read, jq, and find, `writer=` to write, and both to patch.
 `base_harness_tools()` passes these capabilities to the selected file tools.
 It can infer writes from a reader that implements `WritableFileSystem`.
 Injected tools default to their storage root. Plain backends use relative
 POSIX paths. Mounted backends accept rooted virtual paths and resolve relative
 arguments from each tool's captured cwd. In
 `base_harness_tools()`, set `storage_cwd` for these tools and `cwd` for the
-process workspace used by grep and bash. Process tools do not use storage
-adapters. See [File I/O interfaces](../filesystem.md).
+process workspace used by grep, bash, and jq. Jq passes the selected storage
+file to its executor through stdin. Grep and bash do not use storage adapters.
+See [File I/O interfaces](../filesystem.md).
 
 Use `include=` or `exclude=` to derive a smaller set without manually
 constructing each tool. Selectors are the model-visible names from the standard
-set: `read`, `find`, `grep`, `patch`, `write`, `write_plan`, `bash`, and
+set: `read`, `jq`, `find`, `grep`, `patch`, `write`, `write_plan`, `bash`, and
 `agent`. Returned tools keep standard order, even when `include` names are
 listed in a different order:
 
@@ -127,7 +129,7 @@ search_tools = base_harness_tools(
 no_shell_tools = base_harness_tools(
     cwd=WORKSPACE,
     permissions=WorkspaceToolPermissionPolicy(WORKSPACE),
-    exclude=("bash",),
+    exclude=("bash", "jq"),
 )
 ```
 
@@ -140,6 +142,7 @@ set:
 ```python
 workspace_tools = (
     read_tool(cwd=WORKSPACE),
+    jq_tool(cwd=WORKSPACE),
     find_tool(cwd=WORKSPACE),
     grep_tool(cwd=WORKSPACE),
     patch_tool(cwd=WORKSPACE),
@@ -164,6 +167,7 @@ from agentlane.harness.tools import (
     agent_tool,
     find_tool,
     grep_tool,
+    jq_tool,
     patch_tool,
     bash_tool,
     read_tool,
@@ -182,6 +186,7 @@ descriptor = AgentDescriptor(
             "grep": 1,
             "patch": 1,
             "read": 1,
+            "jq": 1,
             "write": 1,
             "bash": 1,
         },
@@ -190,6 +195,7 @@ descriptor = AgentDescriptor(
         HarnessToolsShim(
             (
                 read_tool(cwd=WORKSPACE),
+                jq_tool(cwd=WORKSPACE),
                 find_tool(cwd=WORKSPACE),
                 grep_tool(cwd=WORKSPACE),
                 patch_tool(cwd=WORKSPACE),
@@ -224,7 +230,7 @@ at 2000 lines or 51200 bytes, whichever limit is reached first. `find` output
 is capped at 1000 matching paths or 51200 bytes, whichever limit is reached
 first. `grep` output is capped at 100 matching entries or 51200 bytes,
 whichever limit is reached first. `patch` success output is intentionally
-minimal and does not need truncation. `bash` output is tail-truncated to the
+minimal and does not need truncation. `bash` and `jq` output is tail-truncated to the
 most recent 2000 combined stdout/stderr lines or 51200 bytes.
 
 Caller-provided limits are applied before the global caps. For large files, call

@@ -20,7 +20,7 @@ remain available. See [File I/O interfaces](../filesystem.md).
 
 AgentLane is a framework, so first-party helpers stay permissive unless an
 application passes an explicit policy. With no `permissions=` argument,
-`read`, `find`, `grep`, `patch`, `write`, and `bash` keep their trusted local
+`read`, `jq`, `find`, `grep`, `patch`, `write`, and `bash` keep their trusted local
 behavior. Injected file tools also allow every operation by default,
 subject to the adapter's own access checks. A specific `cwd` only changes path
 resolution; it is not a sandbox:
@@ -278,8 +278,12 @@ Whole-tool entries expand to that tool's declared operation set. For example,
 operations. `ToolPermissionGrant.all_operations(...)` remains available for
 programmatic callers that intentionally want a wildcard grant.
 
+A `jq` entry grants both `read_file` and `execute_command`. Jq checks both
+before opening its input; ordinary filters can access process environment and
+imports. See [jq permissions](./jq.md#permissions).
+
 By default the parser only recognizes the built-in first-party tools (`read`,
-`find`, `grep`, `write`, `patch`, `bash`), so a grant for an app-registered
+`jq`, `find`, `grep`, `write`, `patch`, `bash`), so a grant for an app-registered
 egress tool such as `web_search:network_access` is reported as invalid. Pass
 `known_tools` — a mapping from each extra tool name to the `ToolOperation`
 values it exposes — to drive grants for those tools from a grant string:

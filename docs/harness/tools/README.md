@@ -25,13 +25,14 @@ Tool reference:
 
 1. [agent](./agent.md): delegate focused work to a fresh helper agent.
 2. [read](./read.md): read UTF-8 text files with deterministic truncation.
-3. [find](./find.md): walk directories with gitignore-aware pattern
+3. [jq](./jq.md): select and transform local or mounted JSON files.
+4. [find](./find.md): walk directories with gitignore-aware pattern
    matching.
-4. [grep](./grep.md): search file contents with ripgrep-backed results.
-5. [patch](./patch.md): apply minimal SEARCH/REPLACE edits.
-6. [write](./write.md): create or overwrite UTF-8 files.
-7. [write_plan](./write-plan.md): update the visible task plan.
-8. [bash](./bash.md): run bounded non-interactive shell commands.
+5. [grep](./grep.md): search file contents with ripgrep-backed results.
+6. [patch](./patch.md): apply minimal SEARCH/REPLACE edits.
+7. [write](./write.md): create or overwrite UTF-8 files.
+8. [write_plan](./write-plan.md): update the visible task plan.
+9. [bash](./bash.md): run bounded non-interactive shell commands.
 
 ## Quick Start
 
@@ -93,15 +94,15 @@ Use [MountedReader](../filesystem.md#mixed-local-and-remote-filesystems) when on
 read tool must access both local and remote files. The skill loader can share
 that reader so activation returns paths that the read tool can use.
 Use `MountedFileSystem` to add writes to capable mounts and share paths across
-read, write, find, and patch.
+read, jq, write, find, and patch.
 
 ## Standard Set
 
-`base_harness_tools()` returns `read`, `find`, `grep`, `patch`, `write`,
+`base_harness_tools()` returns `read`, `jq`, `find`, `grep`, `patch`, `write`,
 `write_plan`, `bash`, and `agent`. The public base-tools set currently does
 not include `ls`.
 
-Pass `reader=` for `read`, `find`, and `patch`. Pass `writer=` for `write` and
+Pass `reader=` for `read`, `jq`, `find`, and `patch`. Pass `writer=` for `write` and
 `patch`, or supply a reader that also implements `WritableFileSystem`. Find
 requires read, listing, and metadata capabilities. Injected file tools use
 `storage_cwd`, which defaults to the storage root (`/` for mounts, `.` for
@@ -109,14 +110,16 @@ plain injected backends). Set `storage_cwd="/tenant/sessions/session-123"` to
 resolve bare file names within that mounted directory. Each tool captures its
 cwd; activation of a skill does not change it. Grep uses `cwd` in the harness process
 filesystem. Bash uses `cwd` in its executor filesystem, which can be different
-with a custom executor. Logical mounts do not become process mounts.
+with a custom executor. Jq reads the selected storage file and sends its bytes
+to the executor through stdin. Logical mounts do not become process mounts.
 See [File I/O interfaces](../filesystem.md) for construction and path rules.
 
 For a SPACE sandbox, pass `space_harness_tools(sandbox, cwd=guest_cwd)` to
 `HarnessToolsShim` in place of the base bundle. The extension reuses the core
-tools and routes all six environment tools to the guest. `write_plan` and
-`agent` stay on the host. Setting only `bash_executor=` changes only Bash;
-it does not move the file tools. See
+tools and routes six environment tools to the guest. Its default bundle omits
+`jq`, and an explicit `include=("jq",)` is rejected. `write_plan` and
+`agent` stay on the host. Setting only `bash_executor=` changes Bash and jq execution;
+it does not move file access. Jq requires an executor with stdin support. See
 [SPACE: How it works](../sandboxes/space.md#how-it-works).
 
 Pass `include=` or `exclude=` when an application needs the standard set with
@@ -131,7 +134,7 @@ search_tools = base_harness_tools(
 
 no_shell_tools = base_harness_tools(
     cwd=WORKSPACE,
-    exclude=("bash",),
+    exclude=("bash", "jq"),
 )
 ```
 
@@ -178,6 +181,7 @@ from agentlane.harness.tools import (
     bash_tool,
     find_tool,
     grep_tool,
+    jq_tool,
     patch_tool,
     plan_tool,
     read_tool,
@@ -186,6 +190,7 @@ from agentlane.harness.tools import (
 
 workspace_tools = (
     read_tool(cwd=WORKSPACE),
+    jq_tool(cwd=WORKSPACE),
     find_tool(cwd=WORKSPACE),
     grep_tool(cwd=WORKSPACE),
     patch_tool(cwd=WORKSPACE),

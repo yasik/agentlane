@@ -57,7 +57,7 @@ Everything after the closing `---` is the Markdown body and becomes the agent's
 | `tools`           | no       | `tools` (`ToolConfig`)           | Allowlist of native AgentLane tool names. Omitted → inherit-all; `[]` → no tools.                  |
 | `disallowedTools` | no       | an `ExcludeToolsShim` in `shims` | Denylist removed from the visible tool set each turn.                                              |
 
-Tool names are AgentLane's native lowercase names (`read`, `find`, `grep`,
+Tool names are AgentLane's native lowercase names (`read`, `jq`, `find`, `grep`,
 `patch`, `write`, `write_plan`, `bash`, `agent`); custom/MCP tool names the
 parent exposes also work. Both `tools` and `disallowedTools` accept a comma-separated string or a YAML list.
 Unknown frontmatter keys are ignored.

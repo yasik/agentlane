@@ -14,12 +14,14 @@ from ._bash_executor import (
     BashExecutor,
     BashShellConfig,
     LocalBashExecutor,
+    StdinBashExecutor,
     resolve_bash_shell,
 )
 from ._constants import PLAN_TOOL_NAME
 from ._find import find_tool
 from ._gitignore import GitignoreMatcher
 from ._grep import grep_tool
+from ._jq import jq_tool
 from ._output import (
     BASH_MAX_BYTES,
     BASH_MAX_LINES,
@@ -83,6 +85,7 @@ __all__ = [
     "WorkspaceToolsShim",
     "LS_DEFAULT_LIMIT",
     "LocalBashExecutor",
+    "StdinBashExecutor",
     "TEXT_MAX_BYTES",
     "TEXT_MAX_LINES",
     "AllOfToolPermissionPolicy",
@@ -110,6 +113,7 @@ __all__ = [
     "find_tool",
     "format_tool_permission_result",
     "grep_tool",
+    "jq_tool",
     "patch_tool",
     "plan_tool",
     "parse_tool_permission_grants",

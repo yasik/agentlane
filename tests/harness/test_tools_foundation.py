@@ -28,6 +28,7 @@ def test_base_harness_tools_includes_current_tool_set() -> None:
 
     assert [definition.tool.name for definition in definitions] == [
         "read",
+        "jq",
         "find",
         "grep",
         "patch",
@@ -53,6 +54,7 @@ def test_base_harness_tools_excludes_selected_names() -> None:
 
     assert [definition.tool.name for definition in definitions] == [
         "read",
+        "jq",
         "find",
         "grep",
         "patch",
@@ -84,6 +86,7 @@ def test_base_harness_tools_rejects_overlapping_include_exclude() -> None:
 def test_base_tool_names_constant_matches_built_set() -> None:
     assert BASE_TOOL_NAMES == (
         "read",
+        "jq",
         "find",
         "grep",
         "patch",
@@ -114,6 +117,7 @@ def test_base_harness_tools_exclude_accepts_extra_names_without_raising() -> Non
 
     assert [definition.tool.name for definition in definitions] == [
         "read",
+        "jq",
         "find",
         "grep",
         "patch",
@@ -163,6 +167,7 @@ def test_base_harness_tools_constructs_current_tool_set_with_common_options(
 
     assert [definition.tool.name for definition in definitions] == [
         "read",
+        "jq",
         "find",
         "grep",
         "patch",

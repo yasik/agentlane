@@ -84,6 +84,7 @@ Build agent loops and extend their behavior:
     - [bash](./harness/tools/bash.md)
     - [find](./harness/tools/find.md)
     - [grep](./harness/tools/grep.md)
+    - [jq](./harness/tools/jq.md)
     - [patch](./harness/tools/patch.md)
     - [read](./harness/tools/read.md)
     - [write](./harness/tools/write.md)

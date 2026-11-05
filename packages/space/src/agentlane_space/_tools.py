@@ -45,6 +45,9 @@ def space_harness_tools(
     Bash uses the core Bash tool with a SPACE executor. `write_plan` and `agent`
     retain their host definitions.
 
+    The adapter does not support jq process cleanup. It omits jq by default
+    and rejects an explicit jq selection instead of running it on the host.
+
     Pass the returned bundle to `HarnessToolsShim` in place of a local base-tool
     bundle. This factory does not modify tools that are already registered.
     The sandbox and guest user permissions are the boundary. Host permission
@@ -71,6 +74,13 @@ def space_harness_tools(
     # handlers. "/" is a construction placeholder, not the guest cwd: every
     # environment handler and its path guidance are replaced below before use.
     templates = base_harness_tools(cwd="/", include=include, exclude=exclude)
+
+    # A guest file worker cannot own the lifetime of jq's separate process
+    # group. Validate selectors above, then prevent a host-handler fallback.
+    if include is not None and any(d.tool.name == "jq" for d in templates):
+        raise ValueError("SPACE does not support the jq tool.")
+    templates = tuple(d for d in templates if d.tool.name != "jq")
+
     definitions: list[HarnessToolDefinition] = []
     guidance = (
         f"Environment tools use the SPACE sandbox with working directory `{directory}`. "

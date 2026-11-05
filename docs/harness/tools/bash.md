@@ -38,15 +38,25 @@ drwxr-xr-x  5 user  staff  160 Apr 27 09:00 ..
 -rw-r--r--  1 user  staff   18 Apr 27 09:00 notes.txt
 ```
 
-`bash_tool(default_timeout=...)` sets a construction-time default timeout for
-calls that omit `timeout`. A model call can override it with a positive
-per-call timeout. Invalid empty commands and non-positive timeouts return
-stable text errors before any process starts.
+`bash_tool(default_timeout=...)` sets the default timeout on its locally created
+executor for calls that omit `timeout`. A supplied executor owns its default;
+the tool passes the model's timeout unchanged, including `None`. A model call
+can override the executor default with a positive per-call timeout. Invalid
+empty commands and non-positive timeouts return stable text errors before any
+process starts.
 
 Host applications can import the executor-facing contracts
-`BashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`,
+`BashExecutor`, `StdinBashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`,
 `BashExecutionResult`, `BashShellConfig`, and `resolve_bash_shell` from
 `agentlane.harness.tools` when they need to wrap or replace local execution.
+
+`BashExecutionRequest.stdin` accepts binary input from host code. The local
+executor sends those bytes and closes stdin; empty bytes send EOF, while
+`None` preserves inherited stdin. This field is not a model-facing Bash
+argument. Executors that support it implement the optional, runtime-checkable
+`StdinBashExecutor` protocol and declare `supports_stdin = True`. Other
+executors must reject supplied input. The [jq tool](./jq.md) checks this
+capability before reading local or mounted input.
 
 `bash_tool(permissions=...)` evaluates the shared permission policy before the
 executor starts. Pair it with `approval_callback=` when `require_approval`

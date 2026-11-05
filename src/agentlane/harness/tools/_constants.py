@@ -9,6 +9,9 @@ DEFAULT_WORKSPACE_TOOLS_SHIM_NAME = "workspace-tools"
 READ_TOOL_NAME = "read"
 """Used to register and select the built-in file-reading tool."""
 
+JQ_TOOL_NAME = "jq"
+"""Used to register and select the built-in JSON query tool."""
+
 FIND_TOOL_NAME = "find"
 """Used to register and select the built-in file-search tool."""
 

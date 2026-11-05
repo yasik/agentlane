@@ -21,12 +21,15 @@ For example, with `cwd="/workspace"`, the agent can use `write` to create
 `script.py`, then use `bash` to run `python3 script.py`. Both tools use the
 file at `/workspace/script.py` inside the sandbox.
 
-The SPACE bundle keeps the standard tool names and argument schemas from
-[`base_harness_tools()`](../tools/README.md#standard-set). Register it in place of
-the local base bundle; registering both causes duplicate tool names.
+The SPACE bundle keeps the supported tool names and argument schemas from
+[`base_harness_tools()`](../tools/README.md#standard-set). It omits `jq` by
+default and rejects an explicit `include=("jq",)` request. Jq is not supported
+through this adapter; it never runs on the host as a fallback. Register the
+SPACE bundle in place of the local base bundle; registering both causes
+duplicate tool names.
 Creating a `SpaceSandbox` handle alone does not redirect tools. Passing
 `SpaceBashExecutor` through `base_harness_tools(bash_executor=...)` changes
-only Bash execution.
+Bash execution. It cannot supply jq stdin.
 
 The sandbox and guest user permissions form the security boundary. `cwd`
 sets the working directory; it does not restrict file access. Guest file
@@ -121,7 +124,7 @@ limit. Split larger writes or patches into smaller operations. Run
 foreground, non-interactive shell commands. Bash saves full output in guest
 files under `/tmp/agentlane-bash-*.log`; your app owns log cleanup.
 
-To check all six environment tools without a model, run the
+To check file and shell operations without a model, run the
 [connection example](../../../examples/harness/space_sandbox.py) from a checkout:
 
 ```bash

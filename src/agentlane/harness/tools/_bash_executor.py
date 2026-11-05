@@ -12,7 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from agentlane.runtime import CancellationToken
 
@@ -43,6 +43,8 @@ class BashExecutionRequest:
     timeout_seconds: float | None = None
     # Executor-only override for host callers; no LLM-side path sets it today.
     env: Mapping[str, str] | None = None
+    stdin: bytes | None = None
+    """Bytes to send before closing stdin; None preserves inherited stdin."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +67,12 @@ class BashExecutionResult:
 
 
 class BashExecutor(Protocol):
-    """Protocol for reusable bash command executors."""
+    """Protocol for reusable bash command executors.
+
+    Executors that accept `BashExecutionRequest.stdin` also implement
+    `StdinBashExecutor`. Callers check that optional capability before supplying
+    input. Executors must reject input they cannot send.
+    """
 
     async def run(
         self,
@@ -76,8 +83,23 @@ class BashExecutor(Protocol):
         ...
 
 
+@runtime_checkable
+class StdinBashExecutor(BashExecutor, Protocol):
+    """Optional command-executor capability for binary standard input.
+
+    When supported, `run` sends all supplied bytes and closes the input stream.
+    Input transfer participates in the command's timeout and cancellation.
+    """
+
+    supports_stdin: bool
+    """Whether this executor can send `BashExecutionRequest.stdin` bytes."""
+
+
 class LocalBashExecutor:
     """Execute bash commands as local child processes."""
+
+    supports_stdin: bool = True
+    """Whether requests can supply bytes for the child process stdin."""
 
     def __init__(
         self,
@@ -111,6 +133,7 @@ class LocalBashExecutor:
             request.command,
             cwd=str(request.cwd),
             env=dict(request.env) if request.env is not None else None,
+            stdin=asyncio.subprocess.PIPE if request.stdin is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             **_process_group_kwargs(),
@@ -130,6 +153,13 @@ class LocalBashExecutor:
                 combined_output=combined_output,
             )
         )
+        stream_tasks: tuple[asyncio.Task[None], ...] = (stdout_task, stderr_task)
+        if request.stdin is not None:
+            if process.stdin is None:
+                raise RuntimeError("Expected subprocess stdin pipe to be available.")
+            stream_tasks += (
+                asyncio.create_task(_write_stdin(process.stdin, request.stdin)),
+            )
         process_wait_task = asyncio.create_task(process.wait())
         process_exit_task = asyncio.create_task(
             _watch_process_exit(
@@ -162,7 +192,7 @@ class LocalBashExecutor:
                 await process_exit_task
                 await _wait_for_stream_tasks_after_exit(
                     process=process,
-                    stream_tasks=(stdout_task, stderr_task),
+                    stream_tasks=stream_tasks,
                 )
             else:
                 timed_out = timeout_task in done
@@ -170,7 +200,7 @@ class LocalBashExecutor:
                 await _terminate_process_group(
                     process=process,
                     process_exit_task=process_exit_task,
-                    stream_tasks=(stdout_task, stderr_task),
+                    stream_tasks=stream_tasks,
                 )
 
             for task in pending:
@@ -180,7 +210,7 @@ class LocalBashExecutor:
             await _terminate_process_group(
                 process=process,
                 process_exit_task=process_exit_task,
-                stream_tasks=(stdout_task, stderr_task),
+                stream_tasks=stream_tasks,
             )
             raise
         finally:
@@ -197,6 +227,10 @@ class LocalBashExecutor:
             if not process_wait_task.done():
                 process_wait_task.cancel()
                 cleanup_tasks.add(process_wait_task)
+            for task in stream_tasks:
+                if not task.done():
+                    task.cancel()
+                    cleanup_tasks.add(task)
             await _discard_cancelled_tasks(cleanup_tasks)
             combined_output.close()
 
@@ -392,6 +426,21 @@ async def _read_stream(
         await combined_output.write(chunk)
 
 
+async def _write_stdin(stream: asyncio.StreamWriter, data: bytes) -> None:
+    """Send input while output is drained, then close the child's stdin."""
+    try:
+        for offset in range(0, len(data), _STREAM_READ_SIZE):
+            stream.write(data[offset : offset + _STREAM_READ_SIZE])
+            await stream.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        # A command can finish successfully before it consumes all its input.
+        pass
+    finally:
+        stream.close()
+        with suppress(BrokenPipeError, ConnectionResetError):
+            await stream.wait_closed()
+
+
 async def _watch_process_exit(
     *,
     process: asyncio.subprocess.Process,
@@ -409,7 +458,7 @@ async def _watch_process_exit(
 async def _wait_for_stream_tasks_after_exit(
     *,
     process: asyncio.subprocess.Process,
-    stream_tasks: tuple[asyncio.Task[None], asyncio.Task[None]],
+    stream_tasks: tuple[asyncio.Task[None], ...],
 ) -> None:
     done, pending = await asyncio.wait(
         set(stream_tasks),
@@ -430,7 +479,7 @@ async def _terminate_process_group(
     *,
     process: asyncio.subprocess.Process,
     process_exit_task: asyncio.Task[int],
-    stream_tasks: tuple[asyncio.Task[None], asyncio.Task[None]],
+    stream_tasks: tuple[asyncio.Task[None], ...],
 ) -> None:
     if process.returncode is None:
         _send_process_signal(process, signal.SIGTERM)

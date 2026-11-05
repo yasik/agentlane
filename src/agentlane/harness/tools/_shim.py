@@ -30,6 +30,7 @@ from ._constants import (
     DEFAULT_HARNESS_TOOLS_SHIM_NAME,
     FIND_TOOL_NAME,
     GREP_TOOL_NAME,
+    JQ_TOOL_NAME,
     PATCH_TOOL_NAME,
     PLAN_TOOL_NAME,
     READ_TOOL_NAME,
@@ -37,6 +38,7 @@ from ._constants import (
 )
 from ._find import find_tool
 from ._grep import grep_tool
+from ._jq import jq_tool
 from ._patch import patch_tool
 from ._paths import StorageToolPathResolver
 from ._permissions import ToolApprovalCallback, ToolPermissionPolicy
@@ -48,6 +50,7 @@ from ._write import write_tool
 _PROMPT_MARKER_KEY_SUFFIX = "prompt-appended"
 BASE_TOOL_NAMES: tuple[str, ...] = (
     READ_TOOL_NAME,
+    JQ_TOOL_NAME,
     FIND_TOOL_NAME,
     GREP_TOOL_NAME,
     PATCH_TOOL_NAME,
@@ -249,10 +252,11 @@ def base_harness_tools(
 
     Args:
         cwd: Process workspace for grep and bash, and for default local file tools.
-        reader: Filesystem for read, find, and patch. Find also requires listings
+        reader: Filesystem for read, jq, find, and patch. Find also requires listings
             and metadata. A WritableFileSystem reader supplies default writes.
         writer: Storage writer for write and patch in the reader's namespace.
-        bash_executor: Optional host command executor for bash. Grep runs in the
+        bash_executor: Optional host command executor for bash and jq. jq requires
+            stdin support and never falls back to local execution. Grep runs in the
             harness process environment; run that environment in the sandbox
             when both tools must access a sandbox workspace.
         storage_cwd: Working directory in injected storage. Defaults to its root.
@@ -291,6 +295,7 @@ def base_harness_tools(
     if injected:
         if reader is None and set(selected_names) & {
             READ_TOOL_NAME,
+            JQ_TOOL_NAME,
             FIND_TOOL_NAME,
             PATCH_TOOL_NAME,
         }:
@@ -312,6 +317,14 @@ def base_harness_tools(
         READ_TOOL_NAME: lambda: read_tool(
             cwd=file_cwd,
             reader=reader,
+            permissions=permissions,
+            approval_callback=approval_callback,
+        ),
+        JQ_TOOL_NAME: lambda: jq_tool(
+            cwd=file_cwd,
+            reader=reader,
+            process_cwd=cwd,
+            executor=bash_executor,
             permissions=permissions,
             approval_callback=approval_callback,
         ),
@@ -361,12 +374,13 @@ def base_harness_tools(
 
     # Each selected tool carries the boundary, including process-only selections.
     guidance = (
-        f"File tools (read, write, find, patch) use injected storage with working "
+        f"File tools (read, jq, write, find, patch) use injected storage with working "
         f"directory {str(storage_directory)!r}. Grep uses the harness process filesystem; "
-        f"bash uses its executor filesystem, with configured workspace "
+        f"bash and jq execution use their executor filesystem, with configured workspace "
         f"{str(cwd) if cwd is not None else str(Path.cwd())!r}. "
         "Storage paths and process paths are not interchangeable. Use a process "
-        "tool on a storage file only when the host provides an explicit path mapping."
+        "tool on a storage file only when the host provides an explicit path mapping; "
+        "jq instead sends the selected storage file to its executor through stdin."
     )
 
     return tuple(

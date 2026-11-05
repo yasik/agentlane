@@ -588,7 +588,7 @@ def _format_permission_denied(request: ToolPermissionRequest) -> str:
 def _format_approval_required(request: ToolPermissionRequest) -> str:
     if request.operation == ToolOperation.EXECUTE_COMMAND:
         return (
-            "approval required: bash command requires application approval "
+            f"approval required: {request.tool_name} command requires application approval "
             "before execution"
         )
     if request.operation == ToolOperation.NETWORK_ACCESS:
@@ -767,6 +767,7 @@ def _workspace_policy_approval_operations(
 
 _TOOL_OPERATIONS_BY_TOOL: dict[str, tuple[ToolOperation, ...]] = {
     "read": (ToolOperation.READ_FILE,),
+    "jq": (ToolOperation.READ_FILE, ToolOperation.EXECUTE_COMMAND),
     "find": (ToolOperation.SEARCH_FILES,),
     "grep": (ToolOperation.READ_FILE, ToolOperation.SEARCH_FILES),
     "write": (
