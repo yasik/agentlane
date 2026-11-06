@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from pathlib import Path
 from typing import cast
@@ -247,6 +248,23 @@ def test_read_tool_column_applies_only_to_the_offset_line(tmp_path: Path) -> Non
     )
 
 
+def test_read_tool_continues_from_short_line_through_oversized_line(
+    tmp_path: Path,
+) -> None:
+    prefix = "a" * TEXT_MAX_BYTES
+    (tmp_path / "wide.txt").write_text(f"first\n{prefix}tail\nlast\n", encoding="utf-8")
+    definition = read_tool(cwd=tmp_path)
+
+    assert run_tool(definition, path="wide.txt") == (
+        "first\n\n[Showing lines 1-1 (51200 byte limit). Use offset=2 to continue.]"
+    )
+    assert run_tool(definition, path="wide.txt", offset=2) == (
+        prefix + "\n\n[Showing line 2, columns 1-51200 (51200 byte limit). "
+        "Use offset=2, column=51201 to continue.]"
+    )
+    assert run_tool(definition, path="wide.txt", offset=2, column=51201) == "tail\nlast"
+
+
 @pytest.mark.parametrize("text,column", [("content\n", 8), ("\n", 2), ("", 2)])
 def test_read_tool_rejects_column_beyond_line(
     tmp_path: Path, text: str, column: int
@@ -362,7 +380,10 @@ def test_read_tool_returns_empty_output_for_empty_file(tmp_path: Path) -> None:
 
 def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
     async def scenario() -> None:
-        (tmp_path / "runner.txt").write_text("runner content\n", encoding="utf-8")
+        prefix = "🙂" * (TEXT_MAX_BYTES // 4)
+        (tmp_path / "runner.txt").write_text(
+            prefix + "runner content\n", encoding="utf-8"
+        )
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
         model = SequenceModel(
@@ -374,6 +395,22 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
                             tool_id="call_1",
                             name="read",
                             arguments='{"path":"runner.txt"}',
+                        )
+                    ],
+                ),
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="call_2",
+                            name="read",
+                            arguments=json.dumps(
+                                {
+                                    "path": "runner.txt",
+                                    "offset": 1,
+                                    "column": len(prefix) + 1,
+                                }
+                            ),
                         )
                     ],
                 ),
@@ -389,7 +426,7 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
                 tools=Tools(
                     tools=[read_tool(cwd=tmp_path).tool],
                     tool_choice="required",
-                    tool_call_limits={"read": 1},
+                    tool_call_limits={"read": 2},
                 ),
             ),
         )
@@ -408,7 +445,14 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
         tool_message = cast(dict[str, object], state.history[2])
         assert tool_message["role"] == "tool"
         assert tool_message["name"] == "read"
-        assert tool_message["content"] == "runner content"
+        assert tool_message["content"] == (
+            prefix + f"\n\n[Showing line 1, columns 1-{len(prefix)} "
+            f"({TEXT_MAX_BYTES} byte limit). "
+            f"Use offset=1, column={len(prefix) + 1} to continue.]"
+        )
+        continuation_message = cast(dict[str, object], state.history[4])
+        assert continuation_message["role"] == "tool"
+        assert continuation_message["content"] == "runner content"
 
     asyncio.run(scenario())
 

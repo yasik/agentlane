@@ -10,7 +10,6 @@ from mcp import types
 
 from agentlane.harness.filesystem import FileWriter, LocalFileSystem
 from agentlane.harness.mcp import MCPResultPolicy
-from agentlane.harness.mcp import _result as result_module
 from agentlane.harness.mcp._output import render_mcp_result_with_storage
 from agentlane.harness.mcp._result import (
     read_result,
@@ -57,11 +56,9 @@ async def test_exact_fit_is_inline_and_overflow_saves_the_same_text(
     assert not tuple(tmp_path.iterdir())
 
     response = await _prepare(result, filesystem, limit=len(inline) - 1)
-    (path,) = tmp_path.rglob("*.json")
+    (path,) = tmp_path.rglob("*.txt")
     notice = f"\n\n[Full MCP result: {json.dumps(str(path.relative_to(tmp_path)))}]"
-    saved = path.read_text()
-    assert "\n" in saved
-    assert json.loads(saved) == json.loads(inline)
+    assert "".join(path.read_text().splitlines()) == inline
     assert len(response) <= len(inline) - 1
     assert response.endswith(notice)
     assert inline.startswith(response.removesuffix(notice).removesuffix("…"))
@@ -125,9 +122,8 @@ async def test_redaction_runs_before_budgeting_and_preserves_full_text(
     response = await _prepare(
         result, filesystem, secrets=(secret,), include_structured_content=True
     )
-    (path,) = tmp_path.rglob("*.json")
-    saved = path.read_text()
-    json.loads(saved)
+    (path,) = tmp_path.rglob("*.txt")
+    saved = "".join(path.read_text().splitlines())
     assert "credential-canary" not in saved + response
     assert "unknown-secret-canary" not in saved + response
     assert all(text in saved for text in (meeting_id, "final words", "structured-only"))
@@ -154,7 +150,7 @@ async def test_storage_outcomes_keep_server_error_kind(
     if isinstance(response, ToolFailure):
         assert response.error.kind == "mcp_server"
     if outcome == "saved":
-        (path,) = tmp_path.rglob("*.json")
+        (path,) = tmp_path.rglob("*.txt")
         assert "Not found" in path.read_text()
         assert "[Full MCP result: " in response
     else:
@@ -172,7 +168,7 @@ async def test_quoted_path_notice_at_the_response_budget_boundary(
     limit = 128
     prefix = 'results/notes\n"quoted" '
     sample_notice = (
-        f"\n\n[Full MCP result: {json.dumps(f'{prefix}/' + 'x' * 36 + '.json')}]"
+        f"\n\n[Full MCP result: {json.dumps(f'{prefix}/' + 'x' * 36 + '.txt')}]"
     )
     directory = prefix + "x" * (limit + extra_chars - len(sample_notice))
     response = await _prepare(
@@ -181,7 +177,7 @@ async def test_quoted_path_notice_at_the_response_budget_boundary(
         directory=directory,
         limit=limit,
     )
-    (path,) = tmp_path.rglob("*.json")
+    (path,) = tmp_path.rglob("*.txt")
     relative = str(path.relative_to(tmp_path))
     notice = f"\n\n[Full MCP result: {json.dumps(relative)}]"
     assert len(notice) == limit + extra_chars
@@ -219,8 +215,8 @@ async def test_block_preview_limit_saves_all_supported_blocks(tmp_path: Path) ->
         limit=10_000,
         max_content_blocks=1,
     )
-    (path,) = tmp_path.rglob("*.json")
-    payload = json.loads(path.read_text())
+    (path,) = tmp_path.rglob("*.txt")
+    payload = json.loads("".join(path.read_text().splitlines()))
     assert payload["content"] == content
     assert "block-0" in response and "block-1" not in response
     assert "[Full MCP result: " in response
@@ -228,7 +224,7 @@ async def test_block_preview_limit_saves_all_supported_blocks(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_saved_text_resource_keeps_its_body_as_valid_json(
+async def test_saved_text_resource_keeps_its_body_and_readable_lines(
     tmp_path: Path,
 ) -> None:
     transcript = "x" * 100_000 + "final words"
@@ -244,68 +240,13 @@ async def test_saved_text_resource_keeps_its_body_as_valid_json(
         ),
         LocalFileSystem(tmp_path),
     )
-    (path,) = tmp_path.rglob("*.json")
-    payload = json.loads(path.read_text())
+    (path,) = tmp_path.rglob("*.txt")
+    lines = path.read_text().splitlines()
+    payload = json.loads("".join(lines))
     assert payload["content"][0]["resource"]["text"] == transcript
+    assert all(len(line) <= 4096 for line in lines)
     assert len(response) <= 512
     assert "[Full MCP result: " in response
-
-
-@pytest.mark.asyncio
-async def test_saved_structured_json_has_lines_for_individual_records(
-    tmp_path: Path,
-) -> None:
-    records = [{"id": index, "note": "synthetic note" * 50} for index in range(150)]
-    response = await _prepare(
-        {"content": [], "structuredContent": {"records": records}},
-        LocalFileSystem(tmp_path),
-        include_structured_content=True,
-    )
-    (path,) = tmp_path.rglob("*.json")
-    saved = path.read_text()
-    assert len(saved) > 50 * 1024
-    assert json.loads(saved)["structuredContent"]["records"] == records
-    assert len(saved.splitlines()) > len(records)
-    assert all(len(line.encode()) < 50 * 1024 for line in saved.splitlines())
-    assert "[Full MCP result: " in response
-
-
-@pytest.mark.asyncio
-async def test_saved_json_text_preserves_envelope_and_string_boundaries(
-    tmp_path: Path,
-) -> None:
-    payload = {"transcript": "x" * 4090 + "BOUNDARY_MARKER" + "\nfinal words"}
-    response = await _prepare(
-        {"content": [{"type": "text", "text": json.dumps(payload)}]},
-        LocalFileSystem(tmp_path),
-    )
-    (path,) = tmp_path.rglob("*.json")
-    saved = path.read_text()
-    envelope = json.loads(saved)
-    assert json.loads(envelope["content"][0]["text"]) == payload
-    assert "BOUNDARY_MARKER" in saved
-    assert envelope["isError"] is False
-    assert "[Full MCP result: " in response
-
-
-@pytest.mark.asyncio
-async def test_storage_size_limit_includes_indentation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(result_module, "_MAX_SERIALIZED_CHARS", 512)
-    result: dict[str, object] = {
-        "content": [],
-        "structuredContent": {f"field_{i:02}": "value" for i in range(18)},
-    }
-    response = await _prepare(
-        result,
-        LocalFileSystem(tmp_path),
-        limit=128,
-        include_structured_content=True,
-    )
-    assert not tuple(tmp_path.iterdir())
-    assert "processing limit" in response.lower()
-    assert "[Full MCP result: " not in response
 
 
 @pytest.mark.asyncio
@@ -366,8 +307,8 @@ async def test_saved_text_can_use_more_than_the_inline_content_share(
         LocalFileSystem(tmp_path),
         include_structured_content=True,
     )
-    (path,) = tmp_path.rglob("*.json")
-    payload = json.loads(path.read_text())
+    (path,) = tmp_path.rglob("*.txt")
+    payload = json.loads("".join(path.read_text().splitlines()))
     assert payload["content"][0]["text"] == transcript
     assert payload["structuredContent"] == {"id": "meeting"}
     assert "[Full MCP result: " in response

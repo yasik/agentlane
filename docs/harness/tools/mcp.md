@@ -204,23 +204,16 @@ metadata.
 
 `max_text_chars` and `max_content_blocks` limit the inline response. If the
 selected content fits both limits, the result returns inline. Otherwise,
-AgentLane saves one UUID-named `.json` file. The file retains text beyond both
+AgentLane saves one UUID-named `.txt` file. The file retains text beyond both
 inline limits. Inline responses keep the structured-content and resource
 metadata behavior described above.
 
-A saved file contains the sanitized MCP envelope as valid JSON with two-space
-indentation. It retains `content`, `isError`, and any selected
-`structuredContent`. JSON inside a text block remains an escaped string in
-`content[].text`. String values remain intact, including long transcripts.
-The inline response still uses compact JSON for its size limits.
-
 A saved result returns a preview and `[Full MCP result: "<path>"]`. The model
 calls `read(path="<path>", offset=1, limit=200)` and follows the reader's next
-offset. If a line exceeds the reader's 51,200-byte cap, the reader returns a
-bounded part and a `column` value to continue within that line. Follow both
-`offset` and `column` in that case. “Full” means the complete supported text
-representation selected by policy. The saved file can be parsed directly as
-JSON.
+offset. Text lines wrap at 4,096 characters so large strings remain readable.
+The file contains serialized MCP text with JSON escaping; line wrapping means
+it is not a stable JSON format. “Full” means the complete supported text
+representation selected by policy.
 
 The response, including its path, stays within `max_text_chars`. Storage uses
 the existing write and cancellation handling. If a write fails, the preview

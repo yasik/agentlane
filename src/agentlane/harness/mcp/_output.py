@@ -22,6 +22,9 @@ _UNAVAILABLE = "\n\n[Full MCP result unavailable.]"
 
 _RESULT_REFERENCE = "\n\n[Full MCP result: {}]"
 
+_FILE_LINE_CHARS = 4096
+"""Keep saved lines within the native read tool byte limit, including UTF-8."""
+
 
 def validate_result_storage(
     writer: FileWriter | None,
@@ -36,7 +39,7 @@ def validate_result_storage(
         return
 
     # UUID filenames have a fixed length; include JSON escaping of the directory.
-    path = str(PurePosixPath(directory) / "00000000-0000-0000-0000-000000000000.json")
+    path = str(PurePosixPath(directory) / "00000000-0000-0000-0000-000000000000.txt")
     reference = _RESULT_REFERENCE.format(json.dumps(path, ensure_ascii=False))
     if len(reference) > max_text_chars:
         raise ValueError(
@@ -99,15 +102,17 @@ async def _save_result(
 ) -> str:
     if not directory:
         raise ValueError("MCP result storage requires a directory.")
-    read_path = str(PurePosixPath(directory) / f"{uuid4()}.json")
+    read_path = str(PurePosixPath(directory) / f"{uuid4()}.txt")
     if (
         redact_known_secrets(read_path, secrets) != read_path
         or redact_secret_pairs(read_path) != read_path
     ):
         raise ValueError("MCP output path contains credentials.")
 
-    # Preserve valid JSON and complete string values. The reader supplies
-    # bounded continuation within a line when a string exceeds its output cap.
-    await write_content(writer, read_path, text.encode("utf-8"))
+    # read cannot return a single line larger than its byte limit.
+    file_text = "\n".join(
+        text[i : i + _FILE_LINE_CHARS] for i in range(0, len(text), _FILE_LINE_CHARS)
+    )
+    await write_content(writer, read_path, file_text.encode("utf-8"))
 
     return _RESULT_REFERENCE.format(json.dumps(read_path, ensure_ascii=False))

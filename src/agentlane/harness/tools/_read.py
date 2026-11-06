@@ -56,7 +56,7 @@ class _ToolArgs(BaseModel):
     column: int | None = Field(
         default=None,
         description=(
-            "The Unicode character position to start at within the offset line. "
+            "The Unicode code-point position to start at within the offset line. "
             "Must be 1 or greater. Defaults to 1; use the returned column to "
             "continue a line that exceeds the byte limit."
         ),

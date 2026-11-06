@@ -9,8 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Save large MCP results as indented `.json` files with complete string values and the sanitized MCP envelope. Inline previews retain their compact format and size limits.
-- Read long lines in bounded parts with the optional `column` argument. Continuation notes provide the line and Unicode character position for the next call.
+- Read long lines in bounded parts with the optional `column` argument. Continuation notes provide the line and Unicode code-point position for the next call.
 
 ## [0.25.0] - 2026-11-01
 

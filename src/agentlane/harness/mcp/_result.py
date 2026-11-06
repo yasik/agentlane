@@ -82,20 +82,7 @@ def render_mcp_storage_text(
         _Renderer(preview_limit, (), sanitized=True),
     )
 
-    preview_text = _json(preview)
-
-    # Keep inline size decisions compact. Only saved results need indentation;
-    # string values retain JSON escaping and are paginated by the read tool.
-    overflow = (
-        max(len(text), len(preview_text)) > policy.max_text_chars
-        or len(source.content) > policy.max_content_blocks
-    )
-    complete = not renderer.truncated
-    if complete and overflow:
-        text = json.dumps(safe, ensure_ascii=False, indent=2)
-        complete = len(text) <= _MAX_SERIALIZED_CHARS
-
-    return text, preview_text, complete
+    return text, _json(preview), not renderer.truncated
 
 
 def _render(
