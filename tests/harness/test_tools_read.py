@@ -256,13 +256,18 @@ def test_read_tool_continues_from_short_line_through_oversized_line(
     definition = read_tool(cwd=tmp_path)
 
     assert run_tool(definition, path="wide.txt") == (
-        "first\n\n[Showing lines 1-1 (51200 byte limit). Use offset=2 to continue.]"
+        f"first\n\n[Showing lines 1-1 ({TEXT_MAX_BYTES} byte limit). "
+        "Use offset=2 to continue.]"
     )
     assert run_tool(definition, path="wide.txt", offset=2) == (
-        prefix + "\n\n[Showing line 2, columns 1-51200 (51200 byte limit). "
-        "Use offset=2, column=51201 to continue.]"
+        prefix + f"\n\n[Showing line 2, columns 1-{TEXT_MAX_BYTES} "
+        f"({TEXT_MAX_BYTES} byte limit). "
+        f"Use offset=2, column={TEXT_MAX_BYTES + 1} to continue.]"
     )
-    assert run_tool(definition, path="wide.txt", offset=2, column=51201) == "tail\nlast"
+    assert (
+        run_tool(definition, path="wide.txt", offset=2, column=TEXT_MAX_BYTES + 1)
+        == "tail\nlast"
+    )
 
 
 @pytest.mark.parametrize("text,column", [("content\n", 8), ("\n", 2), ("", 2)])

@@ -6,8 +6,8 @@ Parameters:
 
 1. `path: str`
 2. `offset: int | None = None`
-3. `limit: int | None = None`
-4. `column: int | None = None`
+3. `column: int | None = None`
+4. `limit: int | None = None`
 
 `offset` is a one-based line number. `column` is a one-based Unicode code-point
 position within the decoded line. Both default to 1. The column applies only to

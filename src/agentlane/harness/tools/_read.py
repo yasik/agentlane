@@ -37,6 +37,9 @@ _TOOL_PROMPT_SNIPPET = "Read file contents"
 _TOOL_PROMPT_GUIDELINE = "Use read to examine files instead of cat or sed."
 _GENERIC_READ_ERROR = "failed to read file"
 
+_COLUMN_EXCEEDS_LINE_LENGTH_ERROR = "column exceeds line length"
+"""Returned when the requested column is beyond the decoded line."""
+
 
 class _ToolArgs(BaseModel):
     """Model-visible arguments for the read tool."""
@@ -291,7 +294,8 @@ def _collect_text_slice(
         decoded_line = _decode_line(raw_line)
         if line_number == offset and column > 1:
             if column > len(decoded_line):
-                return _read_error("column exceeds line length")
+                return _read_error(_COLUMN_EXCEEDS_LINE_LENGTH_ERROR)
+
             decoded_line = decoded_line[column - 1 :]
 
         is_continuation = bool(output_lines)
@@ -334,7 +338,7 @@ def _collect_text_slice(
     ):
         return _read_error("offset exceeds file length")
     if total_lines == 0 and column > 1:
-        return _read_error("column exceeds line length")
+        return _read_error(_COLUMN_EXCEEDS_LINE_LENGTH_ERROR)
 
     return _ReadContent(
         lines=tuple(output_lines),
