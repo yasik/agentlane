@@ -7,6 +7,7 @@ import os
 import shlex
 import signal
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -27,15 +28,20 @@ from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     BashExecutionRequest,
     BashExecutionResult,
+    BashShellConfig,
     HarnessToolDefinition,
     HarnessToolsShim,
+    LocalBashExecutor,
+    StdoutBashExecutor,
     ToolOperation,
     ToolPermissionDecision,
     ToolPermissionOutcome,
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
     bash_tool,
+    resolve_bash_shell,
 )
+from agentlane.harness.tools._command_output import format_command_output
 from agentlane.harness.tools._output import TruncatedOutput
 from agentlane.models import (
     MessageDict,
@@ -188,6 +194,447 @@ def test_bash_tool_runs_successful_command(tmp_path: Path) -> None:
     output = _run_bash("printf 'hello\\n'", cwd=tmp_path)
 
     assert output == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shell_startup", [False, True])
+@pytest.mark.parametrize("explicit_env", [False, True])
+async def test_local_executor_controls_shell_startup_and_preserves_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shell_startup: bool,
+    explicit_env: bool,
+) -> None:
+    startup = tmp_path / "startup.bash"
+    startup.write_text("printf 'startup\\n'\n", encoding="utf-8")
+    monkeypatch.setenv("BASH_ENV", str(startup))
+    monkeypatch.setenv(
+        "BASH_FUNC_agentlane_startup_function%%",
+        "() { printf 'function\\n'; }",
+    )
+    monkeypatch.setenv("SHELLOPTS", "noglob")
+    monkeypatch.setenv("AGENTLANE_SHELL_VALUE", "inherited")
+    env = dict(os.environ) if explicit_env else None
+    if env is not None:
+        env["AGENTLANE_SHELL_VALUE"] = "explicit"
+
+    # Startup controls must not discard ordinary inherited or request env values.
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command=(
+                "if declare -F agentlane_startup_function >/dev/null; then "
+                "agentlane_startup_function; fi; "
+                "case $- in *f*) printf 'option\\n';; esac; "
+                'printf "%s\\n" "$AGENTLANE_SHELL_VALUE"'
+            ),
+            cwd=tmp_path,
+            env=env,
+            shell_startup=shell_startup,
+            stdout_capture_limit=1024,
+            timeout_seconds=2,
+        ),
+        CancellationToken(),
+    )
+
+    value = "explicit" if explicit_env else "inherited"
+    expected = f"{value}\n".encode()
+    if shell_startup:
+        expected = b"startup\nfunction\noption\n" + expected
+
+    assert result.exit_code == 0
+    assert not result.timed_out
+    assert result.stdout == expected
+    assert not result.stdout_truncated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shell_args", [("--noprofile", "-rc"), ("--noprofile", "-rc", "--")]
+)
+async def test_local_executor_preserves_configured_shell_options_without_startup(
+    tmp_path: Path, shell_args: tuple[str, ...]
+) -> None:
+    executor = LocalBashExecutor(
+        default_timeout=2,
+        shell_config=BashShellConfig(
+            executable=resolve_bash_shell().executable, args=shell_args
+        ),
+    )
+
+    # The configured restricted shell must still reject a directory change.
+    result = await executor.run(
+        BashExecutionRequest(command="cd ..", cwd=tmp_path, shell_startup=False),
+        CancellationToken(),
+    )
+
+    assert result.exit_code == 1
+    assert "cd: restricted" in result.output.text
+    assert result.timeout_seconds == 2
+    assert not result.timed_out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [b"", b"first\x00line\n\xc3\xa9\n"])
+async def test_local_executor_sends_stdin_bytes_and_closes_pipe(
+    tmp_path: Path, data: bytes
+) -> None:
+    command = shlex.join(
+        [sys.executable, "-c", "import sys; print(sys.stdin.buffer.read().hex())"]
+    )
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command=command, cwd=tmp_path, stdin=data, timeout_seconds=2
+        ),
+        CancellationToken(),
+    )
+
+    assert result.exit_code == 0
+    assert not result.timed_out
+    assert result.output.text == f"{data.hex()}\n"
+
+
+@pytest.mark.asyncio
+async def test_local_executor_drains_output_while_sending_large_stdin(
+    tmp_path: Path,
+) -> None:
+    data = b"input-value\n" * 100_000
+    code = (
+        "import sys; "
+        "sys.stdout.write('x' * 131072); sys.stdout.flush(); "
+        "data = sys.stdin.buffer.read(); "
+        "print('\\nreceived=' + str(len(data)) + ',valid=' + "
+        "str(data == b'input-value\\n' * 100000))"
+    )
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command=shlex.join([sys.executable, "-c", code]),
+            cwd=tmp_path,
+            stdin=data,
+            timeout_seconds=3,
+        ),
+        CancellationToken(),
+    )
+
+    try:
+        assert result.exit_code == 0
+        assert not result.timed_out
+        assert result.output.text.endswith(f"\nreceived={len(data)},valid=True\n")
+        assert result.output_truncated
+        assert result.full_output_path is not None
+        assert "x" * 131072 in result.full_output_path.read_text(encoding="utf-8")
+    finally:
+        if result.full_output_path is not None:
+            result.full_output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_local_executor_accepts_exit_before_stdin_is_consumed(
+    tmp_path: Path,
+) -> None:
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command="printf done",
+            cwd=tmp_path,
+            stdin=b"unused" * 200_000,
+            timeout_seconds=2,
+        ),
+        CancellationToken(),
+    )
+
+    assert result.exit_code == 0
+    assert result.output.text == "done"
+    assert not result.timed_out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["timeout", "token", "task"])
+async def test_local_executor_stops_while_stdin_is_blocked(
+    tmp_path: Path, stop: str
+) -> None:
+    initial_tasks = asyncio.all_tasks()
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command="sleep 5",
+                cwd=tmp_path,
+                stdin=b"unused" * 200_000,
+                timeout_seconds=0.1 if stop == "timeout" else None,
+            ),
+            token,
+        )
+    )
+    if stop != "timeout":
+        await asyncio.sleep(0.1)
+        if stop == "token":
+            token.cancel()
+        else:
+            task.cancel()
+
+    if stop == "task":
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+    else:
+        result = await asyncio.wait_for(task, timeout=3)
+        assert result.timed_out == (stop == "timeout")
+        assert result.cancelled == (stop == "token")
+        assert result.exit_code is not None
+
+    assert asyncio.all_tasks() == initial_tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["exit", "timeout", "token", "task"])
+@pytest.mark.parametrize("input_bytes", [32 * 1024, 96 * 1024, 2 * 1024 * 1024])
+async def test_local_executor_closes_stdin_held_by_detached_child(
+    tmp_path: Path, stop: str, input_bytes: int
+) -> None:
+    if os.name != "posix":
+        pytest.skip("requires POSIX process sessions")
+
+    # The detached child keeps stdin open without reading it, even after the
+    # command's process group has exited.
+    pid_file = tmp_path / "child.pid"
+    code = (
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen(\n"
+        "    [sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+        "    start_new_session=True,\n"
+        "    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,\n"
+        ")\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n"
+        "time.sleep(0 if sys.argv[2] == 'exit' else 30)\n"
+    )
+
+    # Pipe capacities vary by platform. Exercise both pending writes and the
+    # final flush, and capture callback failures from cancelled close waiters.
+    initial_tasks = asyncio.all_tasks()
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    unhandled: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=shlex.join([sys.executable, "-c", code, str(pid_file), stop]),
+                cwd=tmp_path,
+                stdin=b"x" * input_bytes,
+                timeout_seconds=1 if stop == "timeout" else None,
+            ),
+            token,
+        )
+    )
+    try:
+        # Wait for the inherited handle before testing either cancellation path.
+        async with asyncio.timeout(3):
+            while not pid_file.exists() or not pid_file.read_text():
+                await asyncio.sleep(0.01)
+
+        if stop == "token":
+            token.cancel()
+        elif stop == "task":
+            task.cancel()
+
+        # Observe completion without cancelling a hung executor: wait_for would
+        # itself wait indefinitely if cancellation cleanup regresses.
+        done, _ = await asyncio.wait({task}, timeout=3)
+        assert task in done
+        if stop == "task":
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            result = await task
+            assert result.timed_out == (stop == "timeout")
+            assert result.cancelled == (stop == "token")
+            assert result.exit_code is not None
+            if stop == "exit":
+                assert result.exit_code == 0
+
+        assert asyncio.all_tasks() == initial_tasks
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+        # The detached process is outside executor ownership. Close its inherited
+        # pipe even on assertion failure, so the test cannot leave cleanup hung.
+        if pid_file.exists():
+            with suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        if not task.done():
+            token.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [b"", b"raw\x00\xff\n" * 20_000])
+@pytest.mark.parametrize("exit_code", [0, 7])
+async def test_local_executor_captures_exact_stdout_separately_from_stderr(
+    tmp_path: Path, data: bytes, exit_code: int
+) -> None:
+    executor = LocalBashExecutor()
+    assert isinstance(executor, StdoutBashExecutor)
+    code = (
+        "import sys; "
+        "sys.stdout.buffer.write(sys.stdin.buffer.read()); "
+        "sys.stderr.write('diagnostic\\n'); "
+        f"sys.exit({exit_code})"
+    )
+    result = await executor.run(
+        BashExecutionRequest(
+            command=shlex.join([sys.executable, "-c", code]),
+            cwd=tmp_path,
+            stdin=data,
+            stdout_capture_limit=max(1, len(data)),
+            timeout_seconds=3,
+        ),
+        CancellationToken(),
+    )
+
+    try:
+        assert result.stdout == data
+        assert not result.stdout_truncated
+        assert result.exit_code == exit_code
+        assert not result.timed_out
+        if data:
+            assert result.output_truncated
+            assert result.full_output_path is not None
+            assert b"diagnostic\n" in result.full_output_path.read_bytes()
+            assert f"Full output: {result.full_output_path}" in format_command_output(
+                result
+            )
+        else:
+            assert result.output.text == "diagnostic\n"
+    finally:
+        if result.full_output_path is not None:
+            result.full_output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, -1])
+async def test_local_executor_rejects_invalid_stdout_capture_limit_before_startup(
+    tmp_path: Path, limit: int
+) -> None:
+    marker = tmp_path / "must-not-exist"
+    with pytest.raises(
+        ValueError, match="stdout_capture_limit must be greater than zero"
+    ):
+        await LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=f"touch {shlex.quote(str(marker))}",
+                cwd=tmp_path,
+                stdout_capture_limit=limit,
+            ),
+            CancellationToken(),
+        )
+
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_local_executor_stops_at_capture_limit_and_marks_log_partial(
+    tmp_path: Path,
+) -> None:
+    initial_tasks = asyncio.all_tasks()
+    code = "import os\nwhile True:\n    os.write(1, b'x' * 8192)\n"
+    result = await asyncio.wait_for(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=shlex.join([sys.executable, "-c", code]),
+                cwd=tmp_path,
+                stdout_capture_limit=100_000,
+            ),
+            CancellationToken(),
+        ),
+        timeout=3,
+    )
+
+    try:
+        assert result.stdout == b"x" * 100_000
+        assert result.stdout_truncated
+        assert result.exit_code is not None
+        assert not result.timed_out
+        assert not result.cancelled
+        assert asyncio.all_tasks() == initial_tasks
+        assert result.full_output_path is not None
+        assert f"Partial output: {result.full_output_path}" in format_command_output(
+            result
+        )
+    finally:
+        if result.full_output_path is not None:
+            result.full_output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_local_executor_marks_capture_incomplete_without_stdout_eof(
+    tmp_path: Path,
+) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("requires POSIX fork semantics")
+
+    # The leader succeeds, but its descendant retains stdout. Cleanup must not
+    # mistake the retained prefix for a complete result that can replace a file.
+    code = (
+        "import os, time\n"
+        "if os.fork() == 0:\n"
+        "    time.sleep(30)\n"
+        "else:\n"
+        "    print('prefix', flush=True)\n"
+        "    os._exit(0)\n"
+    )
+    result = await asyncio.wait_for(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=shlex.join([sys.executable, "-c", code]),
+                cwd=tmp_path,
+                stdout_capture_limit=1024,
+            ),
+            CancellationToken(),
+        ),
+        timeout=3,
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == b"prefix\n"
+    assert result.stdout_truncated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["timeout", "token", "task"])
+async def test_local_executor_cleans_up_stdout_capture_when_stopped(
+    tmp_path: Path, stop: str
+) -> None:
+    initial_tasks = asyncio.all_tasks()
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command="printf prefix; sleep 5",
+                cwd=tmp_path,
+                stdout_capture_limit=1024,
+                timeout_seconds=0.1 if stop == "timeout" else None,
+            ),
+            token,
+        )
+    )
+    if stop != "timeout":
+        await asyncio.sleep(0.1)
+        if stop == "token":
+            token.cancel()
+        else:
+            task.cancel()
+
+    if stop == "task":
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+    else:
+        result = await asyncio.wait_for(task, timeout=3)
+        assert result.stdout == b"prefix"
+        assert result.timed_out == (stop == "timeout")
+        assert result.cancelled == (stop == "token")
+
+    assert asyncio.all_tasks() == initial_tasks
 
 
 def test_bash_tool_rejects_invalid_default_timeout() -> None:

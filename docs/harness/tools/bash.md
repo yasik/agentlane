@@ -38,15 +38,41 @@ drwxr-xr-x  5 user  staff  160 Apr 27 09:00 ..
 -rw-r--r--  1 user  staff   18 Apr 27 09:00 notes.txt
 ```
 
-`bash_tool(default_timeout=...)` sets a construction-time default timeout for
-calls that omit `timeout`. A model call can override it with a positive
-per-call timeout. Invalid empty commands and non-positive timeouts return
-stable text errors before any process starts.
+`bash_tool(default_timeout=...)` sets the default timeout on its locally created
+executor for calls that omit `timeout`. A supplied executor owns its default;
+the tool passes the model's timeout unchanged, including `None`. A model call
+can override the executor default with a positive per-call timeout. Invalid
+empty commands and non-positive timeouts return stable text errors before any
+process starts.
 
 Host applications can import the executor-facing contracts
-`BashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`,
-`BashExecutionResult`, `BashShellConfig`, and `resolve_bash_shell` from
-`agentlane.harness.tools` when they need to wrap or replace local execution.
+`BashExecutor`, `StdinBashExecutor`, `StdoutBashExecutor`, `LocalBashExecutor`,
+`BashExecutionRequest`, `BashExecutionResult`, `BashShellConfig`, and
+`resolve_bash_shell` from `agentlane.harness.tools` when they need to wrap or
+replace local execution.
+
+`BashExecutionRequest.shell_startup` defaults to `True`, which preserves normal
+Bash startup behavior. Set it to `False` to disable startup files and inherited
+shell functions and options. Executors must honor this setting or reject the
+request before execution. The local executor uses `--noprofile`, `--norc`, and
+`-p` while preserving the configured executable, explicit shell options,
+environment, and default timeout.
+
+`BashExecutionRequest.stdin` accepts binary input from host code. The local
+executor sends those bytes and closes stdin; empty bytes send EOF, while
+`None` preserves inherited stdin. This field is not a model-facing Bash
+argument. Executors that support it implement the optional, runtime-checkable
+`StdinBashExecutor` protocol and declare `supports_stdin = True`. Other
+executors must reject supplied input.
+
+Host code can set `BashExecutionRequest.stdout_capture_limit` to a positive byte
+limit to capture raw stdout separately from the combined display output. This
+requires `StdoutBashExecutor` with `supports_stdout_capture = True`. The local
+executor stops execution on overflow and returns the retained bytes in
+`BashExecutionResult.stdout`. `stdout_truncated` is true on overflow or if
+stdout did not reach EOF. Callers must check this flag and the command outcome
+before using the bytes as a complete result. With capture disabled, `stdout`
+is `None`. These fields do not change the model-facing Bash arguments.
 
 `bash_tool(permissions=...)` evaluates the shared permission policy before the
 executor starts. Pair it with `approval_callback=` when `require_approval`
@@ -69,11 +95,13 @@ the runner reads the attached `ToolError` and reports `ok=False` (with a stable
 Consumers read that envelope directly rather than reflecting over
 `BashExecutionResult` fields.
 
-If output is truncated, the result includes a temporary log path with the full
-combined output. On timeout or cancellation, the tool terminates the process
-group and kills it if graceful termination does not finish promptly. On POSIX,
-both graceful and forced termination target the process group. On Windows,
-graceful termination sends `CTRL_BREAK_EVENT` to the new process group when
+If display output is truncated, the result includes a temporary log path for
+the combined output. The notice says `Partial output` when `stdout_truncated`
+is true; otherwise it says `Full output`. On timeout or cancellation, the tool
+terminates the process group and kills it if graceful termination does not
+finish promptly. On POSIX, both graceful and forced termination target the
+process group. On Windows, graceful termination sends `CTRL_BREAK_EVENT` to the
+new process group when
 available, then falls back to leader-only termination; forced termination uses
 `taskkill /F /T` for the process tree. The tool is intentionally
 non-interactive: it does not stream partial output to the model and does not

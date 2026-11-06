@@ -12,7 +12,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from agentlane.runtime import CancellationToken
 
@@ -43,6 +43,12 @@ class BashExecutionRequest:
     timeout_seconds: float | None = None
     # Executor-only override for host callers; no LLM-side path sets it today.
     env: Mapping[str, str] | None = None
+    stdin: bytes | None = None
+    """Bytes to send before closing stdin; None preserves inherited stdin."""
+    stdout_capture_limit: int | None = None
+    """Capture up to this many raw stdout bytes; None disables raw capture."""
+    shell_startup: bool = True
+    """Allow startup files and inherited shell functions/options when true."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +63,10 @@ class BashExecutionResult:
     timeout_seconds: float | None
     output: TruncatedOutput
     full_output_path: Path | None
+    stdout: bytes | None = None
+    """Raw stdout when capture was requested, without stderr or log headers."""
+    stdout_truncated: bool = False
+    """Whether captured stdout exceeded its limit or did not reach EOF."""
 
     @property
     def output_truncated(self) -> bool:
@@ -65,7 +75,15 @@ class BashExecutionResult:
 
 
 class BashExecutor(Protocol):
-    """Protocol for reusable bash command executors."""
+    """Protocol for reusable bash command executors.
+
+    Executors that accept `BashExecutionRequest.stdin` also implement
+    `StdinBashExecutor`. Callers check that optional capability before supplying
+    input. Raw stdout capture requires `StdoutBashExecutor`. Executors must
+    reject input or capture requests they cannot support. When `shell_startup`
+    is false, executors must disable startup files and inherited shell
+    functions/options, or reject the request before execution.
+    """
 
     async def run(
         self,
@@ -76,8 +94,38 @@ class BashExecutor(Protocol):
         ...
 
 
+@runtime_checkable
+class StdinBashExecutor(BashExecutor, Protocol):
+    """Optional command-executor capability for binary standard input.
+
+    When supported, `run` sends all supplied bytes and closes the input stream.
+    Input transfer participates in the command's timeout and cancellation.
+    """
+
+    supports_stdin: bool
+    """Whether this executor can send `BashExecutionRequest.stdin` bytes."""
+
+
+@runtime_checkable
+class StdoutBashExecutor(BashExecutor, Protocol):
+    """Optional command-executor capability for bounded raw stdout capture.
+
+    Capture preserves exact bytes separately from the display output. Exceeding
+    the limit stops execution. Missing EOF marks the capture as truncated even
+    when the command's leader exits successfully.
+    """
+
+    supports_stdout_capture: bool
+    """Whether this executor supports `BashExecutionRequest.stdout_capture_limit`."""
+
+
 class LocalBashExecutor:
     """Execute bash commands as local child processes."""
+
+    supports_stdin: bool = True
+    """Whether requests can supply bytes for the child process stdin."""
+    supports_stdout_capture: bool = True
+    """Whether requests can capture bounded raw stdout bytes."""
 
     def __init__(
         self,
@@ -94,23 +142,46 @@ class LocalBashExecutor:
         cancellation_token: CancellationToken,
     ) -> BashExecutionResult:
         """Run a command and return captured combined-output metadata."""
+        if (
+            request.stdout_capture_limit is not None
+            and request.stdout_capture_limit < 1
+        ):
+            raise ValueError("stdout_capture_limit must be greater than zero.")
+
         effective_timeout = (
             request.timeout_seconds
             if request.timeout_seconds is not None
             else self._default_timeout
         )
         shell_config = self._shell_config or resolve_bash_shell()
+
+        # Keep startup output and imported functions out of requests that opt out.
+        # Preserve host shell options, including a final option terminator.
+        shell_args = shell_config.args
+        if not request.shell_startup:
+            if shell_args[-1:] == ("--",):
+                shell_args = (*shell_args[:-1], "-p", "--")
+            else:
+                shell_args = (*shell_args, "-p")
+            shell_args = ("--noprofile", "--norc", *shell_args)
+
         combined_output = _CombinedOutputRecorder(
             command=request.command,
             cwd=request.cwd,
         )
+        stdout_capture = (
+            _StdoutCapture(request.stdout_capture_limit)
+            if request.stdout_capture_limit is not None
+            else None
+        )
 
         process = await asyncio.create_subprocess_exec(
             shell_config.executable,
-            *shell_config.args,
+            *shell_args,
             request.command,
             cwd=str(request.cwd),
             env=dict(request.env) if request.env is not None else None,
+            stdin=asyncio.subprocess.PIPE if request.stdin is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             **_process_group_kwargs(),
@@ -122,6 +193,7 @@ class LocalBashExecutor:
             _read_stream(
                 stream=process.stdout,
                 combined_output=combined_output,
+                stdout_capture=stdout_capture,
             )
         )
         stderr_task = asyncio.create_task(
@@ -130,6 +202,13 @@ class LocalBashExecutor:
                 combined_output=combined_output,
             )
         )
+        stream_tasks: tuple[asyncio.Task[None], ...] = (stdout_task, stderr_task)
+        if request.stdin is not None:
+            if process.stdin is None:
+                raise RuntimeError("Expected subprocess stdin pipe to be available.")
+            stream_tasks += (
+                asyncio.create_task(_write_stdin(process.stdin, request.stdin)),
+            )
         process_wait_task = asyncio.create_task(process.wait())
         process_exit_task = asyncio.create_task(
             _watch_process_exit(
@@ -143,6 +222,11 @@ class LocalBashExecutor:
             if effective_timeout is not None
             else None
         )
+        capture_limit_task = (
+            asyncio.create_task(stdout_capture.overflow.wait())
+            if stdout_capture is not None
+            else None
+        )
 
         timed_out = False
         cancelled = False
@@ -153,6 +237,8 @@ class LocalBashExecutor:
             }
             if timeout_task is not None:
                 wait_tasks.add(timeout_task)
+            if capture_limit_task is not None:
+                wait_tasks.add(capture_limit_task)
 
             done, pending = await asyncio.wait(
                 wait_tasks,
@@ -162,7 +248,7 @@ class LocalBashExecutor:
                 await process_exit_task
                 await _wait_for_stream_tasks_after_exit(
                     process=process,
-                    stream_tasks=(stdout_task, stderr_task),
+                    stream_tasks=stream_tasks,
                 )
             else:
                 timed_out = timeout_task in done
@@ -170,7 +256,7 @@ class LocalBashExecutor:
                 await _terminate_process_group(
                     process=process,
                     process_exit_task=process_exit_task,
-                    stream_tasks=(stdout_task, stderr_task),
+                    stream_tasks=stream_tasks,
                 )
 
             for task in pending:
@@ -180,7 +266,7 @@ class LocalBashExecutor:
             await _terminate_process_group(
                 process=process,
                 process_exit_task=process_exit_task,
-                stream_tasks=(stdout_task, stderr_task),
+                stream_tasks=stream_tasks,
             )
             raise
         finally:
@@ -191,12 +277,19 @@ class LocalBashExecutor:
             if timeout_task is not None and not timeout_task.done():
                 timeout_task.cancel()
                 cleanup_tasks.add(timeout_task)
+            if capture_limit_task is not None and not capture_limit_task.done():
+                capture_limit_task.cancel()
+                cleanup_tasks.add(capture_limit_task)
             if not process_exit_task.done():
                 process_exit_task.cancel()
                 cleanup_tasks.add(process_exit_task)
             if not process_wait_task.done():
                 process_wait_task.cancel()
                 cleanup_tasks.add(process_wait_task)
+            for task in stream_tasks:
+                if not task.done():
+                    task.cancel()
+                    cleanup_tasks.add(task)
             await _discard_cancelled_tasks(cleanup_tasks)
             combined_output.close()
 
@@ -217,6 +310,13 @@ class LocalBashExecutor:
             timeout_seconds=effective_timeout,
             output=output,
             full_output_path=full_output_path,
+            stdout=(
+                bytes(stdout_capture.content) if stdout_capture is not None else None
+            ),
+            stdout_truncated=(
+                stdout_capture is not None
+                and (stdout_capture.overflow.is_set() or not stdout_capture.eof)
+            ),
         )
 
 
@@ -383,13 +483,68 @@ class _RecordedChunk:
     chunk: bytes
 
 
+class _StdoutCapture:
+    """Keep a bounded stdout prefix and its completion state."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self.content = bytearray()
+        self.eof = False
+        self.overflow = asyncio.Event()
+
+    def append(self, chunk: bytes) -> None:
+        remaining = self._limit - len(self.content)
+        self.content.extend(chunk[:remaining])
+        if len(chunk) > remaining:
+            self.overflow.set()
+
+
 async def _read_stream(
     *,
     stream: asyncio.StreamReader,
     combined_output: _CombinedOutputRecorder,
+    stdout_capture: _StdoutCapture | None = None,
 ) -> None:
     while chunk := await stream.read(_STREAM_READ_SIZE):
+        if stdout_capture is not None:
+            if stdout_capture.overflow.is_set():
+                # Keep draining until termination closes the pipe, without
+                # retaining or logging further bytes after capture overflow.
+                continue
+            stdout_capture.append(chunk)
         await combined_output.write(chunk)
+
+    if stdout_capture is not None:
+        stdout_capture.eof = True
+
+
+async def _write_stdin(stream: asyncio.StreamWriter, data: bytes) -> None:
+    """Send input while output is drained, then close the child's stdin."""
+    close_task: asyncio.Task[None] | None = None
+    try:
+        try:
+            for offset in range(0, len(data), _STREAM_READ_SIZE):
+                stream.write(data[offset : offset + _STREAM_READ_SIZE])
+                await stream.drain()
+        finally:
+            stream.close()
+
+        # The subprocess protocol owns the close waiter. Keep cancellation from
+        # cancelling that waiter before its connection-lost callback completes.
+        close_task = asyncio.create_task(stream.wait_closed())
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError:
+        # Discard buffered input: a detached child can keep the pipe open
+        # without reading, even after the command's process group exits.
+        stream.transport.abort()
+        if close_task is None:
+            close_task = asyncio.create_task(stream.wait_closed())
+        with suppress(BrokenPipeError, ConnectionResetError):
+            await asyncio.shield(close_task)
+        raise
+    except (BrokenPipeError, ConnectionResetError):
+        # A command can finish successfully before it consumes all its input.
+        pass
 
 
 async def _watch_process_exit(
@@ -409,7 +564,7 @@ async def _watch_process_exit(
 async def _wait_for_stream_tasks_after_exit(
     *,
     process: asyncio.subprocess.Process,
-    stream_tasks: tuple[asyncio.Task[None], asyncio.Task[None]],
+    stream_tasks: tuple[asyncio.Task[None], ...],
 ) -> None:
     done, pending = await asyncio.wait(
         set(stream_tasks),
@@ -430,7 +585,7 @@ async def _terminate_process_group(
     *,
     process: asyncio.subprocess.Process,
     process_exit_task: asyncio.Task[int],
-    stream_tasks: tuple[asyncio.Task[None], asyncio.Task[None]],
+    stream_tasks: tuple[asyncio.Task[None], ...],
 ) -> None:
     if process.returncode is None:
         _send_process_signal(process, signal.SIGTERM)

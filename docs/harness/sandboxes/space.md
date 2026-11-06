@@ -26,7 +26,8 @@ The SPACE bundle keeps the standard tool names and argument schemas from
 the local base bundle; registering both causes duplicate tool names.
 Creating a `SpaceSandbox` handle alone does not redirect tools. Passing
 `SpaceBashExecutor` through `base_harness_tools(bash_executor=...)` changes
-only Bash execution.
+only Bash execution. The executor rejects requests with stdin, raw stdout
+capture, or `shell_startup=False` before execution.
 
 The sandbox and guest user permissions form the security boundary. `cwd`
 sets the working directory; it does not restrict file access. Guest file
