@@ -14,6 +14,8 @@ from ._bash_executor import (
     BashExecutor,
     BashShellConfig,
     LocalBashExecutor,
+    StdinBashExecutor,
+    StdoutBashExecutor,
     resolve_bash_shell,
 )
 from ._constants import PLAN_TOOL_NAME
@@ -83,6 +85,8 @@ __all__ = [
     "WorkspaceToolsShim",
     "LS_DEFAULT_LIMIT",
     "LocalBashExecutor",
+    "StdinBashExecutor",
+    "StdoutBashExecutor",
     "TEXT_MAX_BYTES",
     "TEXT_MAX_LINES",
     "AllOfToolPermissionPolicy",
