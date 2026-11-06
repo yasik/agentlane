@@ -51,6 +51,13 @@ Host applications can import the executor-facing contracts
 `resolve_bash_shell` from `agentlane.harness.tools` when they need to wrap or
 replace local execution.
 
+`BashExecutionRequest.shell_startup` defaults to `True`, which preserves normal
+Bash startup behavior. Set it to `False` to disable startup files and inherited
+shell functions and options. Executors must honor this setting or reject the
+request before execution. The local executor uses `--noprofile`, `--norc`, and
+`-p` while preserving the configured executable, explicit shell options,
+environment, and default timeout.
+
 `BashExecutionRequest.stdin` accepts binary input from host code. The local
 executor sends those bytes and closes stdin; empty bytes send EOF, while
 `None` preserves inherited stdin. This field is not a model-facing Bash
@@ -89,11 +96,13 @@ the runner reads the attached `ToolError` and reports `ok=False` (with a stable
 Consumers read that envelope directly rather than reflecting over
 `BashExecutionResult` fields.
 
-If output is truncated, the result includes a temporary log path with the full
-combined output. On timeout or cancellation, the tool terminates the process
-group and kills it if graceful termination does not finish promptly. On POSIX,
-both graceful and forced termination target the process group. On Windows,
-graceful termination sends `CTRL_BREAK_EVENT` to the new process group when
+If display output is truncated, the result includes a temporary log path for
+the combined output. The notice says `Partial output` when `stdout_truncated`
+is true; otherwise it says `Full output`. On timeout or cancellation, the tool
+terminates the process group and kills it if graceful termination does not
+finish promptly. On POSIX, both graceful and forced termination target the
+process group. On Windows, graceful termination sends `CTRL_BREAK_EVENT` to the
+new process group when
 available, then falls back to leader-only termination; forced termination uses
 `taskkill /F /T` for the process tree. The tool is intentionally
 non-interactive: it does not stream partial output to the model and does not

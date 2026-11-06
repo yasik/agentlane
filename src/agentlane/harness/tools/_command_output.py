@@ -15,12 +15,13 @@ def format_command_output(result: BashExecutionResult) -> str | ToolFailure:
     output = result.output.text.rstrip("\n") or "(no output)"
     notices: list[str] = []
 
-    # Point to the complete log when the visible command output is truncated.
+    # Capture overflow can also leave the log incomplete; label it accordingly.
     if result.output_truncated and result.full_output_path is not None:
+        output_label = "Partial output" if result.stdout_truncated else "Full output"
         notices.append(
             "Showing last "
             f"{BASH_MAX_LINES} lines or {BASH_MAX_BYTES} bytes. "
-            f"Full output: {result.full_output_path}"
+            f"{output_label}: {result.full_output_path}"
         )
 
     # Keep the process outcome visible alongside any output it produced.

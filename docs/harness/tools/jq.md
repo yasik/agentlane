@@ -45,10 +45,11 @@ To edit the source file, use the same input and output path:
 }
 ```
 
-Use a different `output_path` to save a copy. The saved content is the exact
-stdout from jq, including trailing newlines. Stderr and display notices are
-excluded. Raw output, multiple values, and empty output keep their jq semantics;
-the saved file can contain plain text, a JSON stream, or zero bytes.
+Use a different `output_path` to save a copy. Shell startup is disabled, and the
+saved content is only the exact stdout from jq, including trailing newlines.
+Stderr and display notices are excluded. Raw output, multiple values, and empty
+output keep their jq semantics; the saved file can contain plain text, a JSON
+stream, or zero bytes.
 
 ## Storage and execution
 
@@ -99,8 +100,12 @@ shims = (
 ```
 
 The default executor is `LocalBashExecutor`. It runs a shell-quoted jq command
-with binary stdin. `executor=` accepts an implementation of the optional,
-runtime-checkable `StdinBashExecutor` protocol with `supports_stdin = True`.
+with binary stdin. Every execution sets `BashExecutionRequest.shell_startup`
+to `False`. Executors must disable startup files and inherited shell functions
+and options, or reject the request before execution.
+
+`executor=` accepts an implementation of the optional, runtime-checkable
+`StdinBashExecutor` protocol with `supports_stdin = True`.
 It must send `BashExecutionRequest.stdin` and close the input stream. An
 unsupported executor returns a tool failure; jq never falls back to local
 execution. `base_harness_tools(bash_executor=...)` uses that executor for both
@@ -149,10 +154,11 @@ isolation must supply a suitable executor or run the tool in a sandbox.
 Results use the [bash output contract](./bash.md): combined stdout and stderr,
 with at most the last 2,000 lines or 51,200 bytes. Empty successful output is
 `(no output)`, and trailing newlines are removed. Truncation adds a notice and
-the full-output log path in the executor filesystem. Injected readers cannot
-automatically access that path. Narrow the filter for a smaller result; the
-host can also provide access to the log. A truncated preview can contain
-incomplete JSON. The host owns log retention.
+the log path in the executor filesystem. The notice says `Partial output` when
+raw stdout capture is incomplete; otherwise it says `Full output`. Injected
+readers cannot automatically access that path. Narrow the filter for a smaller
+result; the host can also provide access to the log. A truncated preview can
+contain incomplete JSON. The host owns log retention.
 
 A successful save starts with `Wrote N bytes to path.`, followed by the same
 bounded command output. Preview truncation does not truncate the saved file.

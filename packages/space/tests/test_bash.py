@@ -27,6 +27,24 @@ async def test_command_rejects_stdin_before_startup(
 
 
 @pytest.mark.asyncio
+async def test_command_rejects_disabled_shell_startup_before_startup(
+    local_space: LocalSpace, tmp_path: Path
+) -> None:
+    async with sandbox_for(local_space) as sandbox:
+        with pytest.raises(
+            ValueError, match="does not support disabling shell startup"
+        ):
+            await SpaceBashExecutor(sandbox).run(
+                BashExecutionRequest(
+                    command="printf output", cwd=tmp_path, shell_startup=False
+                ),
+                CancellationToken(),
+            )
+
+    assert not local_space.commands
+
+
+@pytest.mark.asyncio
 async def test_command_rejects_stdout_capture_before_startup(
     local_space: LocalSpace, tmp_path: Path
 ) -> None:

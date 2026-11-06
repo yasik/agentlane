@@ -47,6 +47,8 @@ class BashExecutionRequest:
     """Bytes to send before closing stdin; None preserves inherited stdin."""
     stdout_capture_limit: int | None = None
     """Capture up to this many raw stdout bytes; None disables raw capture."""
+    shell_startup: bool = True
+    """Allow startup files and inherited shell functions/options when true."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +80,9 @@ class BashExecutor(Protocol):
     Executors that accept `BashExecutionRequest.stdin` also implement
     `StdinBashExecutor`. Callers check that optional capability before supplying
     input. Raw stdout capture requires `StdoutBashExecutor`. Executors must
-    reject input or capture requests they cannot support.
+    reject input or capture requests they cannot support. When `shell_startup`
+    is false, executors must disable startup files and inherited shell
+    functions/options, or reject the request before execution.
     """
 
     async def run(
@@ -150,6 +154,17 @@ class LocalBashExecutor:
             else self._default_timeout
         )
         shell_config = self._shell_config or resolve_bash_shell()
+
+        # Keep startup output and imported functions out of requests that opt out.
+        # Preserve host shell options, including a final option terminator.
+        shell_args = shell_config.args
+        if not request.shell_startup:
+            if shell_args[-1:] == ("--",):
+                shell_args = (*shell_args[:-1], "-p", "--")
+            else:
+                shell_args = (*shell_args, "-p")
+            shell_args = ("--noprofile", "--norc", *shell_args)
+
         combined_output = _CombinedOutputRecorder(
             command=request.command,
             cwd=request.cwd,
@@ -162,7 +177,7 @@ class LocalBashExecutor:
 
         process = await asyncio.create_subprocess_exec(
             shell_config.executable,
-            *shell_config.args,
+            *shell_args,
             request.command,
             cwd=str(request.cwd),
             env=dict(request.env) if request.env is not None else None,

@@ -27,6 +27,8 @@ from agentlane.harness.tools import (
     ToolPermissionRequest,
     TruncatedOutput,
     WorkspaceToolPermissionPolicy,
+    base_harness_tools,
+    bash_tool,
     jq_tool,
     parse_tool_permission_grants,
 )
@@ -257,6 +259,7 @@ def test_jq_passes_unchanged_bytes_and_options_to_custom_executor(
     assert request.stdin == payload
     assert request.cwd == Path("/remote/work")
     assert request.timeout_seconds == 2.5
+    assert request.shell_startup is False
     arguments = shlex.split(request.command)
     assert arguments[0] == "jq"
     assert set(arguments[1:-2]) == {
@@ -697,6 +700,53 @@ def test_jq_saves_exact_stdout_to_input_path(
         f"Wrote {len(expected)} bytes to {source.resolve()}.\n\n"
         + (expected.decode().rstrip("\n") or "(no output)")
     )
+
+
+@pytest.mark.parametrize("executor_kind", ["default", "local", "factory"])
+@pytest.mark.parametrize("save", [False, True])
+def test_jq_excludes_shell_startup_output(
+    tmp_path: Path,
+    jq_binary: str,
+    monkeypatch: pytest.MonkeyPatch,
+    executor_kind: str,
+    save: bool,
+) -> None:
+    del jq_binary
+    source = tmp_path / "data.json"
+    source.write_bytes(b'{"count":1}')
+    startup = tmp_path / "startup.sh"
+    startup.write_text("printf 'startup-noise\\n'\n", encoding="utf-8")
+    monkeypatch.setenv("BASH_ENV", str(startup))
+    monkeypatch.setenv("JQ_TEST_VALUE", "retained")
+    executor = LocalBashExecutor()
+    if executor_kind == "factory":
+        (definition,) = base_harness_tools(
+            cwd=tmp_path, bash_executor=executor, include=("jq",)
+        )
+    else:
+        definition = jq_tool(
+            cwd=tmp_path, executor=executor if executor_kind == "local" else None
+        )
+
+    output = run_tool(
+        definition,
+        path="data.json",
+        filter=".count += 1 | .value = $ENV.JQ_TEST_VALUE",
+        compact_output=True,
+        output_path="data.json" if save else None,
+    )
+
+    expected = b'{"count":2,"value":"retained"}\n'
+    assert not isinstance(output, ToolFailure)
+    assert "startup-noise" not in output
+    assert output.endswith(expected.decode().rstrip("\n"))
+    assert source.read_bytes() == (expected if save else b'{"count":1}')
+
+    # Reusing the executor for Bash keeps its existing startup behavior.
+    bash_output = run_tool(
+        bash_tool(cwd=tmp_path, executor=executor), command="printf bash-output"
+    )
+    assert bash_output == "startup-noise\nbash-output"
 
 
 def test_jq_saves_stdout_without_stderr(tmp_path: Path, jq_binary: str) -> None:

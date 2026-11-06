@@ -344,6 +344,7 @@ async def _query_file(
             timeout_seconds=args.timeout,
             stdin=content,
             stdout_capture_limit=max_output_bytes if output_path is not None else None,
+            shell_startup=False,
         ),
         cancellation_token,
     )

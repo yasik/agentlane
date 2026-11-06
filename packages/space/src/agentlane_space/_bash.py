@@ -61,6 +61,11 @@ class SpaceBashExecutor:
         if request.stdin is not None:
             raise ValueError("SPACE bash execution does not support stdin.")
 
+        if not request.shell_startup:
+            raise ValueError(
+                "SPACE bash execution does not support disabling shell startup."
+            )
+
         if request.stdout_capture_limit is not None:
             raise ValueError(
                 "SPACE bash execution does not support raw stdout capture."

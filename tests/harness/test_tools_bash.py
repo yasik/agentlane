@@ -28,6 +28,7 @@ from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     BashExecutionRequest,
     BashExecutionResult,
+    BashShellConfig,
     HarnessToolDefinition,
     HarnessToolsShim,
     LocalBashExecutor,
@@ -38,7 +39,9 @@ from agentlane.harness.tools import (
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
     bash_tool,
+    resolve_bash_shell,
 )
+from agentlane.harness.tools._command_output import format_command_output
 from agentlane.harness.tools._output import TruncatedOutput
 from agentlane.models import (
     MessageDict,
@@ -191,6 +194,83 @@ def test_bash_tool_runs_successful_command(tmp_path: Path) -> None:
     output = _run_bash("printf 'hello\\n'", cwd=tmp_path)
 
     assert output == "hello"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shell_startup", [False, True])
+@pytest.mark.parametrize("explicit_env", [False, True])
+async def test_local_executor_controls_shell_startup_and_preserves_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    shell_startup: bool,
+    explicit_env: bool,
+) -> None:
+    startup = tmp_path / "startup.bash"
+    startup.write_text("printf 'startup\\n'\n", encoding="utf-8")
+    monkeypatch.setenv("BASH_ENV", str(startup))
+    monkeypatch.setenv(
+        "BASH_FUNC_agentlane_startup_function%%",
+        "() { printf 'function\\n'; }",
+    )
+    monkeypatch.setenv("SHELLOPTS", "noglob")
+    monkeypatch.setenv("AGENTLANE_SHELL_VALUE", "inherited")
+    env = dict(os.environ) if explicit_env else None
+    if env is not None:
+        env["AGENTLANE_SHELL_VALUE"] = "explicit"
+
+    # Startup controls must not discard ordinary inherited or request env values.
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command=(
+                "if declare -F agentlane_startup_function >/dev/null; then "
+                "agentlane_startup_function; fi; "
+                "case $- in *f*) printf 'option\\n';; esac; "
+                'printf "%s\\n" "$AGENTLANE_SHELL_VALUE"'
+            ),
+            cwd=tmp_path,
+            env=env,
+            shell_startup=shell_startup,
+            stdout_capture_limit=1024,
+            timeout_seconds=2,
+        ),
+        CancellationToken(),
+    )
+
+    value = "explicit" if explicit_env else "inherited"
+    expected = f"{value}\n".encode()
+    if shell_startup:
+        expected = b"startup\nfunction\noption\n" + expected
+
+    assert result.exit_code == 0
+    assert not result.timed_out
+    assert result.stdout == expected
+    assert not result.stdout_truncated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "shell_args", [("--noprofile", "-rc"), ("--noprofile", "-rc", "--")]
+)
+async def test_local_executor_preserves_configured_shell_options_without_startup(
+    tmp_path: Path, shell_args: tuple[str, ...]
+) -> None:
+    executor = LocalBashExecutor(
+        default_timeout=2,
+        shell_config=BashShellConfig(
+            executable=resolve_bash_shell().executable, args=shell_args
+        ),
+    )
+
+    # The configured restricted shell must still reject a directory change.
+    result = await executor.run(
+        BashExecutionRequest(command="cd ..", cwd=tmp_path, shell_startup=False),
+        CancellationToken(),
+    )
+
+    assert result.exit_code == 1
+    assert "cd: restricted" in result.output.text
+    assert result.timeout_seconds == 2
+    assert not result.timed_out
 
 
 @pytest.mark.asyncio
@@ -421,6 +501,9 @@ async def test_local_executor_captures_exact_stdout_separately_from_stderr(
             assert result.output_truncated
             assert result.full_output_path is not None
             assert b"diagnostic\n" in result.full_output_path.read_bytes()
+            assert f"Full output: {result.full_output_path}" in format_command_output(
+                result
+            )
         else:
             assert result.output.text == "diagnostic\n"
     finally:
@@ -450,7 +533,7 @@ async def test_local_executor_rejects_invalid_stdout_capture_limit_before_startu
 
 
 @pytest.mark.asyncio
-async def test_local_executor_stops_infinite_stdout_at_capture_limit(
+async def test_local_executor_stops_at_capture_limit_and_marks_log_partial(
     tmp_path: Path,
 ) -> None:
     initial_tasks = asyncio.all_tasks()
@@ -460,7 +543,7 @@ async def test_local_executor_stops_infinite_stdout_at_capture_limit(
             BashExecutionRequest(
                 command=shlex.join([sys.executable, "-c", code]),
                 cwd=tmp_path,
-                stdout_capture_limit=10_000,
+                stdout_capture_limit=100_000,
             ),
             CancellationToken(),
         ),
@@ -468,12 +551,16 @@ async def test_local_executor_stops_infinite_stdout_at_capture_limit(
     )
 
     try:
-        assert result.stdout == b"x" * 10_000
+        assert result.stdout == b"x" * 100_000
         assert result.stdout_truncated
         assert result.exit_code is not None
         assert not result.timed_out
         assert not result.cancelled
         assert asyncio.all_tasks() == initial_tasks
+        assert result.full_output_path is not None
+        assert f"Partial output: {result.full_output_path}" in format_command_output(
+            result
+        )
     finally:
         if result.full_output_path is not None:
             result.full_output_path.unlink(missing_ok=True)
