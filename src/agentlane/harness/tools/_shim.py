@@ -255,7 +255,7 @@ def base_harness_tools(
             tools.
         reader: Filesystem for read, jq, find, and patch. Find also requires listings
             and metadata. A WritableFileSystem reader supplies default writes.
-        writer: Storage writer for write and patch in the reader's namespace.
+        writer: Storage writer for write, patch, and jq in the reader's namespace.
         bash_executor: Optional host command executor for bash and jq. jq requires
             stdin support and never falls back to local execution. Grep runs in the
             harness process environment; run that environment in the sandbox
@@ -324,6 +324,7 @@ def base_harness_tools(
         JQ_TOOL_NAME: lambda: jq_tool(
             cwd=file_cwd,
             reader=reader,
+            writer=writer,
             process_cwd=cwd,
             executor=bash_executor,
             permissions=permissions,

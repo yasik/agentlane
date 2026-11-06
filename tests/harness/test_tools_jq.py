@@ -5,6 +5,7 @@ import json
 import shlex
 import subprocess
 from contextlib import AbstractContextManager
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -22,10 +23,12 @@ from agentlane.harness.tools import (
     LocalBashExecutor,
     ToolOperation,
     ToolPermissionDecision,
+    ToolPermissionGrantPolicy,
     ToolPermissionRequest,
     TruncatedOutput,
     WorkspaceToolPermissionPolicy,
     jq_tool,
+    parse_tool_permission_grants,
 )
 from agentlane.models import Tool, ToolFailure
 from agentlane.runtime import CancellationToken
@@ -78,6 +81,28 @@ class _LegacyExecutor:
         cancellation_token: CancellationToken,
     ) -> BashExecutionResult:
         return await self._delegate.run(request, cancellation_token)
+
+
+class _CapturingExecutor(_RecordingExecutor):
+    """Return an explicit capture result without assuming an executor filesystem."""
+
+    supports_stdout_capture: bool = True
+
+    def __init__(
+        self, stdout: bytes | None = b"42\n", *, truncated: bool = False
+    ) -> None:
+        super().__init__()
+        self.stdout = stdout
+        self.truncated = truncated
+
+    async def run(
+        self,
+        request: BashExecutionRequest,
+        cancellation_token: CancellationToken,
+    ) -> BashExecutionResult:
+        result = await super().run(request, cancellation_token)
+
+        return replace(result, stdout=self.stdout, stdout_truncated=self.truncated)
 
 
 class _UnopenedReader:
@@ -455,6 +480,11 @@ def test_jq_reports_input_path_errors(tmp_path: Path, path: str, message: str) -
         ({"path": "data.json", "filter": " "}, "filter must not be empty"),
         ({"path": "data.json", "filter": ".", "timeout": 0}, "timeout"),
         ({"path": "data.json", "filter": ".", "timeout": float("inf")}, "timeout"),
+        ({"path": "data.json", "filter": ".", "output_path": " "}, "output_path"),
+        (
+            {"path": "data.json", "filter": ".", "output_path": "bad\x00.json"},
+            "null byte",
+        ),
     ],
 )
 def test_jq_rejects_invalid_arguments_before_io(
@@ -563,8 +593,9 @@ def test_jq_preserves_large_output_in_the_existing_command_log(
         log_path.unlink(missing_ok=True)
 
 
+@pytest.mark.parametrize("save", [False, True])
 def test_jq_executes_through_runner_with_prompt_and_permission_context(
-    tmp_path: Path, jq_binary: str
+    tmp_path: Path, jq_binary: str, save: bool
 ) -> None:
     del jq_binary
     (tmp_path / "data.json").write_text('{"answer":42}', encoding="utf-8")
@@ -572,6 +603,9 @@ def test_jq_executes_through_runner_with_prompt_and_permission_context(
     async def scenario() -> None:
         policy = _RecordingPolicy()
         definition = jq_tool(cwd=tmp_path, permissions=policy)
+        arguments = {"path": "data.json", "filter": ".answer"}
+        if save:
+            arguments["output_path"] = "answer.json"
         model = SequenceModel(
             [
                 make_assistant_response(
@@ -580,7 +614,7 @@ def test_jq_executes_through_runner_with_prompt_and_permission_context(
                         make_tool_call(
                             tool_id="jq-call",
                             name="jq",
-                            arguments='{"path":"data.json","filter":".answer"}',
+                            arguments=json.dumps(arguments),
                         )
                     ],
                 ),
@@ -605,17 +639,310 @@ def test_jq_executes_through_runner_with_prompt_and_permission_context(
             item for item in model.calls[-1] if item.get("role") == "tool"
         )
         assert tool_message["name"] == "jq"
-        assert tool_message["content"] == "42"
+        if save:
+            saved_path = (tmp_path / "answer.json").resolve()
+            assert saved_path.read_bytes() == b"42\n"
+            assert tool_message["content"] == f"Wrote 3 bytes to {saved_path}.\n\n42"
+        else:
+            assert tool_message["content"] == "42"
         assert definition.prompt_snippet is not None
         assert any(
             definition.prompt_snippet in str(message.get("content", ""))
             for message in model.calls[0]
         )
-        assert [request.operation for request in policy.requests] == [
+        expected_operations = [
             ToolOperation.READ_FILE,
             ToolOperation.EXECUTE_COMMAND,
         ]
+        if save:
+            expected_operations.append(ToolOperation.CREATE_FILE)
+        assert [request.operation for request in policy.requests] == expected_operations
         assert all(request.agent_name == "JsonReader" for request in policy.requests)
         assert all(request.tool_call_id == "jq-call" for request in policy.requests)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("jq_filter", "options", "expected"),
+    [
+        (".count += 1", {}, b'{\n  "count": 2\n}\n'),
+        ("., .", {"compact_output": True}, b'{"count":1}\n{"count":1}\n'),
+        ('"é\\n\\u0000"', {"raw_output": True}, "é\n\x00\n".encode()),
+        ("empty", {}, b""),
+    ],
+)
+def test_jq_saves_exact_stdout_to_input_path(
+    tmp_path: Path,
+    jq_binary: str,
+    jq_filter: str,
+    options: dict[str, object],
+    expected: bytes,
+) -> None:
+    del jq_binary
+    source = tmp_path / "data.json"
+    source.write_bytes(b'{"count":1}')
+
+    output = run_tool(
+        jq_tool(cwd=tmp_path),
+        path="data.json",
+        filter=jq_filter,
+        output_path="data.json",
+        **options,
+    )
+
+    assert not isinstance(output, ToolFailure)
+    assert source.read_bytes() == expected
+    assert output == (
+        f"Wrote {len(expected)} bytes to {source.resolve()}.\n\n"
+        + (expected.decode().rstrip("\n") or "(no output)")
+    )
+
+
+def test_jq_saves_stdout_without_stderr(tmp_path: Path, jq_binary: str) -> None:
+    del jq_binary
+    (tmp_path / "data.json").write_bytes(b'{"count":1}')
+
+    output = run_tool(
+        jq_tool(cwd=tmp_path),
+        path="data.json",
+        filter="debug | .count += 1",
+        output_path="new/copy.json",
+    )
+
+    assert not isinstance(output, ToolFailure)
+    assert (tmp_path / "new/copy.json").read_bytes() == b'{\n  "count": 2\n}\n'
+    assert (tmp_path / "data.json").read_bytes() == b'{"count":1}'
+    assert "DEBUG" in output
+
+
+def test_jq_saves_full_large_string_despite_preview_truncation(
+    tmp_path: Path, jq_binary: str
+) -> None:
+    del jq_binary
+    source = tmp_path / "data.json"
+    original = {"body": "x" * (4 * 1024 * 1024), "count": 1}
+    source.write_text(json.dumps(original), encoding="utf-8")
+
+    output = run_tool(
+        jq_tool(cwd=tmp_path),
+        path="data.json",
+        filter=".count += 1",
+        output_path="data.json",
+    )
+
+    log_line = next(line for line in output.splitlines() if "Full output: " in line)
+    log_path = Path(log_line.rsplit("Full output: ", maxsplit=1)[1].removesuffix("]"))
+    try:
+        assert not isinstance(output, ToolFailure)
+        assert json.loads(source.read_bytes()) == {**original, "count": 2}
+        assert source.stat().st_size > 4 * 1024 * 1024
+        assert len(output.encode()) < 52_000
+        assert "Showing last" in output
+    finally:
+        log_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("source", "jq_filter", "timeout", "limit", "kind"),
+    [
+        (b'{"id":1}\n{"id":', ".id", None, 1024, "nonzero_exit"),
+        (b"null", '., error("failed")', None, 1024, "nonzero_exit"),
+        (b"null", ".[", None, 1024, "nonzero_exit"),
+        (b"null", "until(false; .)", 0.05, 1024, "timeout"),
+        (b"null", "range(0; infinite)", 2, 64, "error"),
+    ],
+)
+def test_jq_failed_save_preserves_source(
+    tmp_path: Path,
+    jq_binary: str,
+    source: bytes,
+    jq_filter: str,
+    timeout: float | None,
+    limit: int,
+    kind: str,
+) -> None:
+    del jq_binary
+    path = tmp_path / "data.json"
+    path.write_bytes(source)
+
+    output = run_tool(
+        jq_tool(cwd=tmp_path, max_output_bytes=limit),
+        path="data.json",
+        filter=jq_filter,
+        output_path="data.json",
+        timeout=timeout,
+    )
+
+    assert isinstance(output, ToolFailure)
+    assert output.error.kind == kind
+    assert path.read_bytes() == source
+    if kind == "error":
+        assert f"maximum {limit} bytes" in output
+
+
+@pytest.mark.parametrize("limit", [2, 3])
+def test_jq_save_output_limit_is_exact(
+    tmp_path: Path, jq_binary: str, limit: int
+) -> None:
+    del jq_binary
+    (tmp_path / "data.json").write_bytes(b"42")
+
+    output = run_tool(
+        jq_tool(cwd=tmp_path, max_output_bytes=limit),
+        path="data.json",
+        filter=".",
+        output_path="output.json",
+    )
+
+    if limit == 3:
+        assert not isinstance(output, ToolFailure)
+        assert (tmp_path / "output.json").read_bytes() == b"42\n"
+    else:
+        assert isinstance(output, ToolFailure)
+        assert not (tmp_path / "output.json").exists()
+
+
+@pytest.mark.parametrize(
+    "denied_operation",
+    [
+        ToolOperation.CREATE_DIRECTORY,
+        ToolOperation.CREATE_FILE,
+        ToolOperation.OVERWRITE_FILE,
+    ],
+)
+def test_jq_save_checks_write_permissions_before_read_or_execution(
+    tmp_path: Path, denied_operation: ToolOperation
+) -> None:
+    policy = _RecordingPolicy(denied_operation)
+    executor = _CapturingExecutor()
+    target = "new/output.json"
+    if denied_operation == ToolOperation.OVERWRITE_FILE:
+        target = "output.json"
+        (tmp_path / target).write_bytes(b"original")
+
+    output = run_tool(
+        jq_tool(
+            reader=_UnopenedReader(),
+            writer=LocalFileSystem(tmp_path),
+            executor=executor,
+            permissions=policy,
+        ),
+        path="data.json",
+        filter=".",
+        output_path=target,
+    )
+
+    assert isinstance(output, ToolFailure)
+    assert "permission denied" in output
+    assert policy.requests[-1].operation == denied_operation
+    assert all(request.tool_name == "jq" for request in policy.requests)
+    assert not executor.requests
+    assert not (tmp_path / "new").exists()
+    if denied_operation == ToolOperation.OVERWRITE_FILE:
+        assert (tmp_path / target).read_bytes() == b"original"
+
+
+def test_jq_save_rejects_missing_capture_capability_before_read(tmp_path: Path) -> None:
+    executor = _RecordingExecutor()
+
+    output = run_tool(
+        jq_tool(
+            reader=_UnopenedReader(),
+            writer=LocalFileSystem(tmp_path),
+            executor=executor,
+        ),
+        path="data.json",
+        filter=".",
+        output_path="output.json",
+    )
+
+    assert isinstance(output, ToolFailure)
+    assert "executor that captures stdout" in output
+    assert not executor.requests
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(("stdout", "truncated"), [(None, False), (b"42", True)])
+def test_jq_save_rejects_incomplete_capture_even_after_success(
+    tmp_path: Path, stdout: bytes | None, truncated: bool
+) -> None:
+    path = tmp_path / "data.json"
+    path.write_bytes(b"1")
+    executor = _CapturingExecutor(stdout, truncated=truncated)
+
+    output = run_tool(
+        jq_tool(cwd=tmp_path, executor=executor, max_output_bytes=10),
+        path="data.json",
+        filter=".",
+        output_path="data.json",
+    )
+
+    assert isinstance(output, ToolFailure)
+    assert path.read_bytes() == b"1"
+    assert executor.requests[0].stdout_capture_limit == 10
+
+
+def test_jq_save_configuration_rejects_ambiguous_storage_and_invalid_limit() -> None:
+    with pytest.raises(ValueError, match="writer requires a reader"):
+        jq_tool(writer=LocalFileSystem())
+    with pytest.raises(ValueError, match="max_output_bytes must be greater than zero"):
+        jq_tool(max_output_bytes=0)
+
+
+@pytest.mark.parametrize("grants_text", ["jq", "jq:read_file,jq:execute_command"])
+def test_jq_save_requires_write_grants(
+    tmp_path: Path, jq_binary: str, grants_text: str
+) -> None:
+    del jq_binary
+    source = tmp_path / "data.json"
+    source.write_bytes(b"1")
+    grants, invalid_entries = parse_tool_permission_grants(grants_text)
+    assert invalid_entries == ()
+
+    output = run_tool(
+        jq_tool(cwd=tmp_path, permissions=ToolPermissionGrantPolicy(grants)),
+        path="data.json",
+        filter=". + 1",
+        output_path="data.json",
+    )
+
+    if grants_text == "jq":
+        assert not isinstance(output, ToolFailure)
+        assert source.read_bytes() == b"2\n"
+    else:
+        assert isinstance(output, ToolFailure)
+        assert "permission denied" in output
+        assert source.read_bytes() == b"1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["token", "task"])
+async def test_jq_cancelled_execution_does_not_save(
+    tmp_path: Path, jq_binary: str, stop: str
+) -> None:
+    del jq_binary
+    source = tmp_path / "data.json"
+    source.write_bytes(b"null")
+    tool = cast(Tool[BaseModel, str], jq_tool(cwd=tmp_path).tool)
+    token = CancellationToken()
+    task = asyncio.create_task(
+        tool.run(
+            tool.args_type()(
+                path="data.json", filter="until(false; .)", output_path="data.json"
+            ),
+            token,
+        )
+    )
+    await asyncio.sleep(0.1)
+    if stop == "token":
+        token.cancel()
+        output = await asyncio.wait_for(task, timeout=5)
+        assert isinstance(output, ToolFailure)
+        assert output.error.kind == "cancelled"
+    else:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+
+    assert source.read_bytes() == b"null"

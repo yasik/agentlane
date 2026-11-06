@@ -1,24 +1,22 @@
 """Write tool implementation for first-party harness base tools."""
 
 import asyncio
-from pathlib import Path, PurePath
+from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from agentlane.harness.filesystem import FileInfo, LocalFileSystem, WritableFileSystem
+from agentlane.harness.filesystem import LocalFileSystem, WritableFileSystem
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
 
 from .._constants import EMPTY_PATH_ERROR
 from .._storage_write import write_content
 from ._constants import NULL_BYTE_PATH_ERROR, WRITE_TOOL_NAME
+from ._file_write import GENERIC_WRITE_ERROR, prepare_file_write
 from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
     ToolApprovalCallback,
-    ToolOperation,
     ToolPermissionPolicy,
-    ToolPermissionRequest,
-    evaluate_tool_permission,
 )
 from ._types import HarnessToolDefinition
 
@@ -28,7 +26,6 @@ _TOOL_DESCRIPTION = (
 )
 _TOOL_PROMPT_SNIPPET = "Create or overwrite files"
 _TOOL_PROMPT_GUIDELINE = "Use write only for new files or complete rewrites."
-_GENERIC_WRITE_ERROR = "failed to write file"
 
 
 class _ToolArgs(BaseModel):
@@ -84,7 +81,7 @@ def write_tool(
                 context=context,
             )
         except Exception:
-            return _GENERIC_WRITE_ERROR
+            return GENERIC_WRITE_ERROR
 
     return HarnessToolDefinition(
         tool=Tool[_ToolArgs, str](
@@ -121,38 +118,19 @@ async def _write_file(
 
     resolved_path = await asyncio.to_thread(resolver.resolve, args.path)
 
-    # Metadata determines create versus overwrite permissions. Do not open a
-    # writer yet: entering its context may create directories or stage a file.
-    parent_info: FileInfo | None = None
-    target_info: FileInfo | None = None
-    invalid_parent = False
-    try:
-        parent_info = await asyncio.to_thread(writer.stat, str(resolved_path.parent))
-        if parent_info is None or parent_info.is_directory:
-            target_info = await asyncio.to_thread(writer.stat, str(resolved_path))
-    except NotADirectoryError:
-        # Match missing-path classification until permissions allow a diagnostic.
-        invalid_parent = True
-    except OSError:
-        return _GENERIC_WRITE_ERROR
-
-    permission_error = await _check_write_permissions(
+    # Complete target checks before the writer can create or replace anything.
+    target_error = await prepare_file_write(
         resolved_path,
         resolver=resolver,
-        parent_info=parent_info,
-        target_info=target_info,
+        writer=writer,
+        tool_name=WRITE_TOOL_NAME,
         permissions=permissions,
         approval_callback=approval_callback,
         context=context,
     )
-    if permission_error is not None:
-        return permission_error
+    if target_error is not None:
+        return target_error
 
-    # Report path details only after the corresponding permission checks pass.
-    if target_info is not None and target_info.is_directory:
-        return f"path is a directory: `{resolved_path}`"
-    if invalid_parent or (parent_info is not None and not parent_info.is_directory):
-        return f"parent path is not a directory: `{resolved_path.parent}`"
     if cancellation_token.is_cancelled:
         raise asyncio.CancelledError
 
@@ -171,53 +149,3 @@ async def _write_file(
         raise asyncio.CancelledError
 
     return f"Wrote {len(encoded_content)} bytes to {resolved_path}."
-
-
-async def _check_write_permissions(
-    path: PurePath,
-    *,
-    resolver: ToolPathResolver | StorageToolPathResolver,
-    parent_info: FileInfo | None,
-    target_info: FileInfo | None,
-    permissions: ToolPermissionPolicy | None,
-    approval_callback: ToolApprovalCallback | None,
-    context: ToolExecutionContext,
-) -> str | None:
-    """Return a model-facing permission result before any write side effect."""
-    requests: list[ToolPermissionRequest] = []
-    if parent_info is None:
-        requests.append(
-            ToolPermissionRequest(
-                tool_name=WRITE_TOOL_NAME,
-                operation=ToolOperation.CREATE_DIRECTORY,
-                cwd=resolver.cwd,
-                path=path.parent,
-            )
-        )
-
-    operation = (
-        ToolOperation.OVERWRITE_FILE
-        if target_info is not None
-        else ToolOperation.CREATE_FILE
-    )
-    requests.append(
-        ToolPermissionRequest(
-            tool_name=WRITE_TOOL_NAME,
-            operation=operation,
-            cwd=resolver.cwd,
-            path=path,
-        )
-    )
-
-    # Obtain every required grant before the backend creates parents or writes.
-    for request in requests:
-        permission_error = await evaluate_tool_permission(
-            request,
-            policy=permissions,
-            approval_callback=approval_callback,
-            context=context,
-        )
-        if permission_error is not None:
-            return permission_error
-
-    return None

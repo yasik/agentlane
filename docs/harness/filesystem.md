@@ -43,7 +43,7 @@ stream protocols and concrete implementations.
 | `DirectoryLister` | `list_directory(path)` | Directory traversal |
 | `SkillReader` | Read and list | Skill discovery and activation |
 | `ReadableFileSystem` | Read, list, and stat | Find tool |
-| `WritableFileSystem` | Write and stat | Write tool |
+| `WritableFileSystem` | Write and stat | Write tool and jq saves |
 
 `open_read` returns a context manager for a `Reader`. `open_write` returns one
 for a `Writer`. Each context owns its stream. Use standard `OSError` subclasses
@@ -134,7 +134,8 @@ tools = base_harness_tools(
 
 If the reader implements `WritableFileSystem`, the factory uses it as the
 writer unless an explicit writer is supplied. Missing capabilities for selected
-file tools raise `ValueError`; use selectors for a read-only tool set.
+file tools raise `ValueError`; use selectors for a read-only tool set. Jq can
+query without a writer and rejects calls that request saving.
 
 Grep and bash remain process tools. They use `cwd` in the environment that runs
 them, such as the user's computer or a sandbox. Grep invokes ripgrep in the
@@ -146,8 +147,10 @@ expansion; relative paths are resolved by that executor. The base tools add
 prompt guidance about the separate storage and process path namespaces.
 
 Jq also uses the command executor, but reads its selected input through
-`FileReader` and sends the bytes through stdin. Its imports and output logs
-use the executor filesystem. See [jq](tools/jq.md) for limits and configuration.
+`FileReader` and sends the bytes through stdin. An `output_path` call saves
+complete stdout through the injected writer after successful execution. Its
+imports and output logs use the executor filesystem. See [jq](tools/jq.md) for
+limits and configuration.
 
 Neither grep nor bash consumes the reader or writer. A logical mount does not
 create an operating-system mount. If commands need remote data, the host must expose it
@@ -242,8 +245,9 @@ Read checks `READ_FILE`, find checks `SEARCH_FILES`, and patch checks
 `MODIFY_FILE` before accessing data. Write inspects metadata to distinguish
 creation from overwrite, then checks permissions before opening a writer.
 Jq checks both `READ_FILE` for the storage path and `EXECUTE_COMMAND` for its
-process. Grep and bash retain their process-tool permission behavior. See
-[Tool permissions](tools/permissions.md).
+process. A jq save also uses write's create, overwrite, and parent-directory
+permission checks. Grep and bash retain their process-tool permission behavior.
+See [Tool permissions](tools/permissions.md).
 
 Skill loading calls the adapter directly. Tool policies do not govern skill
 loader access; restrict it through the adapter and configured roots.
@@ -251,8 +255,8 @@ loader access; restrict it through the adapter and configured roots.
 Adapter methods are synchronous and file tools run them in worker threads.
 Each call must own its stream. Shared clients must support concurrent calls or
 provide their own synchronization. The adapter owns timeouts and retries.
-Cancellation cannot stop a blocking adapter call. Write and patch wait for a
-started write context to settle before they propagate task cancellation.
+Cancellation cannot stop a blocking adapter call. Write, patch, and jq saves
+wait for a started write context to settle before they propagate task cancellation.
 
 ## Writer Migration
 
@@ -263,7 +267,8 @@ stream. `LocalFileSystem.write` remains a convenience method; tools depend on
 the stream interface. Readers need only `read`; `buffered_reader` supplies
 buffering and line reads.
 
-Injected patch calls through one tool instance serialize the complete read,
-edit, and write operation. This lock does not cover other tool instances or
-external writers. Applications must coordinate those operations as a whole;
-serializing write commits alone does not prevent stale read-modify-write updates.
+Injected patch calls and jq saving calls through one tool instance serialize
+the complete read, edit, and write operation. This lock does not cover other tool
+instances or external writers. Applications must coordinate those operations
+as a whole; serializing write commits alone does not prevent stale
+read-modify-write updates.

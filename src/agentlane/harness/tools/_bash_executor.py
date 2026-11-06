@@ -45,6 +45,8 @@ class BashExecutionRequest:
     env: Mapping[str, str] | None = None
     stdin: bytes | None = None
     """Bytes to send before closing stdin; None preserves inherited stdin."""
+    stdout_capture_limit: int | None = None
+    """Capture up to this many raw stdout bytes; None disables raw capture."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,10 @@ class BashExecutionResult:
     timeout_seconds: float | None
     output: TruncatedOutput
     full_output_path: Path | None
+    stdout: bytes | None = None
+    """Raw stdout when capture was requested, without stderr or log headers."""
+    stdout_truncated: bool = False
+    """Whether captured stdout exceeded its limit or did not reach EOF."""
 
     @property
     def output_truncated(self) -> bool:
@@ -71,7 +77,8 @@ class BashExecutor(Protocol):
 
     Executors that accept `BashExecutionRequest.stdin` also implement
     `StdinBashExecutor`. Callers check that optional capability before supplying
-    input. Executors must reject input they cannot send.
+    input. Raw stdout capture requires `StdoutBashExecutor`. Executors must
+    reject input or capture requests they cannot support.
     """
 
     async def run(
@@ -95,11 +102,26 @@ class StdinBashExecutor(BashExecutor, Protocol):
     """Whether this executor can send `BashExecutionRequest.stdin` bytes."""
 
 
+@runtime_checkable
+class StdoutBashExecutor(BashExecutor, Protocol):
+    """Optional command-executor capability for bounded raw stdout capture.
+
+    Capture preserves exact bytes separately from the display output. Exceeding
+    the limit stops execution. Missing EOF marks the capture as truncated even
+    when the command's leader exits successfully.
+    """
+
+    supports_stdout_capture: bool
+    """Whether this executor supports `BashExecutionRequest.stdout_capture_limit`."""
+
+
 class LocalBashExecutor:
     """Execute bash commands as local child processes."""
 
     supports_stdin: bool = True
     """Whether requests can supply bytes for the child process stdin."""
+    supports_stdout_capture: bool = True
+    """Whether requests can capture bounded raw stdout bytes."""
 
     def __init__(
         self,
@@ -116,6 +138,12 @@ class LocalBashExecutor:
         cancellation_token: CancellationToken,
     ) -> BashExecutionResult:
         """Run a command and return captured combined-output metadata."""
+        if (
+            request.stdout_capture_limit is not None
+            and request.stdout_capture_limit < 1
+        ):
+            raise ValueError("stdout_capture_limit must be greater than zero.")
+
         effective_timeout = (
             request.timeout_seconds
             if request.timeout_seconds is not None
@@ -125,6 +153,11 @@ class LocalBashExecutor:
         combined_output = _CombinedOutputRecorder(
             command=request.command,
             cwd=request.cwd,
+        )
+        stdout_capture = (
+            _StdoutCapture(request.stdout_capture_limit)
+            if request.stdout_capture_limit is not None
+            else None
         )
 
         process = await asyncio.create_subprocess_exec(
@@ -145,6 +178,7 @@ class LocalBashExecutor:
             _read_stream(
                 stream=process.stdout,
                 combined_output=combined_output,
+                stdout_capture=stdout_capture,
             )
         )
         stderr_task = asyncio.create_task(
@@ -173,6 +207,11 @@ class LocalBashExecutor:
             if effective_timeout is not None
             else None
         )
+        capture_limit_task = (
+            asyncio.create_task(stdout_capture.overflow.wait())
+            if stdout_capture is not None
+            else None
+        )
 
         timed_out = False
         cancelled = False
@@ -183,6 +222,8 @@ class LocalBashExecutor:
             }
             if timeout_task is not None:
                 wait_tasks.add(timeout_task)
+            if capture_limit_task is not None:
+                wait_tasks.add(capture_limit_task)
 
             done, pending = await asyncio.wait(
                 wait_tasks,
@@ -221,6 +262,9 @@ class LocalBashExecutor:
             if timeout_task is not None and not timeout_task.done():
                 timeout_task.cancel()
                 cleanup_tasks.add(timeout_task)
+            if capture_limit_task is not None and not capture_limit_task.done():
+                capture_limit_task.cancel()
+                cleanup_tasks.add(capture_limit_task)
             if not process_exit_task.done():
                 process_exit_task.cancel()
                 cleanup_tasks.add(process_exit_task)
@@ -251,6 +295,13 @@ class LocalBashExecutor:
             timeout_seconds=effective_timeout,
             output=output,
             full_output_path=full_output_path,
+            stdout=(
+                bytes(stdout_capture.content) if stdout_capture is not None else None
+            ),
+            stdout_truncated=(
+                stdout_capture is not None
+                and (stdout_capture.overflow.is_set() or not stdout_capture.eof)
+            ),
         )
 
 
@@ -417,13 +468,39 @@ class _RecordedChunk:
     chunk: bytes
 
 
+class _StdoutCapture:
+    """Keep a bounded stdout prefix and its completion state."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self.content = bytearray()
+        self.eof = False
+        self.overflow = asyncio.Event()
+
+    def append(self, chunk: bytes) -> None:
+        remaining = self._limit - len(self.content)
+        self.content.extend(chunk[:remaining])
+        if len(chunk) > remaining:
+            self.overflow.set()
+
+
 async def _read_stream(
     *,
     stream: asyncio.StreamReader,
     combined_output: _CombinedOutputRecorder,
+    stdout_capture: _StdoutCapture | None = None,
 ) -> None:
     while chunk := await stream.read(_STREAM_READ_SIZE):
+        if stdout_capture is not None:
+            if stdout_capture.overflow.is_set():
+                # Keep draining until termination closes the pipe, without
+                # retaining or logging further bytes after capture overflow.
+                continue
+            stdout_capture.append(chunk)
         await combined_output.write(chunk)
+
+    if stdout_capture is not None:
+        stdout_capture.eof = True
 
 
 async def _write_stdin(stream: asyncio.StreamWriter, data: bytes) -> None:

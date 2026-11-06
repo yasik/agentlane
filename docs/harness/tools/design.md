@@ -67,9 +67,9 @@ output-limit constants (`TEXT_MAX_BYTES`, `TEXT_MAX_LINES`, `BASH_MAX_BYTES`,
 `BASH_MAX_LINES`, `GREP_DEFAULT_LIMIT`, `GREP_MAX_LINE_LENGTH`,
 `FIND_DEFAULT_LIMIT`, `LS_DEFAULT_LIMIT`) plus `TruncatedOutput` and
 `truncate_output`, and the bash-executor contract types (`BashExecutor`,
-`StdinBashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`, `BashExecutionResult`,
-`BashShellConfig`, `resolve_bash_shell`). See [bash](./bash.md) for the
-executor contracts.
+`StdinBashExecutor`, `StdoutBashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`,
+`BashExecutionResult`, `BashShellConfig`, `resolve_bash_shell`). See
+[bash](./bash.md) for the executor contracts.
 
 ## Tool Definitions
 
@@ -103,6 +103,7 @@ workspace_tools = base_harness_tools(
 ```
 
 Pass `reader=` to read, jq, and find, `writer=` to write, and both to patch.
+Jq also uses `writer=` when a call supplies `output_path`.
 `base_harness_tools()` passes these capabilities to the selected file tools.
 It can infer writes from a reader that implements `WritableFileSystem`.
 Injected tools default to their storage root. Plain backends use relative

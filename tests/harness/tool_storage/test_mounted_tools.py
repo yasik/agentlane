@@ -24,13 +24,15 @@ from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     HarnessToolDefinition,
     HarnessToolsShim,
+    ToolOperation,
     ToolPermissionDecision,
     base_harness_tools,
     find_tool,
+    jq_tool,
     patch_tool,
     write_tool,
 )
-from agentlane.models import Tool, Tools
+from agentlane.models import Tool, ToolFailure, Tools
 from agentlane.runtime import CancellationToken, SingleThreadedRuntimeEngine
 
 from ..skill_storage._reader import MemorySkillReader
@@ -96,6 +98,192 @@ def test_process_and_storage_working_directories_are_independent(
     assert run_tool(tools["read"], path="note") == "old"
     assert run_tool(tools["find"], pattern="*") == "Search directory: /tenant\nnote"
     assert run_tool(tools["bash"], command="pwd").strip() == str(tmp_path)
+
+
+def test_jq_factory_saves_in_mounted_namespace_with_separate_process_cwd(
+    storage: MemoryFileSystem,
+    policy: RecordingPolicy,
+    tmp_path: Path,
+    jq_binary: str,
+) -> None:
+    del jq_binary
+    storage.files["input.json"] = b'{"count":1}\n'
+    tools = {
+        definition.tool.name: definition
+        for definition in base_harness_tools(
+            reader=MountedFileSystem({"tenant": storage}),
+            cwd=tmp_path,
+            storage_cwd="tenant",
+            permissions=policy,
+            include=("read", "jq"),
+        )
+    }
+    expected = (
+        json.dumps(
+            {"count": 2, "process_cwd": str(tmp_path.resolve())},
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+
+    result = run_tool(
+        tools["jq"],
+        path="input.json",
+        filter=".count += 1 | .process_cwd = $ENV.PWD",
+        output_path="saved/result.json",
+        compact_output=True,
+    )
+
+    assert result == (
+        f"Wrote {len(expected)} bytes to /tenant/saved/result.json.\n\n"
+        f"{expected.decode().rstrip()}"
+    )
+    assert storage.files["saved/result.json"] == expected
+    assert storage.files["input.json"] == b'{"count":1}\n'
+    assert [request.operation for request in policy.requests] == [
+        ToolOperation.READ_FILE,
+        ToolOperation.EXECUTE_COMMAND,
+        ToolOperation.CREATE_DIRECTORY,
+        ToolOperation.CREATE_FILE,
+    ]
+    assert policy.requests[1].cwd == tmp_path.resolve()
+    assert policy.requests[-1].path == PurePosixPath("/tenant/saved/result.json")
+    assert (
+        run_tool(tools["read"], path="saved/result.json") == expected.decode().rstrip()
+    )
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("writable_router", [False, True])
+def test_jq_saving_to_readonly_storage_never_uses_local_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    jq_binary: str,
+    writable_router: bool,
+) -> None:
+    del jq_binary
+    readonly = MemorySkillReader({"note.json": b'{"count":0}\n'})
+    mounted = (
+        MountedFileSystem({"tenant": readonly})
+        if writable_router
+        else MountedReader({"tenant": readonly})
+    )
+    host_writes: list[str] = []
+
+    def local_write(_filesystem: LocalFileSystem, path: str) -> None:
+        host_writes.append(path)
+        raise AssertionError("Read-only mounted saves must not use host writes")
+
+    monkeypatch.setattr(LocalFileSystem, "open_write", local_write)
+    definition = base_harness_tools(reader=mounted, cwd=tmp_path, include=("jq",))[0]
+
+    result = run_tool(
+        definition,
+        path="tenant/note.json",
+        filter=".count += 1",
+        output_path="tenant/note.json",
+        compact_output=True,
+    )
+
+    assert isinstance(result, ToolFailure)
+    if writable_router:
+        assert result == 'permission denied: `/tenant/note.json`\n\n{"count":1}'
+        assert readonly.opened == ["note.json"]
+    else:
+        assert result == "jq requires a writer to save output"
+        assert readonly.opened == []
+
+    assert readonly.files["note.json"] == b'{"count":0}\n'
+    assert host_writes == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_first", [False, True])
+async def test_parallel_jq_saves_read_after_prior_commit_settles(
+    storage: MemoryFileSystem,
+    tmp_path: Path,
+    jq_binary: str,
+    cancel_first: bool,
+) -> None:
+    del jq_binary
+    storage.files["note.json"] = b'{"count":0}\n'
+    storage.write_released.clear()
+
+    # One tool owns the read-transform-write lock for both increments.
+    definition = jq_tool(reader=storage, writer=storage, process_cwd=tmp_path)
+    arguments = {
+        "path": "note.json",
+        "filter": ".count += 1",
+        "output_path": "note.json",
+        "compact_output": True,
+    }
+    first = asyncio.create_task(_run(definition, CancellationToken(), **arguments))
+    second = None
+    try:
+        assert await asyncio.to_thread(storage.write_started.wait, 2)
+        if cancel_first:
+            first.cancel()
+
+        second = asyncio.create_task(_run(definition, CancellationToken(), **arguments))
+        await asyncio.sleep(0)
+        if cancel_first:
+            # Repeated cancellation cannot release the save lock during commit.
+            first.cancel()
+        await asyncio.sleep(0)
+        assert storage.opened == ["note.json"]
+        assert not first.done()
+        assert not second.done()
+    finally:
+        storage.write_released.set()
+
+    if cancel_first:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(first, 3)
+    else:
+        assert await asyncio.wait_for(first, 3) == (
+            'Wrote 12 bytes to note.json.\n\n{"count":1}'
+        )
+
+    assert second is not None
+    assert await asyncio.wait_for(second, 3) == (
+        'Wrote 12 bytes to note.json.\n\n{"count":2}'
+    )
+    assert storage.files["note.json"] == b'{"count":2}\n'
+    assert storage.writes == [
+        ("note.json", b'{"count":1}\n'),
+        ("note.json", b'{"count":2}\n'),
+    ]
+
+
+def test_jq_failed_storage_commit_preserves_input_and_sanitizes_error(
+    storage: MemoryFileSystem,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    jq_binary: str,
+) -> None:
+    del jq_binary
+    storage.files["note.json"] = b'{"count":0}\n'
+    attempted: list[tuple[str, bytes]] = []
+
+    def failed_commit(path: str, content: bytes) -> None:
+        attempted.append((path, content))
+        raise OSError("private provider details and credentials")
+
+    monkeypatch.setattr(storage, "write", failed_commit)
+
+    result = run_tool(
+        jq_tool(reader=storage, writer=storage, process_cwd=tmp_path),
+        path="note.json",
+        filter=".count += 1",
+        output_path="note.json",
+        compact_output=True,
+    )
+
+    assert isinstance(result, ToolFailure)
+    assert result == 'failed to write file: `note.json`\n\n{"count":1}'
+    assert attempted == [("note.json", b'{"count":1}\n')]
+    assert storage.files["note.json"] == b'{"count":0}\n'
+    assert storage.writes == []
 
 
 @pytest.mark.parametrize("mounted", [False, True])

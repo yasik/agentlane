@@ -1,4 +1,4 @@
-"""Query local and mounted JSON files with jq, without a model or API key."""
+"""Query and save local and mounted JSON files without a model or API key."""
 
 import asyncio
 import json
@@ -12,7 +12,7 @@ from agentlane.runtime import CancellationToken
 
 
 async def main() -> None:
-    """Use the same jq filter with local and mounted input paths."""
+    """Query a local and mounted file, edit the source, and save a copy."""
     with TemporaryDirectory() as directory:
         root = Path(directory)
         (root / "results.json").write_text(
@@ -24,11 +24,19 @@ async def main() -> None:
 
         # The mounted path is logical. jq receives its contents through stdin.
         storage = MountedFileSystem({"data": LocalFileSystem(root)})
-        definitions = (
-            jq_tool(cwd=root),
-            jq_tool(reader=storage, cwd="/data", process_cwd=root),
+        cases = (
+            (jq_tool(cwd=root), "results.json"),
+            (
+                jq_tool(
+                    reader=storage,
+                    writer=storage,
+                    cwd="/data",
+                    process_cwd=root,
+                ),
+                "saved/results.json",
+            ),
         )
-        for definition in definitions:
+        for definition, output_path in cases:
             tool = definition.tool
             assert isinstance(tool, Tool)
             result = await tool.run(
@@ -45,6 +53,27 @@ async def main() -> None:
 
             assert result == "1"
             print(result)
+
+            # The local call replaces its source. The mounted call creates a
+            # copy through the same filesystem used to read the input.
+            saved = await tool.run(
+                tool.args_type().model_validate(
+                    {
+                        "path": "results.json",
+                        "filter": ".processed = true",
+                        "output_path": output_path,
+                    }
+                ),
+                CancellationToken(),
+            )
+            if isinstance(saved, ToolFailure):
+                raise RuntimeError(saved.error.message)
+
+            content = json.loads((root / output_path).read_text(encoding="utf-8"))
+            assert content["processed"] is True
+            assert len(content["items"]) == 2
+            assert saved.startswith("Wrote ")
+            print(saved.splitlines()[0])
 
 
 if __name__ == "__main__":

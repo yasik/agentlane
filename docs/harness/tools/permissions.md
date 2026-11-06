@@ -278,9 +278,11 @@ Whole-tool entries expand to that tool's declared operation set. For example,
 operations. `ToolPermissionGrant.all_operations(...)` remains available for
 programmatic callers that intentionally want a wildcard grant.
 
-A `jq` entry grants both `read_file` and `execute_command`. Jq checks both
-before opening its input; ordinary filters can access process environment and
-imports. See [jq permissions](./jq.md#permissions).
+A `jq` entry grants `read_file`, `execute_command`, `create_file`,
+`overwrite_file`, and `create_directory`. Every query checks read and command
+access; ordinary filters can access process environment and imports. Saving
+also checks the required destination operations before reading the input or
+starting jq. See [jq permissions](./jq.md#permissions).
 
 By default the parser only recognizes the built-in first-party tools (`read`,
 `jq`, `find`, `grep`, `write`, `patch`, `bash`), so a grant for an app-registered

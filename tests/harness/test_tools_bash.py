@@ -31,6 +31,7 @@ from agentlane.harness.tools import (
     HarnessToolDefinition,
     HarnessToolsShim,
     LocalBashExecutor,
+    StdoutBashExecutor,
     ToolOperation,
     ToolPermissionDecision,
     ToolPermissionOutcome,
@@ -384,6 +385,169 @@ async def test_local_executor_closes_stdin_held_by_detached_child(
             token.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", [b"", b"raw\x00\xff\n" * 20_000])
+@pytest.mark.parametrize("exit_code", [0, 7])
+async def test_local_executor_captures_exact_stdout_separately_from_stderr(
+    tmp_path: Path, data: bytes, exit_code: int
+) -> None:
+    executor = LocalBashExecutor()
+    assert isinstance(executor, StdoutBashExecutor)
+    code = (
+        "import sys; "
+        "sys.stdout.buffer.write(sys.stdin.buffer.read()); "
+        "sys.stderr.write('diagnostic\\n'); "
+        f"sys.exit({exit_code})"
+    )
+    result = await executor.run(
+        BashExecutionRequest(
+            command=shlex.join([sys.executable, "-c", code]),
+            cwd=tmp_path,
+            stdin=data,
+            stdout_capture_limit=max(1, len(data)),
+            timeout_seconds=3,
+        ),
+        CancellationToken(),
+    )
+
+    try:
+        assert result.stdout == data
+        assert not result.stdout_truncated
+        assert result.exit_code == exit_code
+        assert not result.timed_out
+        if data:
+            assert result.output_truncated
+            assert result.full_output_path is not None
+            assert b"diagnostic\n" in result.full_output_path.read_bytes()
+        else:
+            assert result.output.text == "diagnostic\n"
+    finally:
+        if result.full_output_path is not None:
+            result.full_output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, -1])
+async def test_local_executor_rejects_invalid_stdout_capture_limit_before_startup(
+    tmp_path: Path, limit: int
+) -> None:
+    marker = tmp_path / "must-not-exist"
+    with pytest.raises(
+        ValueError, match="stdout_capture_limit must be greater than zero"
+    ):
+        await LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=f"touch {shlex.quote(str(marker))}",
+                cwd=tmp_path,
+                stdout_capture_limit=limit,
+            ),
+            CancellationToken(),
+        )
+
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_local_executor_stops_infinite_stdout_at_capture_limit(
+    tmp_path: Path,
+) -> None:
+    initial_tasks = asyncio.all_tasks()
+    code = "import os\nwhile True:\n    os.write(1, b'x' * 8192)\n"
+    result = await asyncio.wait_for(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=shlex.join([sys.executable, "-c", code]),
+                cwd=tmp_path,
+                stdout_capture_limit=10_000,
+            ),
+            CancellationToken(),
+        ),
+        timeout=3,
+    )
+
+    try:
+        assert result.stdout == b"x" * 10_000
+        assert result.stdout_truncated
+        assert result.exit_code is not None
+        assert not result.timed_out
+        assert not result.cancelled
+        assert asyncio.all_tasks() == initial_tasks
+    finally:
+        if result.full_output_path is not None:
+            result.full_output_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+async def test_local_executor_marks_capture_incomplete_without_stdout_eof(
+    tmp_path: Path,
+) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("requires POSIX fork semantics")
+
+    # The leader succeeds, but its descendant retains stdout. Cleanup must not
+    # mistake the retained prefix for a complete result that can replace a file.
+    code = (
+        "import os, time\n"
+        "if os.fork() == 0:\n"
+        "    time.sleep(30)\n"
+        "else:\n"
+        "    print('prefix', flush=True)\n"
+        "    os._exit(0)\n"
+    )
+    result = await asyncio.wait_for(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=shlex.join([sys.executable, "-c", code]),
+                cwd=tmp_path,
+                stdout_capture_limit=1024,
+            ),
+            CancellationToken(),
+        ),
+        timeout=3,
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout == b"prefix\n"
+    assert result.stdout_truncated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["timeout", "token", "task"])
+async def test_local_executor_cleans_up_stdout_capture_when_stopped(
+    tmp_path: Path, stop: str
+) -> None:
+    initial_tasks = asyncio.all_tasks()
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command="printf prefix; sleep 5",
+                cwd=tmp_path,
+                stdout_capture_limit=1024,
+                timeout_seconds=0.1 if stop == "timeout" else None,
+            ),
+            token,
+        )
+    )
+    if stop != "timeout":
+        await asyncio.sleep(0.1)
+        if stop == "token":
+            token.cancel()
+        else:
+            task.cancel()
+
+    if stop == "task":
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+    else:
+        result = await asyncio.wait_for(task, timeout=3)
+        assert result.stdout == b"prefix"
+        assert result.timed_out == (stop == "timeout")
+        assert result.cancelled == (stop == "token")
+
+    assert asyncio.all_tasks() == initial_tasks
 
 
 def test_bash_tool_rejects_invalid_default_timeout() -> None:

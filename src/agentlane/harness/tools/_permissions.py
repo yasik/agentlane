@@ -767,7 +767,13 @@ def _workspace_policy_approval_operations(
 
 _TOOL_OPERATIONS_BY_TOOL: dict[str, tuple[ToolOperation, ...]] = {
     "read": (ToolOperation.READ_FILE,),
-    "jq": (ToolOperation.READ_FILE, ToolOperation.EXECUTE_COMMAND),
+    "jq": (
+        ToolOperation.READ_FILE,
+        ToolOperation.EXECUTE_COMMAND,
+        ToolOperation.CREATE_FILE,
+        ToolOperation.OVERWRITE_FILE,
+        ToolOperation.CREATE_DIRECTORY,
+    ),
     "find": (ToolOperation.SEARCH_FILES,),
     "grep": (ToolOperation.READ_FILE, ToolOperation.SEARCH_FILES),
     "write": (

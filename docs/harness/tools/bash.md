@@ -46,9 +46,10 @@ empty commands and non-positive timeouts return stable text errors before any
 process starts.
 
 Host applications can import the executor-facing contracts
-`BashExecutor`, `StdinBashExecutor`, `LocalBashExecutor`, `BashExecutionRequest`,
-`BashExecutionResult`, `BashShellConfig`, and `resolve_bash_shell` from
-`agentlane.harness.tools` when they need to wrap or replace local execution.
+`BashExecutor`, `StdinBashExecutor`, `StdoutBashExecutor`, `LocalBashExecutor`,
+`BashExecutionRequest`, `BashExecutionResult`, `BashShellConfig`, and
+`resolve_bash_shell` from `agentlane.harness.tools` when they need to wrap or
+replace local execution.
 
 `BashExecutionRequest.stdin` accepts binary input from host code. The local
 executor sends those bytes and closes stdin; empty bytes send EOF, while
@@ -57,6 +58,15 @@ argument. Executors that support it implement the optional, runtime-checkable
 `StdinBashExecutor` protocol and declare `supports_stdin = True`. Other
 executors must reject supplied input. The [jq tool](./jq.md) checks this
 capability before reading local or mounted input.
+
+Host code can set `BashExecutionRequest.stdout_capture_limit` to a positive byte
+limit to capture raw stdout separately from the combined display output. This
+requires `StdoutBashExecutor` with `supports_stdout_capture = True`. The local
+executor stops execution on overflow and returns the retained bytes in
+`BashExecutionResult.stdout`. `stdout_truncated` is true on overflow or if
+stdout did not reach EOF. Callers must check this flag and the command outcome
+before using the bytes as a complete result. With capture disabled, `stdout`
+is `None`. These fields do not change the model-facing Bash arguments.
 
 `bash_tool(permissions=...)` evaluates the shared permission policy before the
 executor starts. Pair it with `approval_callback=` when `require_approval`

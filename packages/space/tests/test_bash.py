@@ -27,6 +27,22 @@ async def test_command_rejects_stdin_before_startup(
 
 
 @pytest.mark.asyncio
+async def test_command_rejects_stdout_capture_before_startup(
+    local_space: LocalSpace, tmp_path: Path
+) -> None:
+    async with sandbox_for(local_space) as sandbox:
+        with pytest.raises(ValueError, match="does not support raw stdout capture"):
+            await SpaceBashExecutor(sandbox).run(
+                BashExecutionRequest(
+                    command="printf output", cwd=tmp_path, stdout_capture_limit=1024
+                ),
+                CancellationToken(),
+            )
+
+    assert not local_space.commands
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("exit_code", [0, 7, 124, 125])
 async def test_command_preserves_output_and_exit_status(
     local_space: LocalSpace, tmp_path: Path, exit_code: int

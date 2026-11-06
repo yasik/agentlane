@@ -25,7 +25,7 @@ Tool reference:
 
 1. [agent](./agent.md): delegate focused work to a fresh helper agent.
 2. [read](./read.md): read UTF-8 text files with deterministic truncation.
-3. [jq](./jq.md): select and transform local or mounted JSON files.
+3. [jq](./jq.md): query, transform, and save local or mounted JSON files.
 4. [find](./find.md): walk directories with gitignore-aware pattern
    matching.
 5. [grep](./grep.md): search file contents with ripgrep-backed results.
@@ -102,9 +102,9 @@ read, jq, write, find, and patch.
 `write_plan`, `bash`, and `agent`. The public base-tools set currently does
 not include `ls`.
 
-Pass `reader=` for `read`, `jq`, `find`, and `patch`. Pass `writer=` for `write` and
-`patch`, or supply a reader that also implements `WritableFileSystem`. Find
-requires read, listing, and metadata capabilities. Injected file tools use
+Pass `reader=` for `read`, `jq`, `find`, and `patch`. Pass `writer=` for `write`,
+`patch`, and jq saves, or supply a reader that also implements `WritableFileSystem`.
+Find requires read, listing, and metadata capabilities. Injected file tools use
 `storage_cwd`, which defaults to the storage root (`/` for mounts, `.` for
 plain injected backends). Set `storage_cwd="/tenant/sessions/session-123"` to
 resolve bare file names within that mounted directory. Each tool captures its

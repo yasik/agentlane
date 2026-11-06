@@ -29,7 +29,8 @@ SPACE bundle in place of the local base bundle; registering both causes
 duplicate tool names.
 Creating a `SpaceSandbox` handle alone does not redirect tools. Passing
 `SpaceBashExecutor` through `base_harness_tools(bash_executor=...)` changes
-Bash execution. It cannot supply jq stdin.
+Bash execution. It cannot supply jq stdin or capture raw stdout for jq saves;
+it rejects those executor requests before startup.
 
 The sandbox and guest user permissions form the security boundary. `cwd`
 sets the working directory; it does not restrict file access. Guest file

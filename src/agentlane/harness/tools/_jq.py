@@ -2,12 +2,13 @@
 
 import asyncio
 import shlex
+from contextlib import nullcontext
 from math import isfinite
 from pathlib import Path, PurePath
 
 from pydantic import BaseModel, Field
 
-from agentlane.harness.filesystem import FileReader, LocalFileSystem
+from agentlane.harness.filesystem import FileReader, LocalFileSystem, WritableFileSystem
 from agentlane.io import buffered_reader
 from agentlane.models import (
     Tool,
@@ -19,14 +20,18 @@ from agentlane.models import (
 from agentlane.runtime import CancellationToken
 
 from .._constants import EMPTY_PATH_ERROR
+from .._storage_write import write_content
 from ._bash_executor import (
     BashExecutionRequest,
+    BashExecutionResult,
     BashExecutor,
     LocalBashExecutor,
     StdinBashExecutor,
+    StdoutBashExecutor,
 )
 from ._command_output import format_command_output
-from ._constants import JQ_TOOL_NAME
+from ._constants import JQ_TOOL_NAME, NULL_BYTE_PATH_ERROR
+from ._file_write import prepare_file_write
 from ._output import BASH_MAX_BYTES, BASH_MAX_LINES
 from ._paths import StorageToolPathResolver, ToolPathResolver, tool_path_guideline
 from ._permissions import (
@@ -40,7 +45,9 @@ from ._types import HarnessToolDefinition
 
 _TOOL_DESCRIPTION = (
     "Query a JSON file with a jq filter. Supports JSON streams, raw string output, "
-    "slurp, and compact output. Returns combined stdout and stderr, tail-truncated "
+    "slurp, and compact output. Set output_path to save complete stdout after "
+    "success; use the input path to replace it. Returns combined stdout and stderr, "
+    "tail-truncated "
     f"to {BASH_MAX_LINES} lines or {BASH_MAX_BYTES} bytes."
 )
 """Describe jq input and the shared command-output limits to the model."""
@@ -53,6 +60,9 @@ _TOOL_PROMPT_GUIDELINES = (
     "Pass only a jq filter, without shell quoting or a jq command prefix.",
     "Use narrower filters or array slices when output is large. "
     "Truncated output is a text preview, not a complete JSON document.",
+    "Set output_path to save the complete result; use the same path to edit the "
+    "input file. Saving replaces the file only after jq succeeds. Raw output and "
+    "JSON streams are saved as produced, including empty output.",
 )
 """Guide jq filter arguments and recovery from truncated results."""
 
@@ -65,6 +75,11 @@ class _ToolArgs(BaseModel):
 
     path: str = Field(description="One literal JSON file path; no wildcard expansion.")
     filter: str = Field(description="jq filter, such as '.items[] | {id, name}'.")
+    output_path: str | None = Field(
+        default=None,
+        description="Optional file to create or overwrite with complete stdout after "
+        "success. Use path to replace the input; omit to only query.",
+    )
     raw_output: bool = Field(
         default=False,
         description="Write string results without JSON quotes, like jq --raw-output.",
@@ -87,10 +102,12 @@ def jq_tool(
     *,
     cwd: str | Path | None = None,
     reader: FileReader | None = None,
+    writer: WritableFileSystem | None = None,
     process_cwd: str | Path | None = None,
     executor: BashExecutor | None = None,
     default_timeout: float | None = None,
     max_input_bytes: int = 8 * 1024 * 1024,
+    max_output_bytes: int = 8 * 1024 * 1024,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
 ) -> HarnessToolDefinition:
@@ -99,6 +116,8 @@ def jq_tool(
     Args:
         cwd: File working directory, with the same path rules as `read_tool`.
         reader: Optional file reader. Defaults to the local filesystem.
+        writer: Optional writer in the reader's namespace. Local defaults support
+            saving; an injected reader requires an explicit writer to save.
         process_cwd: Executor working directory for jq imports. Defaults to cwd
             for local files, or the host cwd when a reader is injected. Explicit
             paths for custom executors are passed through without host resolution.
@@ -110,7 +129,10 @@ def jq_tool(
             can override the executor's default with a positive finite timeout.
         max_input_bytes: Maximum bytes buffered from one input file; defaults to
             8 MiB. Backend read timeouts remain the reader's responsibility.
-        permissions: Shared policy checked for both file reads and command execution.
+        max_output_bytes: Maximum complete stdout bytes buffered when saving;
+            defaults to 8 MiB. Query previews keep their existing limits.
+        permissions: Shared policy for file reads, command execution, and any
+            destination create, overwrite, or parent directory creation.
         approval_callback: Host callback for approval-required decisions.
 
     Returns:
@@ -122,6 +144,10 @@ def jq_tool(
         raise ValueError("default_timeout must be finite and greater than zero.")
     if max_input_bytes < 1:
         raise ValueError("max_input_bytes must be greater than zero.")
+    if max_output_bytes < 1:
+        raise ValueError("max_output_bytes must be greater than zero.")
+    if writer is not None and reader is None:
+        raise ValueError("writer requires a reader in the same filesystem namespace.")
 
     # File paths keep read's namespace. Process paths belong to the executor.
     resolver = (
@@ -130,6 +156,8 @@ def jq_tool(
         else StorageToolPathResolver.for_optional(cwd, filesystem=reader)
     )
     file_reader = reader if reader is not None else LocalFileSystem()
+    file_writer = writer if reader is not None else LocalFileSystem()
+    storage_lock = asyncio.Lock()
     command_cwd = process_cwd
     if command_cwd is None:
         command_cwd = str(resolver.cwd) if reader is None else Path.cwd()
@@ -154,19 +182,27 @@ def jq_tool(
             raise asyncio.CancelledError
 
         try:
-            return await _query_file(
-                args,
-                resolver=resolver,
-                reader=file_reader,
-                cwd=workspace,
-                validate_local_cwd=is_local,
-                executor=command_executor,
-                max_input_bytes=max_input_bytes,
-                permissions=permissions,
-                approval_callback=approval_callback,
-                cancellation_token=cancellation_token,
-                context=context,
-            )
+            # Serialize each save from permission classification through the
+            # settled commit, so concurrent edits do not read the same snapshot.
+            async with storage_lock if args.output_path is not None else nullcontext():
+                if cancellation_token.is_cancelled:
+                    raise asyncio.CancelledError
+
+                return await _query_file(
+                    args,
+                    resolver=resolver,
+                    reader=file_reader,
+                    writer=file_writer,
+                    cwd=workspace,
+                    validate_local_cwd=is_local,
+                    executor=command_executor,
+                    max_input_bytes=max_input_bytes,
+                    max_output_bytes=max_output_bytes,
+                    permissions=permissions,
+                    approval_callback=approval_callback,
+                    cancellation_token=cancellation_token,
+                    context=context,
+                )
         except Exception:
             return _failure(_GENERIC_JQ_ERROR)
 
@@ -183,6 +219,8 @@ def jq_tool(
             f"jq reads at most {max_input_bytes} bytes from one file. "
             "Set timeout for filters that may run for a long time; otherwise "
             "the executor's default timeout applies.",
+            f"Saving requires complete stdout within {max_output_bytes} bytes. "
+            "A failed, cancelled, or incomplete jq result is not written.",
             "jq receives file bytes on stdin. Imports and environment access use "
             f"its executor, with process working directory `{workspace}`. "
             "The default local executor is not filesystem-confined.",
@@ -196,10 +234,12 @@ async def _query_file(
     *,
     resolver: ToolPathResolver | StorageToolPathResolver,
     reader: FileReader,
+    writer: WritableFileSystem | None,
     cwd: Path,
     validate_local_cwd: bool,
     executor: BashExecutor,
     max_input_bytes: int,
+    max_output_bytes: int,
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     cancellation_token: CancellationToken,
@@ -212,6 +252,13 @@ async def _query_file(
         return _failure("filter must not be empty")
     if args.timeout is not None and (not isfinite(args.timeout) or args.timeout <= 0):
         return _failure("timeout must be finite and greater than zero")
+    if args.output_path is not None:
+        if not args.output_path.strip():
+            return _failure("output_path must not be empty")
+        if "\x00" in args.output_path:
+            return _failure(NULL_BYTE_PATH_ERROR)
+        if writer is None:
+            return _failure("jq requires a writer to save output")
 
     path = await asyncio.to_thread(resolver.resolve, args.path)
     command = _jq_command(args)
@@ -244,6 +291,32 @@ async def _query_file(
     if not isinstance(executor, StdinBashExecutor) or not executor.supports_stdin:
         return _failure("jq requires an executor that supports stdin")
 
+    # Authorize the destination before opening the input or starting jq. The
+    # writer owns metadata and staged replacement in the same logical namespace.
+    output_path = None
+    if args.output_path is not None:
+        if (
+            not isinstance(executor, StdoutBashExecutor)
+            or not executor.supports_stdout_capture
+        ):
+            return _failure(
+                "saving jq output requires an executor that captures stdout"
+            )
+
+        assert writer is not None
+        output_path = await asyncio.to_thread(resolver.resolve, args.output_path)
+        error = await prepare_file_write(
+            output_path,
+            resolver=resolver,
+            writer=writer,
+            tool_name=JQ_TOOL_NAME,
+            permissions=permissions,
+            approval_callback=approval_callback,
+            context=context,
+        )
+        if error is not None:
+            return _failure(error)
+
     # A custom executor owns its directory; local configuration errors use the
     # same actionable diagnostics as bash, before the selected input is opened.
     if validate_local_cwd:
@@ -270,11 +343,77 @@ async def _query_file(
             cwd=cwd,
             timeout_seconds=args.timeout,
             stdin=content,
+            stdout_capture_limit=max_output_bytes if output_path is not None else None,
         ),
         cancellation_token,
     )
 
-    return format_command_output(result)
+    output = format_command_output(result)
+    if output_path is None or result.timed_out or result.cancelled:
+        return output
+
+    # Stopping a capture at its limit can also produce a nonzero exit. Report
+    # the incomplete capture in that case; preserve other execution failures.
+    if isinstance(output, ToolFailure) and not result.stdout_truncated:
+        return output
+
+    assert writer is not None
+    status = await _save_output(
+        result,
+        writer=writer,
+        path=output_path,
+        max_output_bytes=max_output_bytes,
+        cancellation_token=cancellation_token,
+    )
+    if isinstance(status, ToolFailure):
+        return ToolFailure(text=f"{status}\n\n{output}", error=status.error)
+
+    return f"{status}\n\n{output}"
+
+
+async def _save_output(
+    result: BashExecutionResult,
+    *,
+    writer: WritableFileSystem,
+    path: PurePath,
+    max_output_bytes: int,
+    cancellation_token: CancellationToken,
+) -> str | ToolFailure:
+    """Commit complete stdout only after successful execution and authorization."""
+    if result.stdout_truncated or (
+        result.stdout is not None and len(result.stdout) > max_output_bytes
+    ):
+        return _failure(
+            "jq output was not captured completely "
+            f"(maximum {max_output_bytes} bytes); output file was not written"
+        )
+
+    if result.exit_code != 0:
+        return _failure("jq executor did not report successful completion")
+
+    if result.stdout is None:
+        return _failure("jq executor did not return complete stdout")
+
+    if cancellation_token.is_cancelled:
+        raise asyncio.CancelledError
+
+    # write_content waits for a started commit to settle before cancellation
+    # propagates and this tool's save lock can be released.
+    try:
+        await write_content(writer, str(path), result.stdout)
+    except (FileExistsError, NotADirectoryError):
+        return _failure(f"parent path is not a directory: `{path.parent}`")
+    except IsADirectoryError:
+        return _failure(f"path is a directory: `{path}`")
+    except PermissionError:
+        return _failure(f"permission denied: `{path}`")
+    except OSError:
+        return _failure(f"failed to write file: `{path}`")
+
+    if cancellation_token.is_cancelled:
+        raise asyncio.CancelledError
+
+    return f"Wrote {len(result.stdout)} bytes to {path}."
 
 
 def _jq_command(args: _ToolArgs) -> str:
