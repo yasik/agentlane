@@ -1,4 +1,6 @@
 import asyncio
+import json
+import re
 from pathlib import Path
 from typing import cast
 
@@ -190,15 +192,93 @@ def test_read_tool_truncates_by_global_byte_limit(tmp_path: Path) -> None:
     )
 
 
-def test_read_tool_reports_oversized_requested_line(tmp_path: Path) -> None:
+def test_read_tool_continues_oversized_requested_line(tmp_path: Path) -> None:
     (tmp_path / "wide.txt").write_text("a" * (TEXT_MAX_BYTES + 1), encoding="utf-8")
 
-    output = run_tool(read_tool(cwd=tmp_path), path="wide.txt")
+    definition = read_tool(cwd=tmp_path)
+    output = run_tool(definition, path="wide.txt")
 
     assert output == (
-        f"[Line 1 is {TEXT_MAX_BYTES + 1} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
+        "a" * TEXT_MAX_BYTES + "\n\n" + f"[Showing line 1, columns 1-{TEXT_MAX_BYTES} "
+        f"({TEXT_MAX_BYTES} byte limit). "
+        f"Use offset=1, column={TEXT_MAX_BYTES + 1} to continue.]"
     )
+    assert (
+        run_tool(definition, path="wide.txt", offset=1, column=TEXT_MAX_BYTES + 1)
+        == "a"
+    )
+
+
+def test_read_tool_reconstructs_oversized_unicode_line(tmp_path: Path) -> None:
+    text = "α🙂界e\u0301" * 20_000
+    (tmp_path / "unicode.txt").write_text(text, encoding="utf-8")
+    definition = read_tool(cwd=tmp_path)
+    continuation = re.compile(
+        r"\n\n\[Showing line 1, columns \d+-\d+ \(\d+ byte limit\)\. "
+        r"Use offset=1, column=(\d+) to continue\.\]$"
+    )
+
+    pages: list[str] = []
+    column = 1
+    while True:
+        output = run_tool(definition, path="unicode.txt", offset=1, column=column)
+        notice = continuation.search(output)
+        page = output[: notice.start()] if notice else output
+        assert len(page.encode("utf-8")) <= TEXT_MAX_BYTES
+        pages.append(page)
+        if notice is None:
+            break
+
+        next_column = int(notice.group(1))
+        assert next_column > column
+        assert next_column == column + len(page)
+        column = next_column
+
+    assert len(pages) > 1
+    assert "".join(pages) == text
+
+
+def test_read_tool_column_applies_only_to_the_offset_line(tmp_path: Path) -> None:
+    (tmp_path / "notes.txt").write_text("first\nα🙂middle\nlast\n", encoding="utf-8")
+    definition = read_tool(cwd=tmp_path)
+
+    assert run_tool(definition, path="notes.txt", offset=2, column=3) == "middle\nlast"
+    assert run_tool(definition, path="notes.txt", offset=2, column=3, limit=1) == (
+        "middle\n\n[Showing lines 2-2. Use offset=3 to continue.]"
+    )
+
+
+def test_read_tool_continues_from_short_line_through_oversized_line(
+    tmp_path: Path,
+) -> None:
+    prefix = "a" * TEXT_MAX_BYTES
+    (tmp_path / "wide.txt").write_text(f"first\n{prefix}tail\nlast\n", encoding="utf-8")
+    definition = read_tool(cwd=tmp_path)
+
+    assert run_tool(definition, path="wide.txt") == (
+        f"first\n\n[Showing lines 1-1 ({TEXT_MAX_BYTES} byte limit). "
+        "Use offset=2 to continue.]"
+    )
+    assert run_tool(definition, path="wide.txt", offset=2) == (
+        prefix + f"\n\n[Showing line 2, columns 1-{TEXT_MAX_BYTES} "
+        f"({TEXT_MAX_BYTES} byte limit). "
+        f"Use offset=2, column={TEXT_MAX_BYTES + 1} to continue.]"
+    )
+    assert (
+        run_tool(definition, path="wide.txt", offset=2, column=TEXT_MAX_BYTES + 1)
+        == "tail\nlast"
+    )
+
+
+@pytest.mark.parametrize("text,column", [("content\n", 8), ("\n", 2), ("", 2)])
+def test_read_tool_rejects_column_beyond_line(
+    tmp_path: Path, text: str, column: int
+) -> None:
+    (tmp_path / "notes.txt").write_text(text, encoding="utf-8")
+
+    output = run_tool(read_tool(cwd=tmp_path), path="notes.txt", column=column)
+
+    assert output == "column exceeds line length"
 
 
 def test_read_tool_reports_missing_file(tmp_path: Path) -> None:
@@ -232,13 +312,16 @@ def test_read_tool_decodes_invalid_utf8_with_replacement(tmp_path: Path) -> None
     assert output == "\ufffd"
 
 
-def test_read_tool_rejects_invalid_offset_and_limit(tmp_path: Path) -> None:
+def test_read_tool_rejects_invalid_offset_column_and_limit(tmp_path: Path) -> None:
     (tmp_path / "notes.txt").write_text("content\n", encoding="utf-8")
     definition = read_tool(cwd=tmp_path)
 
     assert run_tool(definition, path="") == "path must not be empty"
     assert run_tool(definition, path="notes.txt", offset=0) == (
         "offset must be a 1-indexed line number"
+    )
+    assert run_tool(definition, path="notes.txt", column=0) == (
+        "column must be a 1-indexed character position"
     )
     assert run_tool(definition, path="notes.txt", limit=0) == (
         "limit must be greater than zero"
@@ -302,7 +385,10 @@ def test_read_tool_returns_empty_output_for_empty_file(tmp_path: Path) -> None:
 
 def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
     async def scenario() -> None:
-        (tmp_path / "runner.txt").write_text("runner content\n", encoding="utf-8")
+        prefix = "🙂" * (TEXT_MAX_BYTES // 4)
+        (tmp_path / "runner.txt").write_text(
+            prefix + "runner content\n", encoding="utf-8"
+        )
         runtime = SingleThreadedRuntimeEngine()
         runner = Runner()
         model = SequenceModel(
@@ -314,6 +400,22 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
                             tool_id="call_1",
                             name="read",
                             arguments='{"path":"runner.txt"}',
+                        )
+                    ],
+                ),
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        make_tool_call(
+                            tool_id="call_2",
+                            name="read",
+                            arguments=json.dumps(
+                                {
+                                    "path": "runner.txt",
+                                    "offset": 1,
+                                    "column": len(prefix) + 1,
+                                }
+                            ),
                         )
                     ],
                 ),
@@ -329,7 +431,7 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
                 tools=Tools(
                     tools=[read_tool(cwd=tmp_path).tool],
                     tool_choice="required",
-                    tool_call_limits={"read": 1},
+                    tool_call_limits={"read": 2},
                 ),
             ),
         )
@@ -348,7 +450,14 @@ def test_read_tool_executes_through_runner_tool_loop(tmp_path: Path) -> None:
         tool_message = cast(dict[str, object], state.history[2])
         assert tool_message["role"] == "tool"
         assert tool_message["name"] == "read"
-        assert tool_message["content"] == "runner content"
+        assert tool_message["content"] == (
+            prefix + f"\n\n[Showing line 1, columns 1-{len(prefix)} "
+            f"({TEXT_MAX_BYTES} byte limit). "
+            f"Use offset=1, column={len(prefix) + 1} to continue.]"
+        )
+        continuation_message = cast(dict[str, object], state.history[4])
+        assert continuation_message["role"] == "tool"
+        assert continuation_message["content"] == "runner content"
 
     asyncio.run(scenario())
 

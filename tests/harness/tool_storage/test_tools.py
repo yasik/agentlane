@@ -345,14 +345,22 @@ async def test_write_token_cancelled_during_approval_does_not_write(
     assert storage.writes == []
 
 
-def test_read_injected_oversized_first_line_keeps_bash_guidance(
+def test_read_injected_oversized_first_line_continues_by_character_column(
     storage: MemoryFileSystem,
 ) -> None:
-    storage.files["wide.txt"] = b"a" * (TEXT_MAX_BYTES + 1)
+    prefix = "🙂" * (TEXT_MAX_BYTES // 4)
+    storage.files["wide.txt"] = (prefix + "tail\nnext").encode("utf-8")
+    definition = read_tool(reader=storage)
 
-    result = run_tool(read_tool(reader=storage), path="wide.txt")
+    result = run_tool(definition, path="wide.txt")
 
     assert result == (
-        f"[Line 1 is {TEXT_MAX_BYTES + 1} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
+        prefix + "\n\n" + f"[Showing line 1, columns 1-{len(prefix)} "
+        f"({TEXT_MAX_BYTES} byte limit). "
+        f"Use offset=1, column={len(prefix) + 1} to continue.]"
     )
+    assert (
+        run_tool(definition, path="wide.txt", offset=1, column=len(prefix) + 1)
+        == "tail\nnext"
+    )
+    assert storage.opened == storage.closed == ["wide.txt", "wide.txt"]

@@ -28,13 +28,17 @@ from ._types import HarnessToolDefinition
 
 _BINARY_SAMPLE_BYTES = 4096
 _TOOL_DESCRIPTION = (
-    "Reads raw text file contents. Supports offset and limit for large "
+    "Reads raw text file contents. Supports offset, column and limit for large "
     f"files. Output is truncated to {TEXT_MAX_LINES} lines or "
-    f"{TEXT_MAX_BYTES} bytes, whichever is hit first."
+    f"{TEXT_MAX_BYTES} bytes, whichever is hit first. "
+    "Follow the returned offset and column to continue long lines."
 )
 _TOOL_PROMPT_SNIPPET = "Read file contents"
 _TOOL_PROMPT_GUIDELINE = "Use read to examine files instead of cat or sed."
 _GENERIC_READ_ERROR = "failed to read file"
+
+_COLUMN_EXCEEDS_LINE_LENGTH_ERROR = "column exceeds line length"
+"""Returned when the requested column is beyond the decoded line."""
 
 
 class _ToolArgs(BaseModel):
@@ -50,6 +54,14 @@ class _ToolArgs(BaseModel):
         description=(
             "The line number to start reading from. Must be 1 or greater. "
             "Defaults to 1."
+        ),
+    )
+    column: int | None = Field(
+        default=None,
+        description=(
+            "The Unicode code-point position to start at within the offset line. "
+            "Must be 1 or greater. Defaults to 1; use the returned column to "
+            "continue a line that exceeds the byte limit."
         ),
     )
     limit: int | None = Field(
@@ -146,6 +158,8 @@ async def _read_file(
     """Read one file and render a plain-text tool result."""
     if args.offset is not None and args.offset < 1:
         return "offset must be a 1-indexed line number"
+    if args.column is not None and args.column < 1:
+        return "column must be a 1-indexed character position"
     if args.limit is not None and args.limit < 1:
         return INVALID_LIMIT_ERROR
     if args.path.strip() == "":
@@ -174,6 +188,7 @@ async def _read_file(
         resolved_path,
         reader=reader,
         offset=args.offset or 1,
+        column=args.column or 1,
         limit=args.limit,
     )
     if cancellation_token.is_cancelled:
@@ -190,6 +205,7 @@ def _read_text_slice(
     *,
     reader: FileReader,
     offset: int,
+    column: int,
     limit: int | None,
 ) -> _ReadContent:
     """Read and close a bounded text slice in the worker that opens the stream."""
@@ -214,7 +230,10 @@ def _read_text_slice(
 
             # Reuse the sampled bytes; remote streams need not support seeking.
             return _collect_text_slice(
-                _replay_lines(bytes(sample), binary_file), offset=offset, limit=limit
+                _replay_lines(bytes(sample), binary_file),
+                offset=offset,
+                column=column,
+                limit=limit,
             )
     except IsADirectoryError:
         return _read_error(f"path is a directory: `{path}`")
@@ -250,9 +269,10 @@ def _collect_text_slice(
     lines: Iterable[bytes],
     *,
     offset: int,
+    column: int,
     limit: int | None,
 ) -> _ReadContent:
-    """Collect a bounded line slice from an iterable byte stream."""
+    """Collect bounded lines, continuing inside an oversized first line."""
     output_lines: list[str] = []
     output_bytes = 0
     total_lines = 0
@@ -272,6 +292,12 @@ def _collect_text_slice(
             break
 
         decoded_line = _decode_line(raw_line)
+        if line_number == offset and column > 1:
+            if column > len(decoded_line):
+                return _read_error(_COLUMN_EXCEEDS_LINE_LENGTH_ERROR)
+
+            decoded_line = decoded_line[column - 1 :]
+
         is_continuation = bool(output_lines)
         line_byte_count = _joined_line_byte_count(
             decoded_line, has_previous=is_continuation
@@ -285,17 +311,23 @@ def _collect_text_slice(
                     next_offset=line_number,
                 )
             else:
-                continuation_message = _oversized_line_message(
+                # Split on a Unicode character boundary without changing the
+                # stored line. The next read resumes at this character column.
+                prefix = decoded_line.encode("utf-8")[:TEXT_MAX_BYTES].decode(
+                    "utf-8", errors="ignore"
+                )
+                output_lines.append(prefix)
+                continuation_message = _column_continuation_message(
                     line_number=line_number,
-                    line_bytes=line_byte_count,
+                    column=column,
+                    character_count=len(prefix),
                 )
             break
 
         output_lines.append(decoded_line)
         output_bytes += line_byte_count
 
-    # No output can mean either an invalid offset or a valid but oversized line.
-    # Preserve the continuation diagnostic in the latter case.
+    # An empty file accepts the default position but has no later line or column.
     if (
         not output_lines
         and continuation_message is None
@@ -305,6 +337,8 @@ def _collect_text_slice(
         )
     ):
         return _read_error("offset exceeds file length")
+    if total_lines == 0 and column > 1:
+        return _read_error(_COLUMN_EXCEEDS_LINE_LENGTH_ERROR)
 
     return _ReadContent(
         lines=tuple(output_lines),
@@ -348,11 +382,16 @@ def _byte_continuation_message(
     )
 
 
-def _oversized_line_message(*, line_number: int, line_bytes: int) -> str:
-    """Build the model-facing note for a single line beyond the byte limit."""
+def _column_continuation_message(
+    *, line_number: int, column: int, character_count: int
+) -> str:
+    """Build the continuation note for a partial Unicode text line."""
+    end_column = column + character_count - 1
+
     return (
-        f"[Line {line_number} is {line_bytes} bytes, exceeds "
-        f"{TEXT_MAX_BYTES} byte limit. Use bash to inspect it.]"
+        f"[Showing line {line_number}, columns {column}-{end_column} "
+        f"({TEXT_MAX_BYTES} byte limit). "
+        f"Use offset={line_number}, column={end_column + 1} to continue.]"
     )
 
 
