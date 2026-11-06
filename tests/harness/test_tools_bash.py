@@ -7,6 +7,7 @@ import os
 import shlex
 import signal
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -299,6 +300,90 @@ async def test_local_executor_stops_while_stdin_is_blocked(
         assert result.exit_code is not None
 
     assert asyncio.all_tasks() == initial_tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["exit", "timeout", "token", "task"])
+@pytest.mark.parametrize("input_bytes", [32 * 1024, 96 * 1024, 2 * 1024 * 1024])
+async def test_local_executor_closes_stdin_held_by_detached_child(
+    tmp_path: Path, stop: str, input_bytes: int
+) -> None:
+    if os.name != "posix":
+        pytest.skip("requires POSIX process sessions")
+
+    # The detached child keeps stdin open without reading it, even after the
+    # command's process group has exited.
+    pid_file = tmp_path / "child.pid"
+    code = (
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen(\n"
+        "    [sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+        "    start_new_session=True,\n"
+        "    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,\n"
+        ")\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid))\n"
+        "time.sleep(0 if sys.argv[2] == 'exit' else 30)\n"
+    )
+
+    # Pipe capacities vary by platform. Exercise both pending writes and the
+    # final flush, and capture callback failures from cancelled close waiters.
+    initial_tasks = asyncio.all_tasks()
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    unhandled: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(
+                command=shlex.join([sys.executable, "-c", code, str(pid_file), stop]),
+                cwd=tmp_path,
+                stdin=b"x" * input_bytes,
+                timeout_seconds=1 if stop == "timeout" else None,
+            ),
+            token,
+        )
+    )
+    try:
+        # Wait for the inherited handle before testing either cancellation path.
+        async with asyncio.timeout(3):
+            while not pid_file.exists() or not pid_file.read_text():
+                await asyncio.sleep(0.01)
+
+        if stop == "token":
+            token.cancel()
+        elif stop == "task":
+            task.cancel()
+
+        # Observe completion without cancelling a hung executor: wait_for would
+        # itself wait indefinitely if cancellation cleanup regresses.
+        done, _ = await asyncio.wait({task}, timeout=3)
+        assert task in done
+        if stop == "task":
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            result = await task
+            assert result.timed_out == (stop == "timeout")
+            assert result.cancelled == (stop == "token")
+            assert result.exit_code is not None
+            if stop == "exit":
+                assert result.exit_code == 0
+
+        assert asyncio.all_tasks() == initial_tasks
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+        # The detached process is outside executor ownership. Close its inherited
+        # pipe even on assertion failure, so the test cannot leave cleanup hung.
+        if pid_file.exists():
+            with suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        if not task.done():
+            token.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 def test_bash_tool_rejects_invalid_default_timeout() -> None:

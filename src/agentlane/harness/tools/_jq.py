@@ -48,6 +48,14 @@ _TOOL_DESCRIPTION = (
 _TOOL_PROMPT_SNIPPET = "Select and transform JSON file contents with jq"
 """List the tool in the harness prompt."""
 
+_TOOL_PROMPT_GUIDELINES = (
+    "Use jq to select JSON fields, filter records, and compute summaries. "
+    "Pass only a jq filter, without shell quoting or a jq command prefix.",
+    "Use narrower filters or array slices when output is large. "
+    "Truncated output is a text preview, not a complete JSON document.",
+)
+"""Guide jq filter arguments and recovery from truncated results."""
+
 _GENERIC_JQ_ERROR = "failed to run jq"
 """Hide internal details when file access or execution fails unexpectedly."""
 
@@ -171,10 +179,7 @@ def jq_tool(
         ),
         prompt_snippet=_TOOL_PROMPT_SNIPPET,
         prompt_guidelines=(
-            "Use jq to select JSON fields, filter records, and compute summaries. "
-            "Pass only a jq filter, without shell quoting or a jq command prefix.",
-            "Use narrower filters or array slices when output is large. "
-            "Truncated output is a text preview, not a complete JSON document.",
+            *_TOOL_PROMPT_GUIDELINES,
             f"jq reads at most {max_input_bytes} bytes from one file. "
             "Set timeout for filters that may run for a long time; otherwise "
             "the executor's default timeout applies.",

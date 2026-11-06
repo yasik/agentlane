@@ -428,17 +428,31 @@ async def _read_stream(
 
 async def _write_stdin(stream: asyncio.StreamWriter, data: bytes) -> None:
     """Send input while output is drained, then close the child's stdin."""
+    close_task: asyncio.Task[None] | None = None
     try:
-        for offset in range(0, len(data), _STREAM_READ_SIZE):
-            stream.write(data[offset : offset + _STREAM_READ_SIZE])
-            await stream.drain()
+        try:
+            for offset in range(0, len(data), _STREAM_READ_SIZE):
+                stream.write(data[offset : offset + _STREAM_READ_SIZE])
+                await stream.drain()
+        finally:
+            stream.close()
+
+        # The subprocess protocol owns the close waiter. Keep cancellation from
+        # cancelling that waiter before its connection-lost callback completes.
+        close_task = asyncio.create_task(stream.wait_closed())
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError:
+        # Discard buffered input: a detached child can keep the pipe open
+        # without reading, even after the command's process group exits.
+        stream.transport.abort()
+        if close_task is None:
+            close_task = asyncio.create_task(stream.wait_closed())
+        with suppress(BrokenPipeError, ConnectionResetError):
+            await asyncio.shield(close_task)
+        raise
     except (BrokenPipeError, ConnectionResetError):
         # A command can finish successfully before it consumes all its input.
         pass
-    finally:
-        stream.close()
-        with suppress(BrokenPipeError, ConnectionResetError):
-            await stream.wait_closed()
 
 
 async def _watch_process_exit(

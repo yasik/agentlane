@@ -15,6 +15,7 @@ def format_command_output(result: BashExecutionResult) -> str | ToolFailure:
     output = result.output.text.rstrip("\n") or "(no output)"
     notices: list[str] = []
 
+    # Point to the complete log when the visible command output is truncated.
     if result.output_truncated and result.full_output_path is not None:
         notices.append(
             "Showing last "
@@ -22,6 +23,7 @@ def format_command_output(result: BashExecutionResult) -> str | ToolFailure:
             f"Full output: {result.full_output_path}"
         )
 
+    # Keep the process outcome visible alongside any output it produced.
     error = _command_failure(result)
     if result.timed_out:
         if result.timeout_seconds is None:
@@ -40,8 +42,10 @@ def format_command_output(result: BashExecutionResult) -> str | ToolFailure:
         if not notices
         else output + "\n\n" + "\n".join(f"[{notice}]" for notice in notices)
     )
+
     if error is None:
         return text
+
     return ToolFailure(text=text, error=error)
 
 
@@ -49,19 +53,23 @@ def _command_failure(result: BashExecutionResult) -> ToolError | None:
     """Map a command execution result to a typed failure, or None on success."""
     if result.timed_out:
         return ToolError(message="Command timed out", kind=ToolErrorKind.TIMEOUT.value)
+
     if result.cancelled:
         return ToolError(
             message="Command cancelled", kind=ToolErrorKind.CANCELLED.value
         )
+
     if result.exit_code is not None and result.exit_code != 0:
         return ToolError(
             message=f"Command exited with code {result.exit_code}",
             kind=ToolErrorKind.NONZERO_EXIT.value,
         )
+
     return None
 
 
 def _format_seconds(seconds: float) -> str:
     if seconds.is_integer():
         return str(int(seconds))
+
     return str(seconds)

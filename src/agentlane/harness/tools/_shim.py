@@ -251,7 +251,8 @@ def base_harness_tools(
     """Return currently implemented first-party base harness tools.
 
     Args:
-        cwd: Process workspace for grep and bash, and for default local file tools.
+        cwd: Process workspace for grep, bash, and jq, and for default local file
+            tools.
         reader: Filesystem for read, jq, find, and patch. Find also requires listings
             and metadata. A WritableFileSystem reader supplies default writes.
         writer: Storage writer for write and patch in the reader's namespace.

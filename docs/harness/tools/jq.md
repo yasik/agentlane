@@ -104,11 +104,13 @@ automatically access that path. Narrow the filter for a smaller result; the
 host can also provide access to the log. A truncated preview can contain
 incomplete JSON. The host owns log retention.
 
-Non-zero exits, timeouts, and cancellation carry `ToolFailure` metadata while
-retaining their readable output. For example, a malformed final JSONL record
-can produce earlier results followed by a failure. The runner reports that
-call as failed. Missing files, input-size limits, and permission errors also
-return tool failures.
+Non-zero exits, timeouts, and cancellation results returned by the executor
+carry `ToolFailure` metadata while retaining their readable output. For example,
+a malformed final JSONL record can produce earlier results followed by a
+failure. The runner reports that call as failed. Missing files, input-size
+limits, and permission errors also return tool failures. Cancellation before
+execution or during the input read, and task cancellation, propagate
+`asyncio.CancelledError`.
 
 Run the [local and mounted JSON example](../../../examples/harness/jq_json/README.md)
 without a model or API key.
