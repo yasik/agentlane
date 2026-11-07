@@ -60,15 +60,18 @@ from agentlane.harness.tools import (
 ```
 
 This block shows a representative subset. `agentlane.harness.tools` also
-re-exports the path, output, and bash-executor primitives — `ToolPathResolver`,
+re-exports the path, output, and executor primitives — `ToolPathResolver`,
 `GitignoreMatcher`, `ToolPermissionGrantPolicy`, `ToolPermissionOutcome`, the
-output-limit constants (`TEXT_MAX_BYTES`, `TEXT_MAX_LINES`, `BASH_MAX_BYTES`,
+output-limit constants (`TEXT_MAX_BYTES`, `TEXT_MAX_LINES`, `PROCESS_MAX_BYTES`,
+`PROCESS_MAX_LINES`, `BASH_MAX_BYTES`,
 `BASH_MAX_LINES`, `GREP_DEFAULT_LIMIT`, `GREP_MAX_LINE_LENGTH`,
 `FIND_DEFAULT_LIMIT`, `LS_DEFAULT_LIMIT`) plus `TruncatedOutput` and
-`truncate_output`, and the bash-executor contract types (`BashExecutor`,
-`LocalBashExecutor`, `BashExecutionRequest`, `BashExecutionResult`,
-`BashShellConfig`, `resolve_bash_shell`). See [bash](./bash.md) for the
-executor contracts.
+`truncate_output`, the native process contract (`ProcessExecutor`,
+`LocalProcessExecutor`, `ProcessExecutionRequest`, `ProcessExecutionResult`,
+`ProcessStopReason`), and the Bash executor types (`BashExecutor`,
+`LocalBashExecutor`, `BashExecutionRequest`,
+`BashExecutionResult`, `BashShellConfig`, `resolve_bash_shell`). See
+[Process execution](../process-execution.md) and [bash](./bash.md).
 
 ## Tool Definitions
 

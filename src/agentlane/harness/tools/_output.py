@@ -9,10 +9,16 @@ TEXT_MAX_LINES = 2000
 TEXT_MAX_BYTES = 50 * 1024
 """Maximum number of text-file bytes returned by default."""
 
-BASH_MAX_LINES = 2000
+PROCESS_MAX_LINES = 2000
+"""Maximum number of process output lines returned by default."""
+
+PROCESS_MAX_BYTES = 50 * 1024
+"""Maximum number of process output bytes returned by default."""
+
+BASH_MAX_LINES = PROCESS_MAX_LINES
 """Maximum number of bash output lines returned by default."""
 
-BASH_MAX_BYTES = 50 * 1024
+BASH_MAX_BYTES = PROCESS_MAX_BYTES
 """Maximum number of bash output bytes returned by default."""
 
 GREP_DEFAULT_LIMIT = 100

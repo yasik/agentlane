@@ -47,7 +47,8 @@ Use this page when adding or changing first-party tools, especially tools under
   resolution.
 - Keep truncation deterministic and visible in the result text. Use shared
   output constants such as `TEXT_MAX_LINES`, `TEXT_MAX_BYTES`,
-  `BASH_MAX_LINES`, and `BASH_MAX_BYTES`.
+  `PROCESS_MAX_LINES`, and `PROCESS_MAX_BYTES`. Existing Bash clients retain
+  `BASH_MAX_LINES` and `BASH_MAX_BYTES`.
 - Apply caller-provided limits before global output caps.
 
 ## Error results

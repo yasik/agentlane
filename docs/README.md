@@ -94,6 +94,7 @@ Build agent loops and extend their behavior:
 - [Run event serialization](./harness/event-serialization.md)
 - [Distributed agents](./harness/distributed-agents.md)
 - [File I/O interfaces](./harness/filesystem.md)
+- [Process execution](./harness/process-execution.md)
 
 #### Sandboxes
 

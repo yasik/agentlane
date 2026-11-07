@@ -1,11 +1,9 @@
 """Tests for the first-party bash harness tool."""
 
 import asyncio
-import importlib
 import json
 import os
 import shlex
-import signal
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -27,14 +25,17 @@ from agentlane.harness.shims import PreparedTurn, ShimBindingContext
 from agentlane.harness.tools import (
     BashExecutionRequest,
     BashExecutionResult,
+    BashShellConfig,
     HarnessToolDefinition,
     HarnessToolsShim,
+    LocalBashExecutor,
     ToolOperation,
     ToolPermissionDecision,
     ToolPermissionOutcome,
     ToolPermissionRequest,
     WorkspaceToolPermissionPolicy,
     bash_tool,
+    resolve_bash_shell,
 )
 from agentlane.harness.tools._output import TruncatedOutput
 from agentlane.models import (
@@ -503,38 +504,6 @@ def test_bash_tool_line_truncation_preserves_full_log() -> None:
         _unlink_full_output_path(output)
 
 
-def test_bash_tool_windows_graceful_signal_uses_process_group_break(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeWindowsProcess:
-        pid = 123
-        returncode: int | None = None
-
-        def __init__(self) -> None:
-            self.signals: list[object] = []
-            self.terminated = False
-
-        def send_signal(self, sig: object) -> None:
-            self.signals.append(sig)
-
-        def terminate(self) -> None:
-            self.terminated = True
-
-    ctrl_break_event = object()
-    process = FakeWindowsProcess()
-
-    monkeypatch.setattr(os, "name", "nt")
-    monkeypatch.setattr(signal, "CTRL_BREAK_EVENT", ctrl_break_event, raising=False)
-
-    bash_executor = importlib.import_module("agentlane.harness.tools._bash_executor")
-    helper_name = "_send_process_signal"
-    send_process_signal = getattr(bash_executor, helper_name)
-    send_process_signal(cast(Any, process), signal.SIGTERM)
-
-    assert process.signals == [ctrl_break_event]
-    assert process.terminated is False
-
-
 def test_bash_tool_supports_quotes_and_shell_expansion() -> None:
     output = _run_bash("name='Agent Lane'; printf \"hello ${name}\\n\"")
 
@@ -688,3 +657,88 @@ async def test_custom_executor_keeps_workspace_symlink_path(tmp_path: Path) -> N
     tool = _executable_tool(bash_tool(cwd=logical, executor=executor))
     await tool.run(tool.args_type()(command="pwd"), CancellationToken())
     assert executor.requests[0].cwd == logical
+
+
+@pytest.mark.asyncio
+async def test_bash_adapter_preserves_startup_files_and_explicit_environment(
+    tmp_path: Path,
+) -> None:
+    startup = tmp_path / "startup.bash"
+    startup.write_text("printf 'startup\\n'\n", encoding="utf-8")
+    result = await LocalBashExecutor().run(
+        BashExecutionRequest(
+            command='printf "%s\\n" "$AGENTLANE_VALUE"',
+            cwd=tmp_path,
+            env={"BASH_ENV": str(startup), "AGENTLANE_VALUE": "explicit"},
+        ),
+        CancellationToken(),
+    )
+
+    assert result.exit_code == 0
+    assert result.output.text == "startup\nexplicit\n"
+
+
+@pytest.mark.asyncio
+async def test_bash_adapter_preserves_custom_shell_options_and_default_timeout(
+    tmp_path: Path,
+) -> None:
+    executor = LocalBashExecutor(
+        default_timeout=2,
+        shell_config=BashShellConfig(
+            executable=resolve_bash_shell().executable, args=("--noprofile", "-rc")
+        ),
+    )
+    result = await executor.run(
+        BashExecutionRequest(command="cd /", cwd=tmp_path), CancellationToken()
+    )
+
+    assert result.exit_code == 1
+    assert "cd: restricted" in result.output.text
+    assert result.timeout_seconds == 2
+    assert not result.timed_out
+
+
+@pytest.mark.asyncio
+async def test_bash_adapter_preserves_queued_token_cancellation_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = False
+
+    async def unexpected_start(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        nonlocal started
+        del args, kwargs
+        started = True
+        raise AssertionError("cancelled startup must not create a child")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_start)
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(command="printf hidden", cwd=tmp_path), token
+        )
+    )
+    asyncio.get_running_loop().call_soon(token.cancel)
+    result = await task
+
+    assert not started
+    assert result.cancelled
+    assert result.exit_code is None
+    assert result.output.text == ""
+
+
+@pytest.mark.asyncio
+async def test_bash_adapter_does_not_swallow_simultaneous_task_cancellation(
+    tmp_path: Path,
+) -> None:
+    token = CancellationToken()
+    task = asyncio.create_task(
+        LocalBashExecutor().run(
+            BashExecutionRequest(command="sleep 30", cwd=tmp_path), token
+        )
+    )
+    await asyncio.sleep(0)
+    token.cancel()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task

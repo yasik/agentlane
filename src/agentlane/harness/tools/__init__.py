@@ -27,6 +27,8 @@ from ._output import (
     GREP_DEFAULT_LIMIT,
     GREP_MAX_LINE_LENGTH,
     LS_DEFAULT_LIMIT,
+    PROCESS_MAX_BYTES,
+    PROCESS_MAX_LINES,
     TEXT_MAX_BYTES,
     TEXT_MAX_LINES,
     TruncatedOutput,
@@ -57,6 +59,13 @@ from ._plan import (
     PlanUpdate,
     plan_tool,
 )
+from ._process_executor import (
+    LocalProcessExecutor,
+    ProcessExecutionRequest,
+    ProcessExecutionResult,
+    ProcessExecutor,
+    ProcessStopReason,
+)
 from ._read import read_tool
 from ._shim import BASE_TOOL_NAMES, HarnessToolsShim, base_harness_tools
 from ._types import HarnessToolDefinition
@@ -83,6 +92,13 @@ __all__ = [
     "WorkspaceToolsShim",
     "LS_DEFAULT_LIMIT",
     "LocalBashExecutor",
+    "LocalProcessExecutor",
+    "PROCESS_MAX_BYTES",
+    "PROCESS_MAX_LINES",
+    "ProcessExecutionRequest",
+    "ProcessExecutionResult",
+    "ProcessExecutor",
+    "ProcessStopReason",
     "TEXT_MAX_BYTES",
     "TEXT_MAX_LINES",
     "AllOfToolPermissionPolicy",
