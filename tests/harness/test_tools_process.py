@@ -217,7 +217,9 @@ async def test_local_executor_closes_stdin_held_by_detached_child(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("data", [b"", b"raw\x00\xff\n" * 20_000])
+@pytest.mark.parametrize(
+    "data", [b"", b"raw\x00\xff\n" * 20_000], ids=("empty", "large-binary")
+)
 @pytest.mark.parametrize("exit_code", [0, 7])
 async def test_local_executor_captures_exact_stdout_separately_from_stderr(
     tmp_path: Path, data: bytes, exit_code: int
