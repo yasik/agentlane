@@ -1,12 +1,15 @@
 """Revision-checked storage keeps concurrent patches from overwriting each other."""
 
+import asyncio
 from contextlib import AbstractContextManager
 from typing import cast
 
 import pytest
 
+from agentlane.harness._storage_write import write_content
 from agentlane.harness.filesystem import (
     BinaryReader,
+    FileRevisionConflictError,
     MountedFileSystem,
     SkillReader,
 )
@@ -124,3 +127,65 @@ def test_mounted_write_revision_requires_a_revisioned_mount(
 
     with pytest.raises(PermissionError):
         mounted.open_write_revision("/plain/notes.txt", "0")
+
+
+def test_revision_write_after_file_changes_inside_open_writer_conflicts(
+    revisioned_storage: RevisionedMemoryFileSystem,
+) -> None:
+    revisioned_storage.files["report.json"] = _REPORT.encode()
+    with revisioned_storage.open_read_revision("report.json") as (_, revision):
+        assert revision is not None
+
+    # The check belongs to the commit, so a change after the writer opens still
+    # fails the write and keeps the competing content.
+    with pytest.raises(FileRevisionConflictError):
+        with revisioned_storage.open_write_revision("report.json", revision) as stream:
+            stream.write(b"stale replacement")
+            revisioned_storage.write("report.json", b"competing")
+
+    assert revisioned_storage.files["report.json"] == b"competing"
+
+
+def test_patch_revision_reader_with_unchecked_writer_is_rejected(
+    storage: MemoryFileSystem, revisioned_storage: RevisionedMemoryFileSystem
+) -> None:
+    with pytest.raises(ValueError, match="writer must implement FileRevisions"):
+        patch_tool(reader=revisioned_storage, writer=storage)
+
+
+def test_patch_max_attempts_one_returns_conflict_without_replay(
+    revisioned_storage: RevisionedMemoryFileSystem,
+) -> None:
+    revisioned_storage.files["report.json"] = _REPORT.encode()
+
+    def change_file() -> None:
+        revisioned_storage.write("report.json", _REPORT.encode())
+
+    revisioned_storage.before_checked_write.extend([change_file] * 3)
+    result = run_tool(
+        patch_tool(
+            reader=revisioned_storage, writer=revisioned_storage, max_attempts=1
+        ),
+        path="report.json",
+        edits=_edit("A", "first"),
+    )
+
+    assert result == (
+        "File changed while it was patched: report.json. "
+        "Read it again and repeat the patch."
+    )
+    assert revisioned_storage.conflicts == 1
+
+
+def test_patch_max_attempts_below_one_is_rejected(
+    revisioned_storage: RevisionedMemoryFileSystem,
+) -> None:
+    with pytest.raises(ValueError, match="max_attempts must be at least 1"):
+        patch_tool(reader=revisioned_storage, writer=revisioned_storage, max_attempts=0)
+
+
+def test_revision_write_with_unchecked_writer_raises_type_error(
+    storage: MemoryFileSystem,
+) -> None:
+    with pytest.raises(TypeError, match="FileRevisions"):
+        asyncio.run(write_content(storage, "report.json", b"x", revision="0"))

@@ -13,6 +13,10 @@ async def write_content(
 
     With a revision, the write replaces the file only while it still has that
     revision; the writer must then implement `FileRevisions`.
+
+    Raises:
+        TypeError: If a revision is given and the writer does not implement
+            `FileRevisions`.
     """
     task = asyncio.create_task(
         asyncio.to_thread(_write, writer, path, content, revision)
@@ -43,9 +47,12 @@ async def write_content(
 def _write(writer: FileWriter, path: str, content: bytes, revision: str | None) -> None:
     if revision is None:
         opened = writer.open_write(path)
-    else:
-        assert isinstance(writer, FileRevisions)
+    elif isinstance(writer, FileRevisions):
         opened = writer.open_write_revision(path, revision)
+    else:
+        raise TypeError(
+            "a revision-checked write needs a writer that implements FileRevisions"
+        )
 
     # The context exit may commit buffered data; completion includes that step.
     with opened as stream:

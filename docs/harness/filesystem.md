@@ -60,13 +60,37 @@ A remote adapter must implement the contract using its provider's facilities.
 
 `FileRevisions` is optional. Implement it when other writers can change a file
 while a tool edits it. `open_read_revision` returns the stream and an opaque
-revision for the content that the stream reads, or `None`. `open_write_revision`
-replaces the file only while it still has that revision. Otherwise it raises
-`FileRevisionConflictError` and keeps the stored file. Only the backend creates
-and compares revisions. The patch tool reads the revision, applies its edits,
-and writes with the revision. On a conflict it reads the file again and applies
-the same edits, up to three times. Backends without `FileRevisions` write without
-a check. `MountedFileSystem` sends revisions to the mount that issued them.
+revision for exactly the bytes that the stream reads, or `None`.
+`open_write_revision` replaces the file only while it still has that revision.
+Otherwise it raises `FileRevisionConflictError` and keeps the stored file. Only
+the backend creates and compares revisions.
+
+The revision check and the replacement must be one atomic operation when the
+write commits. Do not check the revision only when the writer opens: another
+writer can commit between that check and the replacement. Use the storage
+provider's conditional write, for example a generation or ETag precondition on
+the upload.
+
+The patch tool reads the revision, applies its edits, and writes with the
+revision. On a conflict it reads the file again and applies the same edits. It
+makes up to `max_attempts` attempts, three by default. Set `max_attempts=1` to
+return the first conflict to the caller without a replay. A replay applies the
+same text edits to fresh content and fails when they no longer match. It does
+not resolve business conflicts; the application owns those rules.
+
+When the reader and the writer are separate objects, they must use the same
+storage namespace and the same revision contract. `patch_tool` rejects a reader
+that reports revisions with a writer that cannot check them.
+`MountedFileSystem` sends revisions to the mount that issued them.
+
+Limits:
+
+- AgentLane provides the interface, mount routing, and a test implementation.
+  It does not include a production backend; the application supplies one.
+- Backends without `FileRevisions` remain unprotected. Their patch writes do not
+  check for concurrent changes.
+- Whole-file writes, such as the `write` tool, remain unconditional. A later
+  whole-file write can replace the result of a patch.
 
 `stat` returns `FileInfo(is_directory=...)`, or `None` for a missing path.
 The storage root must exist: `.` for a relative namespace, `/` for mounts.

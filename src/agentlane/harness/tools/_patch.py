@@ -43,7 +43,7 @@ _GENERIC_PATCH_ERROR = "failed to patch file"
 
 # Another writer can change a revision-checked file between this tool's read and
 # write; each retry reads the new content and applies the same edits again.
-_REVISION_ATTEMPTS = 3
+_DEFAULT_REVISION_ATTEMPTS = 3
 
 
 class _ToolArgs(BaseModel):
@@ -66,6 +66,7 @@ def patch_tool(
     writer: FileWriter | None = None,
     permissions: ToolPermissionPolicy | None = None,
     approval_callback: ToolApprovalCallback | None = None,
+    max_attempts: int = _DEFAULT_REVISION_ATTEMPTS,
 ) -> HarnessToolDefinition:
     """Build the first-party patch harness tool.
 
@@ -77,17 +78,42 @@ def patch_tool(
         reader: Optional storage reader. Supply both reader and writer.
         writer: Writer for the same namespace as reader. Mounted paths are rooted
             virtual paths; other injected paths remain relative POSIX paths.
-            Calls through this tool instance serialize read-edit-write.
-            Callers must coordinate separate tool instances and external writers.
+            Separate reader and writer objects must use the same namespace and
+            the same revision contract. Calls through this tool instance
+            serialize read-edit-write. When the backend implements
+            `FileRevisions`, each write is also checked against the revision
+            that was read, which protects against separate tool instances and
+            external writers that commit in between. Without `FileRevisions`,
+            callers must coordinate separate tool instances and external
+            writers. Whole-file writes are never checked, so a later whole-file
+            write can still replace a patch result.
         permissions: Optional policy for modify permission decisions.
         approval_callback: Optional callback for approval-required decisions.
+        max_attempts: Attempts per patch on a revision conflict. Each attempt
+            reads the file again and applies the same edits. `1` makes one
+            checked write and returns the conflict without a replay.
 
     Returns:
         HarnessToolDefinition: Executable patch tool with prompt metadata.
+
+    Raises:
+        ValueError: If only one of reader and writer is supplied, if the reader
+            reports revisions but the writer cannot check them, or if
+            `max_attempts` is less than 1.
     """
     # A partial override could read one namespace and replace a different file.
     if (reader is None) != (writer is None):
         raise ValueError("patch requires both reader and writer for the same namespace")
+
+    # A revision from the reader is useless to a writer that cannot check it.
+    if isinstance(reader, FileRevisions) and not isinstance(writer, FileRevisions):
+        raise ValueError(
+            "patch reader reports revisions, so its writer must implement "
+            "FileRevisions for the same storage"
+        )
+
+    if max_attempts < 1:
+        raise ValueError("patch max_attempts must be at least 1")
 
     resolver = (
         ToolPathResolver.for_optional(cwd)
@@ -117,6 +143,7 @@ def patch_tool(
                 permissions=permissions,
                 approval_callback=approval_callback,
                 context=context,
+                max_attempts=max_attempts,
             )
         except Exception:
             return _GENERIC_PATCH_ERROR
@@ -144,6 +171,7 @@ async def _patch_file(
     permissions: ToolPermissionPolicy | None,
     approval_callback: ToolApprovalCallback | None,
     context: ToolExecutionContext,
+    max_attempts: int,
 ) -> str:
     """Parse, apply, and render one model-facing patch result."""
     validation_error = _validate_args(args)
@@ -195,7 +223,12 @@ async def _patch_file(
             # A cancelled commit settles before the next patch can read.
             async with storage_lock:
                 applied = await _patch_storage_file(
-                    reader, writer, resolved_path, edits, cancellation_token
+                    reader,
+                    writer,
+                    resolved_path,
+                    edits,
+                    cancellation_token,
+                    max_attempts,
                 )
     except patch_engine.EmptyOldTextError as exc:
         return _format_empty_search_error(resolved_path, exc.edit_index, len(edits))
@@ -239,12 +272,13 @@ async def _patch_storage_file(
     path: PurePath,
     edits: list[patch_engine.Edit],
     token: CancellationToken,
+    max_attempts: int,
 ) -> int:
     """Apply edits to injected storage and return how many were applied.
 
     Raises:
         FileRevisionConflictError: If the file changes between the read and the
-            write on every attempt.
+            write on every one of `max_attempts` attempts.
     """
     conflicts = 0
     while True:
@@ -271,7 +305,7 @@ async def _patch_storage_file(
             )
         except FileRevisionConflictError:
             conflicts += 1
-            if conflicts == _REVISION_ATTEMPTS:
+            if conflicts == max_attempts:
                 raise
 
             continue
