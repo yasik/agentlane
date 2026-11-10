@@ -6,7 +6,12 @@ from pathlib import Path, PurePath
 import patch_tool as patch_engine
 from pydantic import BaseModel, Field
 
-from agentlane.harness.filesystem import FileReader, FileWriter
+from agentlane.harness.filesystem import (
+    FileReader,
+    FileRevisionConflictError,
+    FileRevisions,
+    FileWriter,
+)
 from agentlane.io import read_all
 from agentlane.models import Tool, ToolExecutionContext
 from agentlane.runtime import CancellationToken
@@ -35,6 +40,10 @@ _TOOL_PROMPT_GUIDELINES = (
     "Each patch SEARCH block must match exactly one location; include enough surrounding lines to make it unique.",
 )
 _GENERIC_PATCH_ERROR = "failed to patch file"
+
+# Another writer can change a revision-checked file between this tool's read and
+# write; each retry reads the new content and applies the same edits again.
+_REVISION_ATTEMPTS = 3
 
 
 class _ToolArgs(BaseModel):
@@ -185,26 +194,9 @@ async def _patch_file(
             # Keep the snapshot and replacement in one per-instance operation.
             # A cancelled commit settles before the next patch can read.
             async with storage_lock:
-                if cancellation_token.is_cancelled:
-                    raise asyncio.CancelledError
-
-                text_result = await asyncio.to_thread(
-                    _prepare_storage_patch,
-                    reader,
-                    resolved_path,
-                    edits,
-                    cancellation_token,
+                applied = await _patch_storage_file(
+                    reader, writer, resolved_path, edits, cancellation_token
                 )
-
-                # A worker read can finish after cancellation; do not start a
-                # commit merely because it returned a valid edit result.
-                if cancellation_token.is_cancelled:
-                    raise asyncio.CancelledError
-
-                await write_content(
-                    writer, str(resolved_path), text_result.content.encode("utf-8")
-                )
-                applied = text_result.edits_applied
     except patch_engine.EmptyOldTextError as exc:
         return _format_empty_search_error(resolved_path, exc.edit_index, len(edits))
     except patch_engine.TextNotFoundError as exc:
@@ -222,6 +214,11 @@ async def _patch_file(
         )
     except patch_engine.NoChangesError:
         return _format_no_changes_error(resolved_path, len(edits))
+    except FileRevisionConflictError:
+        return (
+            f"File changed while it was patched: {resolved_path}. "
+            "Read it again and repeat the patch."
+        )
     except IsADirectoryError:
         return f"Path is a directory: {resolved_path}"
     except FileNotFoundError:
@@ -236,22 +233,79 @@ async def _patch_file(
     return _format_success(resolved_path, applied)
 
 
+async def _patch_storage_file(
+    reader: FileReader,
+    writer: FileWriter,
+    path: PurePath,
+    edits: list[patch_engine.Edit],
+    token: CancellationToken,
+) -> int:
+    """Apply edits to injected storage and return how many were applied.
+
+    Raises:
+        FileRevisionConflictError: If the file changes between the read and the
+            write on every attempt.
+    """
+    conflicts = 0
+    while True:
+        if token.is_cancelled:
+            raise asyncio.CancelledError
+
+        text_result, revision = await asyncio.to_thread(
+            _prepare_storage_patch, reader, path, edits, token
+        )
+
+        # A worker read can finish after cancellation; do not start a
+        # commit merely because it returned a valid edit result.
+        if token.is_cancelled:
+            raise asyncio.CancelledError
+
+        # A conflict means another writer committed after this read, so read
+        # its content and apply the same edits again until attempts run out.
+        try:
+            await write_content(
+                writer,
+                str(path),
+                text_result.content.encode("utf-8"),
+                revision=revision,
+            )
+        except FileRevisionConflictError:
+            conflicts += 1
+            if conflicts == _REVISION_ATTEMPTS:
+                raise
+
+            continue
+
+        return text_result.edits_applied
+
+
 def _prepare_storage_patch(
     reader: FileReader,
     path: PurePath,
     edits: list[patch_engine.Edit],
     token: CancellationToken,
-) -> patch_engine.TextEditResult:
-    """Apply all edits privately before any write to the injected backend."""
-    with reader.open_read(str(path)) as source:
-        content = read_all(source).decode("utf-8")
+) -> tuple[patch_engine.TextEditResult, str | None]:
+    """Apply all edits privately before any write to the injected backend.
+
+    Returns the edited text and the revision of the content that was read, or
+    None when the backend does not report revisions.
+    """
+    if isinstance(reader, FileRevisions):
+        with reader.open_read_revision(str(path)) as (source, revision):
+            content = read_all(source).decode("utf-8")
+    else:
+        revision = None
+        with reader.open_read(str(path)) as source:
+            content = read_all(source).decode("utf-8")
 
     if token.is_cancelled:
         raise asyncio.CancelledError
 
     # Finish all matching in memory before opening a writer. A failed edit must
     # leave the original content intact, including its BOM and line endings.
-    return patch_engine.apply_edits_to_text(content, edits, path_hint=str(path))
+    result = patch_engine.apply_edits_to_text(content, edits, path_hint=str(path))
+
+    return result, revision
 
 
 def _validate_args(args: _ToolArgs) -> str | None:

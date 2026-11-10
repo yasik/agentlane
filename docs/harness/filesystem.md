@@ -40,6 +40,7 @@ stream protocols and concrete implementations.
 | `FileReader` | `open_read(path)` | Read and patch tools |
 | `FileWriter` | `open_write(path)` | Patch writes |
 | `FileStat` | `stat(path)` | File inspection and permission decisions |
+| `FileRevisions` | `open_read_revision(path)`, `open_write_revision(path, revision)` | Optional revision checks for patch |
 | `DirectoryLister` | `list_directory(path)` | Directory traversal |
 | `SkillReader` | Read and list | Skill discovery and activation |
 | `ReadableFileSystem` | Read, list, and stat | Find tool |
@@ -56,6 +57,16 @@ of committing partial content. The backend owns concurrent-write control.
 New files use normal creation permissions under the process umask. Replacement
 preserves existing mode bits.
 A remote adapter must implement the contract using its provider's facilities.
+
+`FileRevisions` is optional. Implement it when other writers can change a file
+while a tool edits it. `open_read_revision` returns the stream and an opaque
+revision for the content that the stream reads, or `None`. `open_write_revision`
+replaces the file only while it still has that revision. Otherwise it raises
+`FileRevisionConflictError` and keeps the stored file. Only the backend creates
+and compares revisions. The patch tool reads the revision, applies its edits,
+and writes with the revision. On a conflict it reads the file again and applies
+the same edits, up to three times. Backends without `FileRevisions` write without
+a check. `MountedFileSystem` sends revisions to the mount that issued them.
 
 `stat` returns `FileInfo(is_directory=...)`, or `None` for a missing path.
 The storage root must exist: `.` for a relative namespace, `/` for mounts.

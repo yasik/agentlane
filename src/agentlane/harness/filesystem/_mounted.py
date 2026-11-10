@@ -1,7 +1,7 @@
 """Route file access through named backends in one logical namespace."""
 
-from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import PurePosixPath
 
 from agentlane.io import Writer, write_all
@@ -11,6 +11,7 @@ from ._types import (
     BinaryReader,
     DirectoryEntry,
     FileInfo,
+    FileRevisions,
     FileStat,
     FileWriter,
     SkillReader,
@@ -68,6 +69,23 @@ class MountedReader:
             raise IsADirectoryError(path)
 
         return reader.open_read(child_path)
+
+    def open_read_revision(
+        self, path: str
+    ) -> AbstractContextManager[tuple[BinaryReader, str | None]]:
+        """Open a file and its revision, or None when its mount has no revisions."""
+        normalized = self.resolve_path(path)
+        if normalized == PurePosixPath("/"):
+            raise IsADirectoryError(path)
+
+        reader, child_path = self._resolve(normalized)
+        if child_path == ".":
+            raise IsADirectoryError(path)
+
+        if isinstance(reader, FileRevisions):
+            return reader.open_read_revision(child_path)
+
+        return _without_revision(reader.open_read(child_path))
 
     def list_directory(self, path: str) -> Sequence[DirectoryEntry]:
         """List named mounts at `/` or delegate to one child directory.
@@ -156,3 +174,30 @@ class MountedFileSystem(MountedReader):
             raise PermissionError(path)
 
         return reader.open_write(child_path)
+
+    def open_write_revision(
+        self, path: str, revision: str
+    ) -> AbstractContextManager[Writer]:
+        """Open a revision-checked write on a mount whose backend has revisions."""
+        normalized = self.resolve_path(path)
+        if normalized == PurePosixPath("/"):
+            raise IsADirectoryError(path)
+
+        reader, child_path = self._resolve(normalized)
+        if child_path == ".":
+            raise IsADirectoryError(path)
+
+        # Only this mount's reader issued the revision, so only its backend can check it.
+        if not isinstance(reader, FileWriter) or not isinstance(reader, FileRevisions):
+            raise PermissionError(path)
+
+        return reader.open_write_revision(child_path, revision)
+
+
+@contextmanager
+def _without_revision(
+    stream: AbstractContextManager[BinaryReader],
+) -> Generator[tuple[BinaryReader, str | None], None, None]:
+    """Report no revision for a mount whose backend cannot provide one."""
+    with stream as source:
+        yield source, None

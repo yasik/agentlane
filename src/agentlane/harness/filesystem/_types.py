@@ -94,6 +94,36 @@ class FileWriter(Protocol):
         ...
 
 
+class FileRevisionConflictError(OSError):
+    """A revision-checked write found that the file changed after it was read."""
+
+
+@runtime_checkable
+class FileRevisions(Protocol):
+    """Optional revision checks for read-modify-write tools.
+
+    A revision is an opaque token for the stored content of one file. Only the
+    backend creates and compares revisions. A backend that cannot report one for
+    a file returns None, and the caller then writes without a check.
+    """
+
+    def open_read_revision(
+        self, path: str
+    ) -> AbstractContextManager[tuple[BinaryReader, str | None]]:
+        """Open a binary stream and the revision of exactly the content it reads."""
+        ...
+
+    def open_write_revision(
+        self, path: str, revision: str
+    ) -> AbstractContextManager[Writer]:
+        """Replace a file only while it still has `revision`.
+
+        Raise `FileRevisionConflictError` and preserve the stored file when the
+        revision no longer matches. Otherwise behave like `FileWriter.open_write`.
+        """
+        ...
+
+
 @runtime_checkable
 class WritableFileSystem(FileWriter, FileStat, Protocol):
     """Write tools need both write access and permission-relevant metadata."""
