@@ -2,13 +2,25 @@
 
 import asyncio
 
-from agentlane.harness.filesystem import FileWriter
+from agentlane.harness.filesystem import FileRevisions, FileWriter
 from agentlane.io import write_all
 
 
-async def write_content(writer: FileWriter, path: str, content: bytes) -> None:
-    """Wait for a started write to settle even when the handler is cancelled."""
-    task = asyncio.create_task(asyncio.to_thread(_write, writer, path, content))
+async def write_content(
+    writer: FileWriter, path: str, content: bytes, *, revision: str | None = None
+) -> None:
+    """Wait for a started write to settle even when the handler is cancelled.
+
+    With a revision, the write replaces the file only while it still has that
+    revision; the writer must then implement `FileRevisions`.
+
+    Raises:
+        TypeError: If a revision is given and the writer does not implement
+            `FileRevisions`.
+    """
+    task = asyncio.create_task(
+        asyncio.to_thread(_write, writer, path, content, revision)
+    )
     cancelled = False
 
     # Cancelling the await cannot stop the worker's commit. Keep waiting, even
@@ -32,7 +44,16 @@ async def write_content(writer: FileWriter, path: str, content: bytes) -> None:
     task.result()
 
 
-def _write(writer: FileWriter, path: str, content: bytes) -> None:
+def _write(writer: FileWriter, path: str, content: bytes, revision: str | None) -> None:
+    if revision is None:
+        opened = writer.open_write(path)
+    elif isinstance(writer, FileRevisions):
+        opened = writer.open_write_revision(path, revision)
+    else:
+        raise TypeError(
+            "a revision-checked write needs a writer that implements FileRevisions"
+        )
+
     # The context exit may commit buffered data; completion includes that step.
-    with writer.open_write(path) as stream:
+    with opened as stream:
         write_all(stream, content)

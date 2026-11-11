@@ -1,14 +1,19 @@
 """Non-seekable storage and permission fixtures for native file tools."""
 
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from io import BytesIO
 from pathlib import PurePosixPath
 
 import pytest
 
-from agentlane.harness.filesystem import BinaryReader, DirectoryEntry, FileInfo
+from agentlane.harness.filesystem import (
+    BinaryReader,
+    DirectoryEntry,
+    FileInfo,
+    FileRevisionConflictError,
+)
 from agentlane.harness.tools import (
     ToolOperation,
     ToolPermissionDecision,
@@ -156,3 +161,47 @@ class SessionWritePolicy:
 @pytest.fixture(name="session_policy")
 def fixture_session_policy() -> SessionWritePolicy:
     return SessionWritePolicy("/workspace/sessions/one")
+
+
+class RevisionedMemoryFileSystem(MemoryFileSystem):
+    """Check revisions on write, like a backend with conditional replacement."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.revisions: dict[str, int] = {}
+        self.conflicts = 0
+        self.before_checked_write: list[Callable[[], object]] = []
+
+    @contextmanager
+    def open_read_revision(
+        self, path: str
+    ) -> Generator[tuple[BinaryReader, str | None], None, None]:
+        revision = str(self.revisions.get(path, 0))
+        with self.open_read(path) as stream:
+            yield stream, revision
+
+    @contextmanager
+    def open_write_revision(
+        self, path: str, revision: str
+    ) -> Generator[Writer, None, None]:
+        with BytesIO() as stream:
+            yield stream
+
+            # A queued action stands in for another writer that commits first.
+            if self.before_checked_write:
+                self.before_checked_write.pop(0)()
+
+            if str(self.revisions.get(path, 0)) != revision:
+                self.conflicts += 1
+                raise FileRevisionConflictError(path)
+
+            self.write(path, stream.getvalue())
+
+    def write(self, path: str, content: bytes) -> None:
+        super().write(path, content)
+        self.revisions[path] = self.revisions.get(path, 0) + 1
+
+
+@pytest.fixture(name="revisioned_storage")
+def fixture_revisioned_storage() -> RevisionedMemoryFileSystem:
+    return RevisionedMemoryFileSystem()
