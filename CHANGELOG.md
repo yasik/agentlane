@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-11-10
+
+AgentLane `0.26.0` adds optional revision checks for storage patches. Backends that implement this capability can reject concurrent changes and let the patch tool retry with fresh file content. Applications supply the storage backend; backends without revision support remain unprotected.
+
+### Added
+
+- Added `FileRevisions` and `FileRevisionConflictError` for atomic revision checks when storage writes commit. `MountedFileSystem` routes revision reads and writes to the mount that owns the path ([`a256247`](https://github.com/yasik/agentlane/commit/a256247)).
+- Added `patch_tool(max_attempts=3)` to control attempts after revision conflicts. Set `max_attempts=1` to return the first conflict without a retry ([`a256247`](https://github.com/yasik/agentlane/commit/a256247)).
+
+### Fixed
+
+- Storage patches read the file again and apply the same edits after a revision conflict, which prevents a stale patch from replacing a concurrent edit on supported backends. Separate readers and writers must support the same revision contract; whole-file writes remain unconditional ([`a256247`](https://github.com/yasik/agentlane/commit/a256247)).
+
 ## [0.25.0] - 2026-11-01
 
 AgentLane `0.25.0` adds internal context for one run and preserves the current user request and task plan through compaction. Applications can select retained context and use a model to rank conversation blocks.
@@ -472,7 +485,8 @@ AgentLane `0.3.0` is the initial public release. It ships the runtime and distri
 
 - Final pre-release cleanup removed dead code and added repo-level `vulture` configuration for ongoing dead-code checks ([`f009e5d`](https://github.com/yasik/agentlane/commit/f009e5d523a84d3e6747329522582d3196906534))
 
-[Unreleased]: https://github.com/yasik/agentlane/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/yasik/agentlane/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/yasik/agentlane/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/yasik/agentlane/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/yasik/agentlane/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/yasik/agentlane/compare/v0.22.0...v0.23.0
