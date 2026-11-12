@@ -1,4 +1,5 @@
 import asyncio
+import gc
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
@@ -2277,6 +2278,75 @@ async def test_handoff_reports_final_output_to_parent_end_hook(streaming: bool) 
     assert [event for event in hooks.events if event[0] == "agent_end"] == [
         ("agent_end", ("Parent", "finished"))
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["stream", "events"])
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+async def test_streamed_handoff_observes_child_error(
+    mode: str, error_type: type[BaseException]
+) -> None:
+    async def scenario() -> None:
+        error = error_type("child model failed")
+        model = _SequenceModel(
+            [
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(
+                            tool_id="handoff_1", name="specialist", arguments="{}"
+                        )
+                    ],
+                ),
+                error,
+            ]
+        )
+        runner = Runner()
+        agent = Agent(
+            SingleThreadedRuntimeEngine(),
+            runner,
+            descriptor=AgentDescriptor(
+                name="Parent",
+                model=model,
+                handoffs=(AgentDescriptor(name="Specialist"),),
+            ),
+        )
+        state = RunState(instructions=None, history=["help"], responses=[])
+        stream = (
+            runner.run_stream(agent, state)
+            if mode == "stream"
+            else runner.run_events(agent, state)
+        )
+        try:
+            with pytest.raises(error_type) as caught:
+                async for _ in stream:
+                    pass
+            assert caught.value is error
+            with pytest.raises(error_type) as caught:
+                await stream.result()
+            assert caught.value is error
+        finally:
+            await stream.aclose()
+
+    # Collect child futures after the caller has observed its own stream error.
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    unhandled: list[dict[str, Any]] = []
+
+    def record_exception(
+        loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+    ) -> None:
+        del loop
+        unhandled.append(context)
+
+    loop.set_exception_handler(record_exception)
+    try:
+        await scenario()
+        await asyncio.sleep(0)
+        gc.collect()
+        assert unhandled == []
+    finally:
+        loop.set_exception_handler(previous_handler)
 
 
 @pytest.mark.asyncio
