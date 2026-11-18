@@ -509,7 +509,7 @@ class _CollectingTracingProcessor(TracingProcessor):
 def _run_echo_tool_call(
     model_tracing: ModelTracing, *, streaming: bool = False
 ) -> _CollectingTracingProcessor:
-    """Run one tool round-trip under a model with the given tracing mode."""
+    """Run two calls to the same tool under the given tracing mode."""
     recorder = _CollectingTracingProcessor()
     provider = DefaultTraceProvider()
     provider.register_processor(recorder)
@@ -531,6 +531,12 @@ def _run_echo_tool_call(
                     content=None,
                     tool_calls=[
                         _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
+                    ],
+                ),
+                make_assistant_response(
+                    content=None,
+                    tool_calls=[
+                        _make_tool_call(tool_id="call_2", arguments='{"text": "bye"}')
                     ],
                 ),
                 make_assistant_response(content="done"),
@@ -570,17 +576,30 @@ def _run_echo_tool_call(
 
 @pytest.mark.parametrize("streaming", [False, True])
 def test_runner_records_each_model_round_under_the_agent_span(streaming: bool) -> None:
-    """A model, tool, and model sequence records three spans under one agent."""
+    """Each tool span matches the model round by call ID."""
     recorder = _run_echo_tool_call(ModelTracing.ENABLED, streaming=streaming)
 
     assert [span.span_data.type for span in recorder.spans] == [
         "generation",
         "function",
         "generation",
+        "function",
+        "generation",
         "agent",
     ]
-    _, tool, _, run = recorder.spans
-    assert tool.span_data.name == "echo"
+    first_model, first_tool, next_model, next_tool, final_model, run = recorder.spans
+    assert first_tool.span_data.name == next_tool.span_data.name == "echo"
+    assert (
+        first_model.span_data.tool_call_ids
+        == [first_tool.span_data.tool_call_id]
+        == ["call_1"]
+    )
+    assert (
+        next_model.span_data.tool_call_ids
+        == [next_tool.span_data.tool_call_id]
+        == ["call_2"]
+    )
+    assert final_model.span_data.tool_call_ids == []
     assert all(span.parent_id == run.span_id for span in recorder.spans[:-1])
 
 

@@ -2,7 +2,7 @@
 
 import abc
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -57,6 +57,7 @@ class FunctionSpanData(SpanData):
     name: str
     input: str | None = None
     output: str | None = None
+    tool_call_id: str | None = None
 
     @property
     def type(self) -> str:
@@ -68,6 +69,7 @@ class FunctionSpanData(SpanData):
             "name": self.name,
             "input": self.input,
             "output": str(self.output) if self.output else None,
+            **({"tool_call_id": self.tool_call_id} if self.tool_call_id else {}),
         }
 
 
@@ -81,6 +83,7 @@ class GenerationSpanData(SpanData):
     model: str | None = None
     model_config: Mapping[str, Any] | None = None
     usage: dict[str, Any] | None = None
+    tool_call_ids: list[str] = field(default_factory=list[str])
 
     @property
     def type(self) -> str:
@@ -95,6 +98,7 @@ class GenerationSpanData(SpanData):
             "model": self.model,
             "model_config": self.model_config,
             "usage": self.usage,
+            **({"tool_call_ids": self.tool_call_ids} if self.tool_call_ids else {}),
         }
 
 

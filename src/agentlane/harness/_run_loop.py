@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
-from functools import partial
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 import structlog
@@ -482,22 +481,39 @@ class RunLoop:
                     parent_span=model_span,
                 )
 
-                return response, ModelStreamEvent(
+                completed = ModelStreamEvent(
                     kind=ModelStreamEventKind.COMPLETED, response=response
                 )
+            else:
+                # Consume live events even when the caller does not request streamed output.
+                def dispatch(call: ToolCall) -> None:
+                    model_span.span_data.tool_call_ids.append(call.id)
+                    self._dispatch_async_call(call, tools=turn.tools, span=span)
 
-            # Consume live events even when the caller does not request streamed output.
-            return await self._stream_model_call(
-                on_async_call=partial(
-                    self._dispatch_async_call, tools=turn.tools, span=span
-                ),
-                model=model,
-                messages=messages,
-                tools=turn.tools,
-                model_args=turn.model_args,
-                emit=self.emit or (lambda event: None),
-                parent_span=model_span,
+                response, completed = await self._stream_model_call(
+                    on_async_call=dispatch,
+                    model=model,
+                    messages=messages,
+                    tools=turn.tools,
+                    model_args=turn.model_args,
+                    emit=self.emit or (lambda event: None),
+                    parent_span=model_span,
+                )
+
+            # Include calls emitted only in the terminal response.
+            tool_calls = (
+                response.choices[0].message.tool_calls if response.choices else None
             )
+            model_span.span_data.tool_call_ids = list(
+                dict.fromkeys(
+                    [
+                        *model_span.span_data.tool_call_ids,
+                        *(call.id for call in tool_calls or []),
+                    ]
+                )
+            )
+
+        return response, completed
 
     async def _finish_turn(
         self,

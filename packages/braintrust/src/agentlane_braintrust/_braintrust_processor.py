@@ -289,6 +289,11 @@ class BraintrustProcessor(TracingProcessor):
         return {
             "input": span.span_data.input,
             "output": span.span_data.output,
+            **(
+                {"metadata": {"tool_call_id": span.span_data.tool_call_id}}
+                if span.span_data.tool_call_id
+                else {}
+            ),
         }
 
     def _generation_log_data(self, span: Span[GenerationSpanData]) -> dict[str, Any]:
@@ -337,6 +342,11 @@ class BraintrustProcessor(TracingProcessor):
             "metadata": {
                 "model": span.span_data.model,
                 "model_config": span.span_data.model_config,
+                **(
+                    {"tool_call_ids": span.span_data.tool_call_ids}
+                    if span.span_data.tool_call_ids
+                    else {}
+                ),
             },
             "metrics": metrics,
         }
