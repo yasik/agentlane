@@ -485,11 +485,13 @@ class RunLoop:
                     kind=ModelStreamEventKind.COMPLETED, response=response
                 )
             else:
-                # Consume live events even when the caller does not request streamed output.
+
                 def dispatch(call: ToolCall) -> None:
+                    # Record the ID before the tool starts. The stream may end early.
                     model_span.span_data.tool_call_ids.append(call.id)
                     self._dispatch_async_call(call, tools=turn.tools, span=span)
 
+                # Consume live events even when the caller does not request them.
                 response, completed = await self._stream_model_call(
                     on_async_call=dispatch,
                     model=model,
@@ -500,17 +502,14 @@ class RunLoop:
                     parent_span=model_span,
                 )
 
-            # Include calls emitted only in the terminal response.
+            # The final response can repeat calls already dispatched during streaming.
             tool_calls = (
                 response.choices[0].message.tool_calls if response.choices else None
             )
+            terminal_call_ids = [call.id for call in tool_calls or []]
+            streamed_call_ids = model_span.span_data.tool_call_ids
             model_span.span_data.tool_call_ids = list(
-                dict.fromkeys(
-                    [
-                        *model_span.span_data.tool_call_ids,
-                        *(call.id for call in tool_calls or []),
-                    ]
-                )
+                dict.fromkeys(streamed_call_ids + terminal_call_ids)
             )
 
         return response, completed

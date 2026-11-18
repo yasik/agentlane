@@ -58,6 +58,7 @@ class FunctionSpanData(SpanData):
     input: str | None = None
     output: str | None = None
     tool_call_id: str | None = None
+    """ID from the model response used to find the requesting generation."""
 
     @property
     def type(self) -> str:
@@ -84,6 +85,7 @@ class GenerationSpanData(SpanData):
     model_config: Mapping[str, Any] | None = None
     usage: dict[str, Any] | None = None
     tool_call_ids: list[str] = field(default_factory=list[str])
+    """IDs of tool calls requested during this generation."""
 
     @property
     def type(self) -> str:

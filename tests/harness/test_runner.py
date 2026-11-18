@@ -167,9 +167,11 @@ class _StreamingSequenceModel(Model[ModelResponse]):
         outcomes: list[ModelResponse],
         *,
         tracing: ModelTracing = ModelTracing.ENABLED,
+        dispatch_tool_calls: bool = False,
     ) -> None:
         self._outcomes = list(outcomes)
         self._tracing_mode = tracing
+        self._dispatch_tool_calls = dispatch_tool_calls
         self.calls: list[list[MessageDict]] = []
         self.call_options: list[dict[str, object]] = []
 
@@ -215,6 +217,12 @@ class _StreamingSequenceModel(Model[ModelResponse]):
             if not self._outcomes:
                 raise AssertionError("Expected one queued model response.")
             response = self._outcomes.pop(0)
+            if self._dispatch_tool_calls:
+                for call in response.choices[0].message.tool_calls or []:
+                    yield ModelStreamEvent(
+                        kind=ModelStreamEventKind.PROVIDER, async_tool_call=call
+                    )
+
             content = get_content_or_none(response) or ""
             if content:
                 yield ModelStreamEvent(
@@ -507,7 +515,10 @@ class _CollectingTracingProcessor(TracingProcessor):
 
 
 def _run_echo_tool_call(
-    model_tracing: ModelTracing, *, streaming: bool = False
+    model_tracing: ModelTracing,
+    *,
+    streaming: bool = False,
+    dispatch_tool_calls: bool = False,
 ) -> _CollectingTracingProcessor:
     """Run two calls to the same tool under the given tracing mode."""
     recorder = _CollectingTracingProcessor()
@@ -524,24 +535,29 @@ def _run_echo_tool_call(
             args_model=_TracingToolArgs,
             handler=_tracing_echo_handler,
         )
-        model_type = _StreamingSequenceModel if streaming else _SequenceModel
-        model = model_type(
-            [
-                make_assistant_response(
-                    content=None,
-                    tool_calls=[
-                        _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
-                    ],
-                ),
-                make_assistant_response(
-                    content=None,
-                    tool_calls=[
-                        _make_tool_call(tool_id="call_2", arguments='{"text": "bye"}')
-                    ],
-                ),
-                make_assistant_response(content="done"),
-            ],
-            tracing=model_tracing,
+        responses = [
+            make_assistant_response(
+                content=None,
+                tool_calls=[
+                    _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
+                ],
+            ),
+            make_assistant_response(
+                content=None,
+                tool_calls=[
+                    _make_tool_call(tool_id="call_2", arguments='{"text": "bye"}')
+                ],
+            ),
+            make_assistant_response(content="done"),
+        ]
+        model = (
+            _StreamingSequenceModel(
+                responses,
+                tracing=model_tracing,
+                dispatch_tool_calls=dispatch_tool_calls,
+            )
+            if streaming
+            else _SequenceModel(responses, tracing=model_tracing)
         )
         agent = Agent(
             runtime,
@@ -607,6 +623,27 @@ def test_runner_tool_spans_absent_when_model_tracing_disabled() -> None:
     """With the model's tracing DISABLED, tool calls produce no function spans."""
     recorder = _run_echo_tool_call(ModelTracing.DISABLED)
     assert recorder.spans == []
+
+
+def test_runner_records_async_tool_ids_once_when_final_response_repeats_them() -> None:
+    """A streamed call and its final response represent one tool execution."""
+    recorder = _run_echo_tool_call(
+        ModelTracing.ENABLED, streaming=True, dispatch_tool_calls=True
+    )
+
+    generation_call_ids = [
+        span.span_data.tool_call_ids
+        for span in recorder.spans
+        if span.span_data.type == "generation"
+    ]
+    tool_call_ids = [
+        span.span_data.tool_call_id
+        for span in recorder.spans
+        if span.span_data.type == "function"
+    ]
+
+    assert generation_call_ids == [["call_1"], ["call_2"], []]
+    assert tool_call_ids == ["call_1", "call_2"]
 
 
 def test_runner_retries_retryable_model_failures() -> None:
