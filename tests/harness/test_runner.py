@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, cast
 
 import pytest
@@ -105,7 +105,7 @@ class _RetryableModelError(Exception):
 class _SequenceModel(Model[ModelResponse]):
     def __init__(
         self,
-        outcomes: list[object],
+        outcomes: Sequence[object],
         *,
         started: asyncio.Event | None = None,
         release: asyncio.Event | None = None,
@@ -219,6 +219,7 @@ class _StreamingSequenceModel(Model[ModelResponse]):
             response = self._outcomes.pop(0)
             if self._dispatch_tool_calls:
                 for call in response.choices[0].message.tool_calls or []:
+                    assert call.type == "function"
                     yield ModelStreamEvent(
                         kind=ModelStreamEventKind.PROVIDER, async_tool_call=call
                     )
