@@ -5,6 +5,47 @@ from unittest.mock import MagicMock
 
 from agentlane_braintrust import BraintrustProcessor
 
+from agentlane.tracing import FunctionSpanData, GenerationSpanData
+
+
+def test_model_and_tool_export_matching_call_ids() -> None:
+    """The exporter makes the same call ID available on both spans."""
+    logger = MagicMock()
+    root = logger.start_span.return_value
+    generation_log = MagicMock()
+    tool_log = MagicMock()
+    root.start_span.side_effect = [generation_log, tool_log]
+    processor = BraintrustProcessor(logger=logger)
+    processor.on_trace_start(_make_mock_trace())
+    generation = MagicMock(
+        span_id="generation",
+        trace_id="trace-1",
+        parent_id=None,
+        span_data=GenerationSpanData(tool_call_ids=["call_1"]),
+        started_at=None,
+        ended_at=None,
+        error=None,
+    )
+    tool = MagicMock(
+        span_id="tool",
+        trace_id="trace-1",
+        parent_id=None,
+        span_data=FunctionSpanData(name="echo", tool_call_id="call_1"),
+        started_at=None,
+        ended_at=None,
+        error=None,
+    )
+
+    processor.on_span_start(generation)
+    processor.on_span_end(generation)
+    processor.on_span_start(tool)
+    processor.on_span_end(tool)
+
+    assert generation_log.log.call_args.kwargs["metadata"]["tool_call_ids"] == [
+        "call_1"
+    ]
+    assert tool_log.log.call_args.kwargs["metadata"]["tool_call_id"] == "call_1"
+
 
 def _make_mock_trace(
     trace_id: str = "trace-1",

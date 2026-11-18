@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, cast
 
 import pytest
@@ -105,7 +105,7 @@ class _RetryableModelError(Exception):
 class _SequenceModel(Model[ModelResponse]):
     def __init__(
         self,
-        outcomes: list[object],
+        outcomes: Sequence[object],
         *,
         started: asyncio.Event | None = None,
         release: asyncio.Event | None = None,
@@ -134,8 +134,6 @@ class _SequenceModel(Model[ModelResponse]):
     ) -> ModelResponse:
         del cancellation_token
 
-        # ``parent_span`` is plumbed by the runner so tool spans can nest
-        # under the requesting generation; opaque value, not asserted.
         recorded_kwargs = {k: v for k, v in kwargs.items() if k != "parent_span"}
 
         self.calls.append(_copy_messages(messages))
@@ -164,10 +162,22 @@ class _SequenceModel(Model[ModelResponse]):
 
 
 class _StreamingSequenceModel(Model[ModelResponse]):
-    def __init__(self, outcomes: list[ModelResponse]) -> None:
+    def __init__(
+        self,
+        outcomes: list[ModelResponse],
+        *,
+        tracing: ModelTracing = ModelTracing.ENABLED,
+        dispatch_tool_calls: bool = False,
+    ) -> None:
         self._outcomes = list(outcomes)
+        self._tracing_mode = tracing
+        self._dispatch_tool_calls = dispatch_tool_calls
         self.calls: list[list[MessageDict]] = []
         self.call_options: list[dict[str, object]] = []
+
+    @property
+    def tracing(self) -> ModelTracing:
+        return self._tracing_mode
 
     async def get_response(
         self,
@@ -207,6 +217,13 @@ class _StreamingSequenceModel(Model[ModelResponse]):
             if not self._outcomes:
                 raise AssertionError("Expected one queued model response.")
             response = self._outcomes.pop(0)
+            if self._dispatch_tool_calls:
+                for call in response.choices[0].message.tool_calls or []:
+                    assert call.type == "function"
+                    yield ModelStreamEvent(
+                        kind=ModelStreamEventKind.PROVIDER, async_tool_call=call
+                    )
+
             content = get_content_or_none(response) or ""
             if content:
                 yield ModelStreamEvent(
@@ -498,8 +515,13 @@ class _CollectingTracingProcessor(TracingProcessor):
         return None
 
 
-def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProcessor:
-    """Run one tool round-trip under a model with the given tracing mode."""
+def _run_echo_tool_call(
+    model_tracing: ModelTracing,
+    *,
+    streaming: bool = False,
+    dispatch_tool_calls: bool = False,
+) -> _CollectingTracingProcessor:
+    """Run two calls to the same tool under the given tracing mode."""
     recorder = _CollectingTracingProcessor()
     provider = DefaultTraceProvider()
     provider.register_processor(recorder)
@@ -514,17 +536,29 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
             args_model=_TracingToolArgs,
             handler=_tracing_echo_handler,
         )
-        model = _SequenceModel(
-            [
-                make_assistant_response(
-                    content=None,
-                    tool_calls=[
-                        _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
-                    ],
-                ),
-                make_assistant_response(content="done"),
-            ],
-            tracing=model_tracing,
+        responses = [
+            make_assistant_response(
+                content=None,
+                tool_calls=[
+                    _make_tool_call(tool_id="call_1", arguments='{"text": "hi"}')
+                ],
+            ),
+            make_assistant_response(
+                content=None,
+                tool_calls=[
+                    _make_tool_call(tool_id="call_2", arguments='{"text": "bye"}')
+                ],
+            ),
+            make_assistant_response(content="done"),
+        ]
+        model = (
+            _StreamingSequenceModel(
+                responses,
+                tracing=model_tracing,
+                dispatch_tool_calls=dispatch_tool_calls,
+            )
+            if streaming
+            else _SequenceModel(responses, tracing=model_tracing)
         )
         agent = Agent(
             runtime,
@@ -542,7 +576,12 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
             responses=[],
         )
         with trace("runner_tool_tracing"):
-            result = await runner.run(agent, state)
+            if streaming:
+                stream = runner.run_stream(agent, state)
+                await _collect_runner_stream(stream)
+                result = await stream.result()
+            else:
+                result = await runner.run(agent, state)
         assert result.final_output == "done"
 
     try:
@@ -552,25 +591,60 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
     return recorder
 
 
-def _recorded_function_span_names(recorder: _CollectingTracingProcessor) -> list[str]:
-    """Return the names of recorded function spans in order."""
-    return [
-        span.span_data.name
-        for span in recorder.spans
-        if span.span_data.type == "function"
+@pytest.mark.parametrize("streaming", [False, True])
+def test_runner_records_each_model_round_under_the_agent_span(streaming: bool) -> None:
+    """Each tool span matches the model round by call ID."""
+    recorder = _run_echo_tool_call(ModelTracing.ENABLED, streaming=streaming)
+
+    assert [span.span_data.type for span in recorder.spans] == [
+        "generation",
+        "function",
+        "generation",
+        "function",
+        "generation",
+        "agent",
     ]
-
-
-def test_runner_tool_spans_follow_model_tracing_when_enabled() -> None:
-    """With the model's tracing ENABLED, tool calls produce function spans."""
-    recorder = _run_echo_tool_call(ModelTracing.ENABLED)
-    assert _recorded_function_span_names(recorder) == ["echo"]
+    first_model, first_tool, next_model, next_tool, final_model, run = recorder.spans
+    assert first_tool.span_data.name == next_tool.span_data.name == "echo"
+    assert (
+        first_model.span_data.tool_call_ids
+        == [first_tool.span_data.tool_call_id]
+        == ["call_1"]
+    )
+    assert (
+        next_model.span_data.tool_call_ids
+        == [next_tool.span_data.tool_call_id]
+        == ["call_2"]
+    )
+    assert final_model.span_data.tool_call_ids == []
+    assert all(span.parent_id == run.span_id for span in recorder.spans[:-1])
 
 
 def test_runner_tool_spans_absent_when_model_tracing_disabled() -> None:
     """With the model's tracing DISABLED, tool calls produce no function spans."""
     recorder = _run_echo_tool_call(ModelTracing.DISABLED)
-    assert _recorded_function_span_names(recorder) == []
+    assert recorder.spans == []
+
+
+def test_runner_records_async_tool_ids_once_when_final_response_repeats_them() -> None:
+    """A streamed call and its final response represent one tool execution."""
+    recorder = _run_echo_tool_call(
+        ModelTracing.ENABLED, streaming=True, dispatch_tool_calls=True
+    )
+
+    generation_call_ids = [
+        span.span_data.tool_call_ids
+        for span in recorder.spans
+        if span.span_data.type == "generation"
+    ]
+    tool_call_ids = [
+        span.span_data.tool_call_id
+        for span in recorder.spans
+        if span.span_data.type == "function"
+    ]
+
+    assert generation_call_ids == [["call_1"], ["call_2"], []]
+    assert tool_call_ids == ["call_1", "call_2"]
 
 
 def test_runner_retries_retryable_model_failures() -> None:

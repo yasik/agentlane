@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
-from functools import partial
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 import structlog
@@ -38,7 +37,7 @@ from agentlane.models import (
 )
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken
-from agentlane.tracing import Span, generation_span
+from agentlane.tracing import Span, agent_span, generation_span
 
 from ._agent_delivery import AgentDelivery
 from ._cancellation import (
@@ -340,7 +339,9 @@ class RunLoop:
                 )
 
             # Join background tools before model and shim cleanup on every exit path.
-            with generation_span(disabled=self.model.tracing.is_disabled()) as span:
+            with agent_span(
+                name=self.runner_task.name, disabled=self.model.tracing.is_disabled()
+            ) as span:
                 try:
                     result = await self._run_turns(model, span)
 
@@ -466,32 +467,52 @@ class RunLoop:
                     messages = await self.shims.transform_messages(turn, messages)
             self._request_messages = messages
 
-        # Use terminal calls only when the model does not need live events.
-        if self.emit is None and not model.requires_streaming:
-            response = await self._run_with_retry(
-                model=model,
-                messages=messages,
-                tools=turn.tools,
-                model_args=turn.model_args,
-                parent_span=span,
+        # Record the model round separately from the agent's tools and other work.
+        with generation_span(
+            parent=span, disabled=model.tracing.is_disabled()
+        ) as model_span:
+            # Use terminal calls only when the model does not need live events.
+            if self.emit is None and not model.requires_streaming:
+                response = await self._run_with_retry(
+                    model=model,
+                    messages=messages,
+                    tools=turn.tools,
+                    model_args=turn.model_args,
+                    parent_span=model_span,
+                )
+
+                completed = ModelStreamEvent(
+                    kind=ModelStreamEventKind.COMPLETED, response=response
+                )
+            else:
+
+                def dispatch(call: ToolCall) -> None:
+                    # Record the ID before the tool starts. The stream may end early.
+                    model_span.span_data.tool_call_ids.append(call.id)
+                    self._dispatch_async_call(call, tools=turn.tools, span=span)
+
+                # Consume live events even when the caller does not request them.
+                response, completed = await self._stream_model_call(
+                    on_async_call=dispatch,
+                    model=model,
+                    messages=messages,
+                    tools=turn.tools,
+                    model_args=turn.model_args,
+                    emit=self.emit or (lambda event: None),
+                    parent_span=model_span,
+                )
+
+            # The final response can repeat calls already dispatched during streaming.
+            tool_calls = (
+                response.choices[0].message.tool_calls if response.choices else None
+            )
+            terminal_call_ids = [call.id for call in tool_calls or []]
+            streamed_call_ids = model_span.span_data.tool_call_ids
+            model_span.span_data.tool_call_ids = list(
+                dict.fromkeys(streamed_call_ids + terminal_call_ids)
             )
 
-            return response, ModelStreamEvent(
-                kind=ModelStreamEventKind.COMPLETED, response=response
-            )
-
-        # Consume live events even when the caller does not request streamed output.
-        return await self._stream_model_call(
-            on_async_call=partial(
-                self._dispatch_async_call, tools=turn.tools, span=span
-            ),
-            model=model,
-            messages=messages,
-            tools=turn.tools,
-            model_args=turn.model_args,
-            emit=self.emit or (lambda event: None),
-            parent_span=span,
-        )
+        return response, completed
 
     async def _finish_turn(
         self,

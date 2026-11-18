@@ -157,6 +157,7 @@ class ToolExecutor:
                 parent=parent_span,
                 disabled=tracing.is_disabled(),
             ) as span_function:
+                span_function.span_data.tool_call_id = call.id
                 await _maybe_await(on_tool_start, call)
                 attempts = 0
                 while True:
