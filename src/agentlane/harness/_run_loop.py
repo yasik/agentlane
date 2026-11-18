@@ -38,7 +38,7 @@ from agentlane.models import (
 )
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken
-from agentlane.tracing import Span, generation_span
+from agentlane.tracing import Span, agent_span, generation_span
 
 from ._agent_delivery import AgentDelivery
 from ._cancellation import (
@@ -340,7 +340,9 @@ class RunLoop:
                 )
 
             # Join background tools before model and shim cleanup on every exit path.
-            with generation_span(disabled=self.model.tracing.is_disabled()) as span:
+            with agent_span(
+                name=self.runner_task.name, disabled=self.model.tracing.is_disabled()
+            ) as span:
                 try:
                     result = await self._run_turns(model, span)
 
@@ -466,32 +468,36 @@ class RunLoop:
                     messages = await self.shims.transform_messages(turn, messages)
             self._request_messages = messages
 
-        # Use terminal calls only when the model does not need live events.
-        if self.emit is None and not model.requires_streaming:
-            response = await self._run_with_retry(
+        # Record the model round separately from the agent's tools and other work.
+        with generation_span(
+            parent=span, disabled=model.tracing.is_disabled()
+        ) as model_span:
+            # Use terminal calls only when the model does not need live events.
+            if self.emit is None and not model.requires_streaming:
+                response = await self._run_with_retry(
+                    model=model,
+                    messages=messages,
+                    tools=turn.tools,
+                    model_args=turn.model_args,
+                    parent_span=model_span,
+                )
+
+                return response, ModelStreamEvent(
+                    kind=ModelStreamEventKind.COMPLETED, response=response
+                )
+
+            # Consume live events even when the caller does not request streamed output.
+            return await self._stream_model_call(
+                on_async_call=partial(
+                    self._dispatch_async_call, tools=turn.tools, span=span
+                ),
                 model=model,
                 messages=messages,
                 tools=turn.tools,
                 model_args=turn.model_args,
-                parent_span=span,
+                emit=self.emit or (lambda event: None),
+                parent_span=model_span,
             )
-
-            return response, ModelStreamEvent(
-                kind=ModelStreamEventKind.COMPLETED, response=response
-            )
-
-        # Consume live events even when the caller does not request streamed output.
-        return await self._stream_model_call(
-            on_async_call=partial(
-                self._dispatch_async_call, tools=turn.tools, span=span
-            ),
-            model=model,
-            messages=messages,
-            tools=turn.tools,
-            model_args=turn.model_args,
-            emit=self.emit or (lambda event: None),
-            parent_span=span,
-        )
 
     async def _finish_turn(
         self,

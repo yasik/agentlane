@@ -329,9 +329,8 @@ class Model[TResponse](abc.ABC):
 
         When ``parent_span`` is provided, it is a generation span already opened
         and owned by the caller (the harness runner); implementations record
-        model metadata and usage onto it instead of opening their own, so tool
-        spans dispatched after the call nest under the same generation. When it
-        is ``None``, implementations open and own their own generation span.
+        model metadata and usage onto it. When it is ``None``, implementations
+        open and own their own generation span.
         """
         raise NotImplementedError("get_response method must be implemented")
 

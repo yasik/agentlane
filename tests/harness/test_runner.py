@@ -134,8 +134,6 @@ class _SequenceModel(Model[ModelResponse]):
     ) -> ModelResponse:
         del cancellation_token
 
-        # ``parent_span`` is plumbed by the runner so tool spans can nest
-        # under the requesting generation; opaque value, not asserted.
         recorded_kwargs = {k: v for k, v in kwargs.items() if k != "parent_span"}
 
         self.calls.append(_copy_messages(messages))
@@ -164,10 +162,20 @@ class _SequenceModel(Model[ModelResponse]):
 
 
 class _StreamingSequenceModel(Model[ModelResponse]):
-    def __init__(self, outcomes: list[ModelResponse]) -> None:
+    def __init__(
+        self,
+        outcomes: list[ModelResponse],
+        *,
+        tracing: ModelTracing = ModelTracing.ENABLED,
+    ) -> None:
         self._outcomes = list(outcomes)
+        self._tracing_mode = tracing
         self.calls: list[list[MessageDict]] = []
         self.call_options: list[dict[str, object]] = []
+
+    @property
+    def tracing(self) -> ModelTracing:
+        return self._tracing_mode
 
     async def get_response(
         self,
@@ -498,7 +506,9 @@ class _CollectingTracingProcessor(TracingProcessor):
         return None
 
 
-def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProcessor:
+def _run_echo_tool_call(
+    model_tracing: ModelTracing, *, streaming: bool = False
+) -> _CollectingTracingProcessor:
     """Run one tool round-trip under a model with the given tracing mode."""
     recorder = _CollectingTracingProcessor()
     provider = DefaultTraceProvider()
@@ -514,7 +524,8 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
             args_model=_TracingToolArgs,
             handler=_tracing_echo_handler,
         )
-        model = _SequenceModel(
+        model_type = _StreamingSequenceModel if streaming else _SequenceModel
+        model = model_type(
             [
                 make_assistant_response(
                     content=None,
@@ -542,7 +553,12 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
             responses=[],
         )
         with trace("runner_tool_tracing"):
-            result = await runner.run(agent, state)
+            if streaming:
+                stream = runner.run_stream(agent, state)
+                await _collect_runner_stream(stream)
+                result = await stream.result()
+            else:
+                result = await runner.run(agent, state)
         assert result.final_output == "done"
 
     try:
@@ -552,25 +568,26 @@ def _run_echo_tool_call(model_tracing: ModelTracing) -> _CollectingTracingProces
     return recorder
 
 
-def _recorded_function_span_names(recorder: _CollectingTracingProcessor) -> list[str]:
-    """Return the names of recorded function spans in order."""
-    return [
-        span.span_data.name
-        for span in recorder.spans
-        if span.span_data.type == "function"
+@pytest.mark.parametrize("streaming", [False, True])
+def test_runner_records_each_model_round_under_the_agent_span(streaming: bool) -> None:
+    """A model, tool, and model sequence records three spans under one agent."""
+    recorder = _run_echo_tool_call(ModelTracing.ENABLED, streaming=streaming)
+
+    assert [span.span_data.type for span in recorder.spans] == [
+        "generation",
+        "function",
+        "generation",
+        "agent",
     ]
-
-
-def test_runner_tool_spans_follow_model_tracing_when_enabled() -> None:
-    """With the model's tracing ENABLED, tool calls produce function spans."""
-    recorder = _run_echo_tool_call(ModelTracing.ENABLED)
-    assert _recorded_function_span_names(recorder) == ["echo"]
+    _, tool, _, run = recorder.spans
+    assert tool.span_data.name == "echo"
+    assert all(span.parent_id == run.span_id for span in recorder.spans[:-1])
 
 
 def test_runner_tool_spans_absent_when_model_tracing_disabled() -> None:
     """With the model's tracing DISABLED, tool calls produce no function spans."""
     recorder = _run_echo_tool_call(ModelTracing.DISABLED)
-    assert _recorded_function_span_names(recorder) == []
+    assert recorder.spans == []
 
 
 def test_runner_retries_retryable_model_failures() -> None:
