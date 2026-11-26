@@ -554,14 +554,11 @@ class ResponsesClient(Model[TResponseType]):
         """Identify the configured model and normalized requested effort."""
         call_args = self._request_adapter.build_call_args(extra_call_args, None, None)
         reasoning = call_args.get("reasoning")
-        effort = (
-            cast(dict[str, Any], reasoning).get("effort")
-            if isinstance(reasoning, dict)
-            else None
-        )
         metadata = {"model": self._model}
-        if isinstance(effort, str):
-            metadata["requested_effort"] = effort
+        if isinstance(reasoning, dict):
+            effort = cast(dict[str, Any], reasoning).get("effort")
+            if isinstance(effort, str):
+                metadata["requested_effort"] = effort
 
         return metadata
 
@@ -765,23 +762,21 @@ class ResponsesClient(Model[TResponseType]):
     ) -> Generator[Span[Any], None, None]:
         if parent_span is not None:
             parent_span.span_data.model = self._model
-            parent_span.span_data.model_config = {
-                **self._trace_settings,
-                **self.request_metadata(extra_call_args),
-            }
 
-        span_context = (
-            contextlib.nullcontext(parent_span)
-            if parent_span is not None
-            else generation_span(
+        model_config = {
+            **self._trace_settings,
+            **self.request_metadata(extra_call_args),
+        }
+        span_context: contextlib.AbstractContextManager[Span[Any]]
+        if parent_span is not None:
+            parent_span.span_data.model_config = model_config
+            span_context = contextlib.nullcontext(parent_span)
+        else:
+            span_context = generation_span(
                 model=self._model,
-                model_config={
-                    **self._trace_settings,
-                    **self.request_metadata(extra_call_args),
-                },
+                model_config=model_config,
                 disabled=self._tracing.is_disabled(),
             )
-        )
         with span_context as span:
             if self._tracing.include_data():
                 span.span_data.input = messages
