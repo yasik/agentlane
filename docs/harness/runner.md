@@ -152,13 +152,17 @@ runner = Runner(spawn_model_provider=provider)
 integrations implement the same protocol directly and can keep their service
 client, request context, or tenant policy on the provider instance.
 
-### Example
+### Examples
 
 The [spawn model routing example](../../examples/harness/spawn_model_routing/)
 uses real OpenRouter clients with `DefaultAgent`. Its local `ExampleProvider`
 dataclass applies a mandatory route, then a parent suggestion, then a default
 route. `parameters_model=SpawnChoice` enables suggestions; `None` disables them.
 The example README lists its settings and run command.
+
+The [OpenDecisions example](../../examples/harness/spawn_model_opendecisions/)
+uses an async provider with `parameters_model=None`. It sends the task to the
+decision service and maps the returned route to a configured child client.
 
 ### Parameters and task input
 
