@@ -15,6 +15,7 @@ from agentlane.harness import (
     AgentDescriptor,
     DefaultAgentTool,
     DefaultHandoff,
+    DelegationKind,
     Runner,
     RunnerHooks,
     RunResult,
@@ -244,7 +245,9 @@ async def test_spawn_selection_binds_each_path_before_open_run(
     assert baseline.opens == 0
     assert len(provider.contexts) == 1
     context = provider.contexts[0]
-    assert context.kind == kind
+    assert context.kind is (
+        DelegationKind.HANDOFF if "handoff" in kind else DelegationKind.TOOL
+    )
     assert context.parent_id == agent.task_id
     assert context.child_id != context.parent_id
     assert context.parent_name == "Parent"
@@ -271,6 +274,43 @@ async def test_spawn_selection_binds_each_path_before_open_run(
         )
     else:
         assert "spawn_parameters" not in json.dumps(child_messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["run", "stream", "events"])
+@pytest.mark.parametrize("select_model", [False, True])
+async def test_provider_task_edits_do_not_change_child_input(
+    mode: str, select_model: bool
+) -> None:
+    class NestedInput(BaseModel):
+        text: str
+        labels: list[str]
+
+    child = _CaptureModel([make_assistant_response("child finished")])
+
+    class Provider:
+        parameters_model = None
+
+        def resolve(self, context: SpawnModelContext) -> SpawnModelSelection | None:
+            assert isinstance(context.task, NestedInput)
+            context.task.text = "Policy changed the task"
+            context.task.labels.append("policy-only")
+            if select_model:
+                return SpawnModelSelection(SpawnModelConfig(child, None))
+            return None
+
+    payload = {"text": "Original task", "labels": ["original"]}
+    parent = _parent(
+        make_tool_call(
+            tool_id="spawn_1", name="specialist", arguments=json.dumps(payload)
+        )
+    )
+    runner = Runner(spawn_model_provider=Provider())
+    agent = _agent(runner, parent, child, "agent_tool", args_model=NestedInput)
+
+    await _run(runner, agent, mode)
+
+    assert json.loads(str(child.calls[0][-1]["content"])) == payload
 
 
 @pytest.mark.asyncio
@@ -687,7 +727,9 @@ async def test_spawn_trace_is_correlated_and_omits_private_payload(
     decision = decisions[0]
     data = decision.span_data.data
     assert data is not None
-    assert data["kind"] == kind
+    assert data["kind"] == (
+        DelegationKind.HANDOFF.value if "handoff" in kind else DelegationKind.TOOL.value
+    )
     assert data["status"] == status
     assert data["tool_call_id"] == call.id
     assert data["child_id"] == str(provider.contexts[0].child_id)

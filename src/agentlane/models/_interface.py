@@ -313,6 +313,8 @@ class Model[TResponse](abc.ABC):
 
         Adapters own their request vocabulary. Do not return request mappings,
         credentials, or live handles. The default leaves both values unknown.
+        Read identifiers without validating arguments or opening resources: child
+        shims can replace these arguments before the first model request.
         """
         return {}
 

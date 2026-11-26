@@ -1,5 +1,6 @@
 """Typed spawn envelopes built from the final tool catalog."""
 
+from copy import copy
 from dataclasses import replace
 from typing import Any, cast
 
@@ -45,9 +46,19 @@ class SpawnToolSchemas:
                         envelope = SpawnToolInput.__class_getitem__(
                             (tool.args_type(), self.parameters_model)
                         )
-                        self._tools[tool] = tool.with_args_model(
-                            cast(type[BaseModel], envelope)
+
+                        # Only declarative spawn tools can change their parser
+                        # without changing an executable handler's arguments.
+                        derived = copy(tool)
+                        spec_type = cast(type[ToolSpec[Any]], ToolSpec)
+                        spec_type.__init__(
+                            derived,
+                            name=tool.name,
+                            description=tool.description,
+                            args_model=cast(type[BaseModel], envelope),
+                            strict=tool.strict,
                         )
+                        self._tools[tool] = derived
                     tool = self._tools[tool]
             adapted.append(tool)
 

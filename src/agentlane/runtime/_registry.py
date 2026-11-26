@@ -78,6 +78,19 @@ class AgentRegistry:
         with self._lock:
             self._pending_factories.pop(agent_id, None)
 
+    def list_agent_types(self) -> set[AgentType]:
+        """Snapshot types backed by factories, pending creations, or live agents."""
+        with self._lock:
+            return set(self._factories).union(
+                agent_id.type
+                for registrations in (
+                    self._pending_factories,
+                    self._creation_futures,
+                    self._instances,
+                )
+                for agent_id in registrations
+            )
+
     def has_instance(self, agent_id: AgentId) -> bool:
         """Return whether an instance is active for the id.
 

@@ -61,7 +61,11 @@ Call `discard_pending_factory(agent_id)` when the delivery ends or is aborted.
 It removes only an unused factory and leaves an active instance unchanged.
 Cancel the delivery's cancellation token before discarding an aborted
 registration, so queued work cannot create a child after cancellation. Worker
-runtimes advertise the logical type through their existing host routing.
+runtimes derive their advertised types from the registry and refresh the host
+catalog after registration, discard, or pending creation completion. A type stays
+advertised while it has a regular factory, another pending factory, a creation
+in progress, or a live instance. Discarding the last unused registration withdraws
+that type from host routing on the next catalog sync.
 
 ## Subscriptions And Registration
 

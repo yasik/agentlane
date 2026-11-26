@@ -103,8 +103,16 @@ def _response(output: list[Any], model: str) -> Response:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    "selected_args",
+    [
+        {"reasoning": {"effort": "low"}},
+        # The child shim replaces options before request validation.
+        {"reasoning": 42, "reasoning_effort": "low", "text": 42, "verbosity": "low"},
+    ],
+)
 async def test_spawn_handoff_preserves_native_history_and_effective_effort(
-    streaming: bool,
+    streaming: bool, selected_args: dict[str, Any]
 ) -> None:
     parent = ResponsesClient(
         Config(
@@ -172,7 +180,7 @@ async def test_spawn_handoff_preserves_native_history_and_effective_effort(
             self.calls += 1
             assert context.task == "Finish this task"
             return SpawnModelSelection(
-                SpawnModelConfig(child, {"reasoning": {"effort": "low"}}), label="quick"
+                SpawnModelConfig(child, selected_args), label="quick"
             )
 
     provider = Provider()
@@ -269,3 +277,31 @@ async def test_spawn_handoff_preserves_native_history_and_effective_effort(
     assert generations[0].span_data.model_config["response_model"] == "child-served"
     if streaming:
         assert parent_stream.closed and child_stream.closed
+
+
+@pytest.mark.parametrize(
+    "defaults, overrides, effort",
+    [
+        ({}, None, None),
+        ({"reasoning": {"effort": "high"}}, None, "high"),
+        ({"reasoning_effort": "high"}, {"reasoning_effort": "low"}, "low"),
+        ({"reasoning_effort": "high"}, {"reasoning": {"effort": "low"}}, "high"),
+        ({"reasoning": {"effort": "high"}}, {"reasoning_effort": "low"}, "low"),
+        ({"reasoning_effort": "high"}, {"reasoning_effort": None}, None),
+        ({"reasoning": {"effort": "high"}}, {"reasoning": None}, None),
+        ({"reasoning": {"effort": "high"}}, {"reasoning": {}}, None),
+        ({"reasoning_effort": None}, {"reasoning": {"effort": "low"}}, None),
+        ({}, {"reasoning": {"effort": 42}}, None),
+    ],
+)
+def test_metadata_preserves_request_effort_precedence(
+    defaults: dict[str, Any], overrides: dict[str, Any] | None, effort: str | None
+) -> None:
+    client = ResponsesClient(Config(api_key="test-key", model="child"), **defaults)
+
+    metadata = client.request_metadata(overrides)
+
+    assert metadata == {
+        "model": "child",
+        **({"requested_effort": effort} if effort is not None else {}),
+    }

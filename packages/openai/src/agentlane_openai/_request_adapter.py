@@ -240,6 +240,23 @@ class RequestAdapter:
         self._enforce_structured_output = enforce_structured_output
         self._async_tools = async_tools
 
+    def requested_effort(self, extra_call_args: dict[str, Any] | None) -> str | None:
+        """Read effort without validating options that a turn shim may replace."""
+        call_args = {**self._common_params, **(extra_call_args or {})}
+
+        # The alias overrides native reasoning, including an explicit null value.
+        if "reasoning_effort" in call_args:
+            effort = call_args["reasoning_effort"]
+        else:
+            reasoning = call_args.get("reasoning")
+            effort = (
+                cast(dict[str, Any], reasoning).get("effort")
+                if isinstance(reasoning, dict)
+                else None
+            )
+
+        return effort if isinstance(effort, str) else None
+
     def build_call_args(
         self,
         extra_call_args: dict[str, Any] | None,

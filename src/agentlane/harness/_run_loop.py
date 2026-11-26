@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from functools import partial
@@ -87,13 +87,13 @@ from ._run import (
     RunMessageContent,
     RunResult,
     RunState,
+    copy_history_item,
     copy_instructions,
     copy_shim_state,
     durable_run_state,
     without_ephemeral_messages,
 )
 from ._spawn_model import (
-    SpawnKind,
     SpawnModelConfig,
     SpawnModelContext,
     SpawnModelProvider,
@@ -1298,11 +1298,7 @@ class RunLoop:
             tool_name=tool_definition.name,
             tool_call_id=handoff_call.id,
             parent_span=parent_span,
-            kind=(
-                "handoff"
-                if isinstance(tool_definition, HandoffTool)
-                else "default_handoff"
-            ),
+            kind=DelegationKind.HANDOFF,
             task=parsed_input.task or default_handoff_task_message(),
             spawn_parameters=spawn_parameters,
         )
@@ -1417,7 +1413,7 @@ class RunLoop:
         )
         child_descriptor = await self._resolve_spawn_model(
             descriptor=child_descriptor,
-            kind="agent_tool",
+            kind=DelegationKind.TOOL,
             task=cast(RunMessageContent, run_input[0]),
             spawn_parameters=spawn_parameters,
             child_id=child_id,
@@ -1495,7 +1491,7 @@ class RunLoop:
             )
             child_descriptor = await self._resolve_spawn_model(
                 descriptor=child_descriptor,
-                kind="default_agent_tool",
+                kind=DelegationKind.TOOL,
                 task=parsed_input.task,
                 spawn_parameters=spawn_parameters,
                 child_id=child_id,
@@ -1519,7 +1515,7 @@ class RunLoop:
         self,
         *,
         descriptor: AgentDescriptor,
-        kind: SpawnKind,
+        kind: DelegationKind,
         task: RunMessageContent,
         child_id: AgentId,
         tool_name: str,
@@ -1542,12 +1538,12 @@ class RunLoop:
             child_name=descriptor.name,
             tool_name=tool_name,
             tool_call_id=tool_call_id,
-            task=task,
+            task=cast(RunMessageContent, copy_history_item(task)),
             spawn_parameters=spawn_parameters,
             baseline=baseline,
         )
         decision: dict[str, Any] = {
-            "kind": kind,
+            "kind": kind.value,
             "tool_call_id": tool_call_id,
             "child_id": str(child_id),
             "status": "baseline",
@@ -1597,21 +1593,28 @@ class RunLoop:
         finally:
             # Do not put tasks, request mappings, clients, or exception text in
             # the decision record, including when application policy fails.
-            if decision["status"] in ("baseline", "selected", "fallback"):
+            tracing_disabled = self.model.tracing.is_disabled()
+            if not tracing_disabled and decision["status"] in (
+                "baseline",
+                "selected",
+                "fallback",
+            ):
                 assert descriptor.model is not None
-                metadata = descriptor.model.request_metadata(descriptor.model_args)
-                decision.update(
-                    {
-                        key: value
-                        for key, value in metadata.items()
-                        if key in ("model", "requested_effort")
-                    }
-                )
+                # Optional diagnostics must not fail a successful assignment.
+                with suppress(Exception):
+                    metadata = descriptor.model.request_metadata(descriptor.model_args)
+                    decision.update(
+                        {
+                            key: value
+                            for key, value in metadata.items()
+                            if key in ("model", "requested_effort")
+                        }
+                    )
             with custom_span(
                 "spawn_model_decision",
                 data=decision,
                 parent=parent_span,
-                disabled=self.model.tracing.is_disabled(),
+                disabled=tracing_disabled,
             ):
                 pass
 

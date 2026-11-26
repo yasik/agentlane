@@ -221,19 +221,23 @@ schema at construction time; create another runner to change that schema.
 
 The provider receives a `SpawnModelContext` with:
 
-- `kind`: `agent_tool`, `default_agent_tool`, `handoff`, or `default_handoff`.
+- `kind`: `DelegationKind.TOOL` (`"tool"`) for a helper result, or
+  `DelegationKind.HANDOFF` (`"handoff"`) for a conversation transfer. Import
+  `DelegationKind` from `agentlane.harness`. The kind is the same for predefined
+  and generic tools with the same delegation behavior.
 - `parent_id`, `child_id`, `parent_name`, and `child_name`: identities assigned
   before resolution. The same child ID is used for delivery and tracing.
 - `tool_name` and `tool_call_id`: the parent's spawn call.
-- `task`: the normalized child payload. A predefined agent tool supplies its
-  validated input model. A generic helper supplies its task value. Both handoff
-  forms supply their task value or the established handoff default.
+- `task`: a detached copy of the normalized child payload. A predefined agent
+  tool supplies its validated input model. Generic helpers and handoffs supply
+  their task value, including the handoff default when omitted. Changes to this
+  copy do not change the input delivered to the child.
 - `spawn_parameters`: the validated application model, or `None`.
-- `baseline`: the child model and arguments after descriptor defaults and parent
-  inheritance have been resolved.
+- `baseline`: the original configured client and detached argument data after
+  descriptor defaults and parent inheritance have been resolved.
 
-The context has no parent transcript or live parent client. Applications can
-use its stable IDs to obtain request policy from their own context.
+The context has no parent transcript. Applications can use its stable IDs to
+obtain request policy from their own context.
 
 ### Assignment and failure
 
@@ -261,10 +265,14 @@ shims can still change arguments for an individual call.
 
 A `spawn_model_decision` trace span records the spawn kind, call and child IDs,
 status, and safe labels or reason codes under the parent's generation span.
-Adapters can identify the configured model and requested effort. The generation
-trace and response metadata identify the model reported for the request.
-Decision records exclude task content, full argument mappings, clients, and raw
-exceptions. A model behind an automatic router can be known only at invocation.
+Adapters can report the configured model and requested effort without validating
+the assignment. This optional diagnostic step is skipped when tracing is disabled;
+ordinary diagnostic errors omit the metadata and do not fail the spawn. Child
+shims can still change request arguments before adapter validation. Generation
+traces record request settings, and response metadata identifies the serving
+model reported by the provider. Decision records exclude task content, full
+argument mappings, clients, and raw exceptions. A model behind an automatic
+router can be known only at invocation.
 
 ### History and client lifetime
 

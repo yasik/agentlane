@@ -551,14 +551,11 @@ class ResponsesClient(Model[TResponseType]):
     def request_metadata(
         self, extra_call_args: dict[str, Any] | None = None
     ) -> dict[str, str]:
-        """Identify the configured model and normalized requested effort."""
-        call_args = self._request_adapter.build_call_args(extra_call_args, None, None)
-        reasoning = call_args.get("reasoning")
+        """Identify the configured model and requested effort without validation."""
+        effort = self._request_adapter.requested_effort(extra_call_args)
         metadata = {"model": self._model}
-        if isinstance(reasoning, dict):
-            effort = cast(dict[str, Any], reasoning).get("effort")
-            if isinstance(effort, str):
-                metadata["requested_effort"] = effort
+        if effort is not None:
+            metadata["requested_effort"] = effort
 
         return metadata
 

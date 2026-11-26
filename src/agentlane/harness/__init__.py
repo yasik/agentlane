@@ -23,6 +23,7 @@ from ._events import (
     RunToolEndEvent,
     RunToolStartEvent,
 )
+from ._handoff import DelegationKind
 from ._hooks import RunnerHooks
 from ._json_file_state_store import JsonFileStateStore
 from ._lifecycle import AgentDescriptor, DefaultAgentTool, DefaultHandoff
@@ -74,6 +75,7 @@ __all__ = [
     "AgentSnapshot",
     "DefaultAgentTool",
     "DefaultHandoff",
+    "DelegationKind",
     "HarnessEventType",
     "INHERIT_TOOLS",
     "InheritTools",

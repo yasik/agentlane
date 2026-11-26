@@ -205,3 +205,162 @@ async def test_worker_routes_pending_exact_id_factory_through_host() -> None:
         await sender.stop_when_idle()
         await receiver.stop_when_idle()
         await host.stop_when_idle()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["before_start", "pending", "failed", "cancelled"])
+async def test_worker_releases_discarded_pending_type(phase: str) -> None:
+    host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
+    await host.start()
+    first = WorkerAgentRuntime(host_address=host.address)
+    second = WorkerAgentRuntime(host_address=host.address)
+    child_id = AgentId.from_values("temporary-child", "first")
+
+    def factory(engine: Engine) -> _ConfiguredAgent:
+        if phase == "failed":
+            raise LookupError("Child construction failed")
+        if phase == "cancelled":
+            raise asyncio.CancelledError
+        return _ConfiguredAgent(engine, "unused")
+
+    try:
+        first.register_pending_factory(child_id, factory)
+        if phase != "before_start":
+            await first.start()
+        if phase in ("failed", "cancelled"):
+            outcome = await first.send_message("start", child_id)
+            assert outcome.status is (
+                DeliveryStatus.CANCELED
+                if phase == "cancelled"
+                else DeliveryStatus.UNDELIVERABLE
+            )
+        first.discard_pending_factory(child_id)
+        if phase == "before_start":
+            await first.start()
+        # Sending synchronizes the catalog before contacting the host.
+        outcome = await first.send_message("after discard", child_id)
+        assert outcome.status is DeliveryStatus.UNDELIVERABLE
+
+        replacement_id = AgentId.from_values("temporary-child", "replacement")
+        second.register_pending_factory(
+            replacement_id, lambda engine: _ConfiguredAgent(engine, "replacement")
+        )
+        await second.start()
+        outcome = await first.send_message("replacement", replacement_id)
+        assert outcome.response_payload == {"label": "replacement", "count": 1}
+    finally:
+        await second.stop_when_idle()
+        await first.stop_when_idle()
+        await host.stop_when_idle()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sibling", ["factory", "pending", "live", "inflight"])
+async def test_worker_discard_preserves_type_with_other_registrations(
+    sibling: str,
+) -> None:
+    host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
+    await host.start()
+    receiver = WorkerAgentRuntime(host_address=host.address)
+    sender = WorkerAgentRuntime(host_address=host.address)
+    discarded_id = AgentId.from_values("shared-child", "discarded")
+    retained_id = AgentId.from_values("shared-child", "retained")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    pending_delivery = None
+
+    def factory(engine: Engine) -> _ConfiguredAgent:
+        return _ConfiguredAgent(engine, "retained")
+
+    async def delayed_factory(engine: Engine) -> _ConfiguredAgent:
+        started.set()
+        await release.wait()
+        return factory(engine)
+
+    try:
+        receiver.register_pending_factory(discarded_id, factory)
+        if sibling == "factory":
+            receiver.register_factory(retained_id.type, factory)
+        elif sibling == "live":
+            receiver.register_instance(retained_id, factory(receiver))
+        else:
+            receiver.register_pending_factory(
+                retained_id, delayed_factory if sibling == "inflight" else factory
+            )
+        await receiver.start()
+        await sender.start()
+        if sibling == "inflight":
+            pending_delivery = asyncio.create_task(
+                sender.send_message("start", retained_id)
+            )
+            await asyncio.wait_for(started.wait(), timeout=5)
+        receiver.discard_pending_factory(discarded_id)
+        # Flush the receiver's changed catalog without creating a sibling.
+        await receiver.send_message(
+            "sync", AgentId.from_values("unregistered-type", "unused")
+        )
+        release.set()
+        if pending_delivery is not None:
+            await pending_delivery
+        outcome = await sender.send_message("retained", retained_id)
+        assert outcome.response_payload == {
+            "label": "retained",
+            "count": 2 if sibling == "inflight" else 1,
+        }
+    finally:
+        release.set()
+        if pending_delivery is not None:
+            await asyncio.gather(pending_delivery, return_exceptions=True)
+        await sender.stop_when_idle()
+        await receiver.stop_when_idle()
+        await host.stop_when_idle()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_worker_releases_type_when_discarded_inflight_factory_fails(
+    cancelled: bool,
+) -> None:
+    host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
+    await host.start()
+    first = WorkerAgentRuntime(host_address=host.address)
+    second = WorkerAgentRuntime(host_address=host.address)
+    child_id = AgentId.from_values("failing-child", "first")
+    started = asyncio.Event()
+    release = asyncio.Event()
+    pending_delivery = None
+
+    async def factory(engine: Engine) -> _ConfiguredAgent:
+        del engine
+        started.set()
+        await release.wait()
+        if cancelled:
+            raise asyncio.CancelledError
+        raise LookupError("Child construction failed")
+
+    try:
+        first.register_pending_factory(child_id, factory)
+        await first.start()
+        pending_delivery = asyncio.create_task(first.send_message("start", child_id))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        first.discard_pending_factory(child_id)
+        await first.send_message("sync", AgentId.from_values("unregistered", "unused"))
+        release.set()
+        assert (await pending_delivery).status is (
+            DeliveryStatus.CANCELED if cancelled else DeliveryStatus.UNDELIVERABLE
+        )
+        # There is no second discard: completion must refresh the catalog itself.
+        await first.send_message("sync", AgentId.from_values("unregistered", "unused"))
+        second.register_pending_factory(
+            child_id, lambda engine: _ConfiguredAgent(engine, "replacement")
+        )
+        await second.start()
+        outcome = await first.send_message("replacement", child_id)
+        assert outcome.response_payload == {"label": "replacement", "count": 1}
+    finally:
+        release.set()
+        if pending_delivery is not None:
+            await asyncio.gather(pending_delivery, return_exceptions=True)
+        await second.stop_when_idle()
+        await first.stop_when_idle()
+        await host.stop_when_idle()
