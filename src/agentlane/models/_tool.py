@@ -1,5 +1,6 @@
 """Native tool primitive shared by clients and the harness."""
 
+import copy
 import functools
 import inspect
 import json
@@ -148,6 +149,26 @@ class ToolSpec[ArgsT: BaseModel]:
             self._parameters_schema = ensure_strict_json_schema(
                 args_model.model_json_schema()
             )
+
+    def with_args_model[NewArgsT: BaseModel](
+        self, args_model: type[NewArgsT]
+    ) -> "ToolSpec[NewArgsT]":
+        """Copy this tool's kind and policy with a new schema and parser.
+
+        The new arguments model replaces any explicit parameter schema. Other
+        tool configuration remains attached to the copy.
+        """
+        derived = cast("ToolSpec[NewArgsT]", copy.copy(self))
+        spec_type = cast(type[ToolSpec[NewArgsT]], ToolSpec)
+        spec_type.__init__(
+            derived,
+            name=self.name,
+            description=self.description,
+            args_model=args_model,
+            strict=self.strict,
+        )
+
+        return derived
 
     @staticmethod
     def from_function(

@@ -249,6 +249,19 @@ class Client(Model[TResponseType]):
             self._common_params["vertex_project"] = config.vertex_project_id
             self._common_params["vertex_location"] = config.vertex_location
 
+    def request_metadata(
+        self, extra_call_args: dict[str, Any] | None = None
+    ) -> dict[str, str]:
+        """Identify the configured model and effective requested effort."""
+        effort = (extra_call_args or {}).get(
+            "reasoning_effort", self._common_params.get("reasoning_effort")
+        )
+        metadata = {"model": self._model}
+        if isinstance(effort, str):
+            metadata["requested_effort"] = effort
+
+        return metadata
+
     @property
     def tracing(self) -> ModelTracing:
         """Return the tracing mode configured for this client."""
@@ -281,14 +294,20 @@ class Client(Model[TResponseType]):
 
         if parent_span is not None:
             parent_span.span_data.model = self._model
-            parent_span.span_data.model_config = self._trace_settings
+            parent_span.span_data.model_config = {
+                **self._trace_settings,
+                **self.request_metadata(extra_call_args),
+            }
             span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
                 contextlib.nullcontext(parent_span)
             )
         else:
             span_ctx = generation_span(
                 model=self._model,
-                model_config=self._trace_settings,
+                model_config={
+                    **self._trace_settings,
+                    **self.request_metadata(extra_call_args),
+                },
                 disabled=self._tracing.is_disabled(),
             )
 
@@ -424,14 +443,20 @@ class Client(Model[TResponseType]):
 
             if parent_span is not None:
                 parent_span.span_data.model = self._model
-                parent_span.span_data.model_config = self._trace_settings
+                parent_span.span_data.model_config = {
+                    **self._trace_settings,
+                    **self.request_metadata(extra_call_args),
+                }
                 span_ctx: contextlib.AbstractContextManager[Span[Any]] = (
                     contextlib.nullcontext(parent_span)
                 )
             else:
                 span_ctx = generation_span(
                     model=self._model,
-                    model_config=self._trace_settings,
+                    model_config={
+                        **self._trace_settings,
+                        **self.request_metadata(extra_call_args),
+                    },
                     disabled=self._tracing.is_disabled(),
                 )
 
@@ -866,6 +891,11 @@ class Client(Model[TResponseType]):
         result: ModelResponse,
     ) -> None:
         """Persist the model output in tracing when enabled."""
+
+        span_generation.span_data.model_config = {
+            **(span_generation.span_data.model_config or {}),
+            "response_model": result.model,
+        }
 
         if not self._tracing.include_data():
             return

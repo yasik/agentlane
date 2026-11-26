@@ -237,6 +237,21 @@ class RuntimeEngine(Engine, abc.ABC):
         self._registry.register_instance(agent_id, instance)
         return agent_id
 
+    def register_pending_factory(
+        self, agent_id: AgentId, factory: AgentFactory
+    ) -> None:
+        """Register one exact-id factory for its first delivery.
+
+        Use this when configuration belongs to one instance but construction
+        must wait for dispatch. Call ``discard_pending_factory`` when delivery
+        ends to remove an unused registration. Active instances are retained.
+        """
+        self._registry.register_pending_factory(agent_id, factory)
+
+    def discard_pending_factory(self, agent_id: AgentId) -> None:
+        """Remove an unused exact-id factory after delivery or cancellation."""
+        self._registry.discard_pending_factory(agent_id)
+
     def add_subscription(self, subscription: Subscription) -> str:
         """Add a publish subscription object and return its stable id.
 

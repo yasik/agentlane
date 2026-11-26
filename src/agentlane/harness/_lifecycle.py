@@ -55,6 +55,7 @@ from ._handoff import (
     normalize_delegation_tool_name,
 )
 from ._hooks import RunnerHooks, coerce_runner_hooks
+from ._model_args import snapshot_model_args
 from ._run import (
     RunHistoryItem,
     RunInput,
@@ -174,6 +175,9 @@ class AgentDescriptor:
 
     def __post_init__(self) -> None:
         """Normalize descriptor invariants at construction time."""
+        if self.model_args is not None:
+            self.model_args = snapshot_model_args(self.model_args)
+
         if self.name.strip() == "":
             self.name = _generated_agent_name()
 

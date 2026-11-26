@@ -50,6 +50,19 @@ when the runtime should create instances lazily. `register_instance(...)` is
 useful when you want to bind an already-created stateful instance to one
 identity.
 
+For configuration that belongs to one new ID and needs lazy construction, use
+`register_pending_factory(agent_id, factory)`. The runtime consumes that factory
+on the first dispatch and retains the resulting instance for later messages.
+Pending registration rejects an ID that already has an instance, a pending
+factory, or a creation in progress. Different IDs can use different factories
+while sharing one logical agent type.
+
+Call `discard_pending_factory(agent_id)` when the delivery ends or is aborted.
+It removes only an unused factory and leaves an active instance unchanged.
+Cancel the delivery's cancellation token before discarding an aborted
+registration, so queued work cannot create a child after cancellation. Worker
+runtimes advertise the logical type through their existing host routing.
+
 ## Subscriptions And Registration
 
 `publish_message(...)` only reaches recipients that have a matching

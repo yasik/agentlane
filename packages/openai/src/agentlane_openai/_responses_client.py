@@ -336,7 +336,9 @@ class ResponsesClient(Model[TResponseType]):
         conversation_input = messages_to_input(messages)
         schema_retry_count = 0
 
-        with self._generation_span(parent_span, messages) as span_generation:
+        with self._generation_span(
+            parent_span, messages, extra_call_args
+        ) as span_generation:
             output_schema = resolve_output_schema(schema)
             call_args = self._request_adapter.build_call_args(
                 extra_call_args=extra_call_args,
@@ -456,7 +458,9 @@ class ResponsesClient(Model[TResponseType]):
             trace_events: list[dict[str, Any]] = []
             stream: AsyncStream[ResponseStreamEvent] | None = None
 
-            with self._generation_span(parent_span, messages) as span_generation:
+            with self._generation_span(
+                parent_span, messages, extra_call_args
+            ) as span_generation:
                 call_args = self._request_adapter.build_call_args(
                     extra_call_args=extra_call_args,
                     schema=schema,
@@ -536,13 +540,30 @@ class ResponsesClient(Model[TResponseType]):
         input_data = session.prepare_input(messages, call_args)
 
         # Keep tracing and rate limits scoped to this logical response.
-        with self._generation_span(parent_span, messages) as span:
+        with self._generation_span(parent_span, messages, extra_call_args) as span:
             async with contextlib.AsyncExitStack() as scope:
                 if self._rate_limiter is not None:
                     await scope.enter_async_context(self._rate_limiter)
 
                 async for event in session.stream(input_data, call_args, span):
                     yield event
+
+    def request_metadata(
+        self, extra_call_args: dict[str, Any] | None = None
+    ) -> dict[str, str]:
+        """Identify the configured model and normalized requested effort."""
+        call_args = self._request_adapter.build_call_args(extra_call_args, None, None)
+        reasoning = call_args.get("reasoning")
+        effort = (
+            cast(dict[str, Any], reasoning).get("effort")
+            if isinstance(reasoning, dict)
+            else None
+        )
+        metadata = {"model": self._model}
+        if isinstance(effort, str):
+            metadata["requested_effort"] = effort
+
+        return metadata
 
     def get_model(self) -> str:
         """Get the model name."""
@@ -740,17 +761,24 @@ class ResponsesClient(Model[TResponseType]):
         self,
         parent_span: Span[Any] | None,
         messages: list[MessageDict],
+        extra_call_args: dict[str, Any] | None = None,
     ) -> Generator[Span[Any], None, None]:
         if parent_span is not None:
             parent_span.span_data.model = self._model
-            parent_span.span_data.model_config = self._trace_settings
+            parent_span.span_data.model_config = {
+                **self._trace_settings,
+                **self.request_metadata(extra_call_args),
+            }
 
         span_context = (
             contextlib.nullcontext(parent_span)
             if parent_span is not None
             else generation_span(
                 model=self._model,
-                model_config=self._trace_settings,
+                model_config={
+                    **self._trace_settings,
+                    **self.request_metadata(extra_call_args),
+                },
                 disabled=self._tracing.is_disabled(),
             )
         )
@@ -784,6 +812,11 @@ class ResponsesClient(Model[TResponseType]):
         span shared across multiple model calls in one run captures every
         call's tokens rather than only the last call.
         """
+        span_generation.span_data.model_config = {
+            **(span_generation.span_data.model_config or {}),
+            "response_model": result.model,
+        }
+
         # Trace payloads are optional, but token and retry accounting always applies.
         if self._tracing.include_data():
             span_generation.span_data.output = [result.model_dump(mode="json")]

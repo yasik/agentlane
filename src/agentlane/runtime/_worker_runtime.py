@@ -120,6 +120,14 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
         self._schedule_catalog_sync()
         return registered_id
 
+    def register_pending_factory(
+        self, agent_id: AgentId, factory: AgentFactory
+    ) -> None:
+        """Register an exact-id factory and advertise its type to the host."""
+        super().register_pending_factory(agent_id, factory)
+        self._advertised_agent_types.add(agent_id.type)
+        self._schedule_catalog_sync()
+
     def add_subscription(self, subscription: Subscription) -> str:
         """Add one subscription locally and push the updated snapshot to the host."""
         subscription_id = super().add_subscription(subscription)

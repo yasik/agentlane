@@ -1,8 +1,9 @@
 """Per-run model and tool loop, including cleanup and child delegation."""
 
 import asyncio
+import inspect
 import json
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
@@ -29,8 +30,10 @@ from agentlane.models import (
     Tool,
     ToolCall,
     ToolChoice,
+    ToolError,
     ToolExecutionContext,
     ToolExecutor,
+    ToolFailure,
     Tools,
     ToolSpec,
     provider_messages,
@@ -38,7 +41,7 @@ from agentlane.models import (
 )
 from agentlane.models.run import DefaultRunContext
 from agentlane.runtime import CancellationToken
-from agentlane.tracing import Span, generation_span
+from agentlane.tracing import Span, custom_span, generation_span
 
 from ._agent_delivery import AgentDelivery
 from ._cancellation import (
@@ -59,6 +62,7 @@ from ._events import (
 )
 from ._handoff import (
     DefaultAgentToolInput,
+    DelegatedTaskInput,
     DelegationKind,
     default_handoff_task_message,
     default_handoff_tool_result,
@@ -75,10 +79,12 @@ from ._lifecycle import (
     HandoffTool,
     LifecycleRunner,
 )
+from ._model_args import snapshot_model_args
 from ._render import normalize_message_content, render_request_messages
 from ._run import (
     LiveRunStateView,
     RunHistoryItem,
+    RunMessageContent,
     RunResult,
     RunState,
     copy_instructions,
@@ -86,6 +92,15 @@ from ._run import (
     durable_run_state,
     without_ephemeral_messages,
 )
+from ._spawn_model import (
+    SpawnKind,
+    SpawnModelConfig,
+    SpawnModelContext,
+    SpawnModelProvider,
+    SpawnModelRejected,
+    SpawnModelSelection,
+)
+from ._spawn_tools import SpawnToolSchemas, unwrap_spawn_input
 from ._stream_base import BaseRunStream
 from ._task import Task
 from ._tooling import InheritTools, RestrictTools, ToolConfig
@@ -279,6 +294,8 @@ class RunLoop:
         max_attempts: int = 1,
         max_turns: int = 128,
         is_retryable: Callable[[BaseException], bool] | None = None,
+        spawn_model_provider: SpawnModelProvider | None = None,
+        spawn_parameters_model: type[BaseModel] | None = None,
         cancellation_token: CancellationToken | None = None,
         emit: Callable[[ModelStreamEvent], None] | None = None,
         run_events: RunEventEmitter | None = None,
@@ -295,6 +312,12 @@ class RunLoop:
         self.max_attempts = max_attempts
         self.max_turns = max_turns
         self.is_retryable = is_retryable
+        self.spawn_model_provider = spawn_model_provider
+        self.spawn_tool_schemas = (
+            SpawnToolSchemas(spawn_parameters_model)
+            if spawn_parameters_model is not None
+            else None
+        )
         self.cancellation_token = cancellation_token
         self.emit = emit
         self.run_events = run_events
@@ -346,6 +369,10 @@ class RunLoop:
 
                     return result
                 finally:
+                    span.span_data.model_config = {
+                        **(span.span_data.model_config or {}),
+                        "agent_id": str(self.agent.id),
+                    }
                     await self._cancel_pending_calls()
         except BaseException as exc:
             run_error = exc
@@ -404,6 +431,10 @@ class RunLoop:
             turn.tools = _limit_tools(
                 turn.tools, self.tool_call_counts, self.tool_round_trips
             )
+
+        # Adapt only tools that remain in the final catalog after shims and limits.
+        if self.spawn_tool_schemas is not None and turn.tools is not None:
+            turn.tools = self.spawn_tool_schemas.apply(turn.tools)
 
         # Classify delegation events against the final tool catalog.
         if self.run_events is not None:
@@ -585,7 +616,12 @@ class RunLoop:
                 handoff_tools, handoff_call, handoff_definition = target
 
                 return await self._handoff(
-                    handoff_tools, completed, response, handoff_call, handoff_definition
+                    handoff_tools,
+                    completed,
+                    response,
+                    handoff_call,
+                    handoff_definition,
+                    span,
                 )
 
             case _NextStep.CONTINUE, _:
@@ -684,6 +720,7 @@ class RunLoop:
         response: ModelResponse,
         call: ToolCall,
         definition: HandoffTool | DefaultHandoffTool,
+        parent_span: Span[Any],
     ) -> RunResult:
         # Complete steering and tool delivery before transferring control.
         if completed.continuation is not None:
@@ -702,6 +739,7 @@ class RunLoop:
             handoff_call=call,
             tool_definition=definition,
             tools=tools,
+            parent_span=parent_span,
         )
 
     async def _finish_tool_round(
@@ -1078,6 +1116,7 @@ class RunLoop:
                 tools=tools,
                 tool_call=tool_call,
                 tool_definition=tool_definition,
+                parent_span=parent_span,
             )
 
         if isinstance(tool_definition, DefaultAgentTool):
@@ -1085,6 +1124,7 @@ class RunLoop:
                 tools=tools,
                 tool_call=tool_call,
                 tool_definition=tool_definition,
+                parent_span=parent_span,
             )
 
         # Use the shared executor for local tools, hooks, cancellation, and tracing.
@@ -1130,20 +1170,31 @@ class RunLoop:
         tools: Tools,
         tool_call: ToolCall,
         tool_definition: AgentTool,
+        parent_span: Span[Any] | None = None,
     ) -> MessageDict:
         """Execute one agent-as-tool call through runtime messaging."""
         parsed_input = _parse_delegated_tool_args(
             tool_call=tool_call,
             args_model=tool_definition.args_type(),
         )
+        spawn_input, spawn_parameters = unwrap_spawn_input(parsed_input)
 
         await self.hooks.on_tool_call_start(self.agent, tool_call)
-        delegated_result = await self._run_delegated_sub_agent(
-            visible_tools=tools,
-            tool_name=tool_definition.name,
-            descriptor=tool_definition.descriptor,
-            run_input=[parsed_input],
-        )
+        try:
+            delegated_result = await self._run_delegated_sub_agent(
+                visible_tools=tools,
+                tool_name=tool_definition.name,
+                descriptor=tool_definition.descriptor,
+                run_input=[spawn_input],
+                spawn_parameters=spawn_parameters,
+                tool_call_id=tool_call.id,
+                parent_span=parent_span,
+            )
+        except SpawnModelRejected as exc:
+            delegated_result = ToolFailure(
+                text=f"Spawn rejected: {exc.reason}",
+                error=ToolError(kind="spawn_model_rejected", message=exc.reason),
+            )
 
         await self.hooks.on_tool_call_end(self.agent, tool_call, delegated_result)
 
@@ -1159,20 +1210,31 @@ class RunLoop:
         tools: Tools,
         tool_call: ToolCall,
         tool_definition: DefaultAgentTool,
+        parent_span: Span[Any] | None = None,
     ) -> MessageDict:
         """Execute one default spawned agent-as-tool call."""
         parsed_input = _parse_delegated_tool_args(
             tool_call=tool_call,
             args_model=tool_definition.args_type(),
         )
+        spawn_input, spawn_parameters = unwrap_spawn_input(parsed_input)
 
         await self.hooks.on_tool_call_start(self.agent, tool_call)
-        delegated_result = await self._run_default_agent_tool(
-            visible_tools=tools,
-            tool_name=tool_definition.name,
-            tool_definition=tool_definition,
-            parsed_input=parsed_input,
-        )
+        try:
+            delegated_result = await self._run_default_agent_tool(
+                visible_tools=tools,
+                tool_name=tool_definition.name,
+                tool_definition=tool_definition,
+                parsed_input=cast(DefaultAgentToolInput, spawn_input),
+                spawn_parameters=spawn_parameters,
+                tool_call_id=tool_call.id,
+                parent_span=parent_span,
+            )
+        except SpawnModelRejected as exc:
+            delegated_result = ToolFailure(
+                text=f"Spawn rejected: {exc.reason}",
+                error=ToolError(kind="spawn_model_rejected", message=exc.reason),
+            )
 
         await self.hooks.on_tool_call_end(self.agent, tool_call, delegated_result)
 
@@ -1189,6 +1251,7 @@ class RunLoop:
         handoff_call: ToolCall,
         tool_definition: HandoffTool | DefaultHandoffTool,
         tools: Tools,
+        parent_span: Span[Any] | None = None,
     ) -> RunResult:
         """Transfer control to another agent and return its final result.
 
@@ -1200,6 +1263,8 @@ class RunLoop:
             tool_call=handoff_call,
             args_model=tool_definition.args_type(),
         )
+        spawn_input, spawn_parameters = unwrap_spawn_input(parsed_input)
+        parsed_input = cast(DelegatedTaskInput, spawn_input)
 
         # Resolve the child model and configuration before transferring state.
         if isinstance(tool_definition, HandoffTool):
@@ -1223,6 +1288,24 @@ class RunLoop:
                 schema=config.schema,
                 tools=config.tools,
             )
+
+        child_id = delegated_agent_id(
+            self.agent.id, tool_definition.name, kind=DelegationKind.HANDOFF
+        )
+        handoff_descriptor = await self._resolve_spawn_model(
+            descriptor=handoff_descriptor,
+            child_id=child_id,
+            tool_name=tool_definition.name,
+            tool_call_id=handoff_call.id,
+            parent_span=parent_span,
+            kind=(
+                "handoff"
+                if isinstance(tool_definition, HandoffTool)
+                else "default_handoff"
+            ),
+            task=parsed_input.task or default_handoff_task_message(),
+            spawn_parameters=spawn_parameters,
+        )
 
         # Pass inherited tool sources through the existing child shim policy.
         handoff_descriptor = replace(
@@ -1273,9 +1356,7 @@ class RunLoop:
         # Deliver through the runtime, forwarding events and controls for streamed runs.
         if self.emit is None:
             outcome = await self.agent_delivery.send(
-                recipient=delegated_agent_id(
-                    self.agent.id, tool_definition.name, kind=DelegationKind.HANDOFF
-                ),
+                recipient=child_id,
                 descriptor=handoff_descriptor,
                 run_input=transferred_state,
                 parent_tools=self.runner_task.base_tools,
@@ -1283,9 +1364,7 @@ class RunLoop:
             handoff_result = require_handoff_result(outcome)
         else:
             handoff_result = await self.agent_delivery.stream_handoff(
-                recipient=delegated_agent_id(
-                    self.agent.id, tool_definition.name, kind=DelegationKind.HANDOFF
-                ),
+                recipient=child_id,
                 parent_tools=self.runner_task.base_tools,
                 descriptor=handoff_descriptor,
                 transferred_state=transferred_state,
@@ -1323,12 +1402,28 @@ class RunLoop:
         tool_name: str,
         descriptor: AgentDescriptor,
         run_input: list[RunHistoryItem],
+        tool_call_id: str,
+        parent_span: Span[Any] | None = None,
+        spawn_parameters: BaseModel | None = None,
     ) -> str:
         """Run one delegated sub-agent as a subroutine and return text output."""
+        child_id = delegated_agent_id(
+            self.agent.id, tool_name, kind=DelegationKind.TOOL
+        )
         child_descriptor = _resolved_child_descriptor(
             runner_task=self.runner_task,
             parent_model=self.model,
             descriptor=descriptor,
+        )
+        child_descriptor = await self._resolve_spawn_model(
+            descriptor=child_descriptor,
+            kind="agent_tool",
+            task=cast(RunMessageContent, run_input[0]),
+            spawn_parameters=spawn_parameters,
+            child_id=child_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            parent_span=parent_span,
         )
         child_descriptor = replace(
             child_descriptor,
@@ -1344,9 +1439,7 @@ class RunLoop:
 
         # Use runtime delivery so child registration and lifecycle stay centralized.
         outcome = await self.agent_delivery.send(
-            recipient=delegated_agent_id(
-                self.agent.id, tool_name, kind=DelegationKind.TOOL
-            ),
+            recipient=child_id,
             descriptor=child_descriptor,
             run_input=run_input,
             parent_tools=self.runner_task.base_tools,
@@ -1361,6 +1454,9 @@ class RunLoop:
         tool_name: str,
         tool_definition: DefaultAgentTool,
         parsed_input: DefaultAgentToolInput,
+        tool_call_id: str,
+        parent_span: Span[Any] | None = None,
+        spawn_parameters: BaseModel | None = None,
     ) -> str:
         """Run one generic spawned helper agent as a subroutine."""
 
@@ -1397,6 +1493,16 @@ class RunLoop:
                     inherit_definitions=True,
                 ),
             )
+            child_descriptor = await self._resolve_spawn_model(
+                descriptor=child_descriptor,
+                kind="default_agent_tool",
+                task=parsed_input.task,
+                spawn_parameters=spawn_parameters,
+                child_id=child_id,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                parent_span=parent_span,
+            )
             outcome = await self.agent_delivery.send(
                 recipient=child_id,
                 descriptor=child_descriptor,
@@ -1408,6 +1514,108 @@ class RunLoop:
         finally:
             # Release the slot after success, failure, or cancellation.
             await self.agent_delegation.release_child(child_id=child_id)
+
+    async def _resolve_spawn_model(
+        self,
+        *,
+        descriptor: AgentDescriptor,
+        kind: SpawnKind,
+        task: RunMessageContent,
+        child_id: AgentId,
+        tool_name: str,
+        tool_call_id: str,
+        parent_span: Span[Any] | None,
+        spawn_parameters: BaseModel | None = None,
+    ) -> AgentDescriptor:
+        """Resolve one child assignment before any delivery or state transfer."""
+        # Each caller has already resolved descriptor defaults and reserved any
+        # required slot. The provider receives its own argument snapshot.
+        assert descriptor.model is not None
+        baseline = SpawnModelConfig(
+            descriptor.model, snapshot_model_args(descriptor.model_args)
+        )
+        context = SpawnModelContext(
+            kind=kind,
+            parent_id=self.agent.id,
+            child_id=child_id,
+            parent_name=self.runner_task.name,
+            child_name=descriptor.name,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            task=task,
+            spawn_parameters=spawn_parameters,
+            baseline=baseline,
+        )
+        decision: dict[str, Any] = {
+            "kind": kind,
+            "tool_call_id": tool_call_id,
+            "child_id": str(child_id),
+            "status": "baseline",
+        }
+        try:
+            async with cancellation_scope(self.cancellation_token):
+                selection = (
+                    self.spawn_model_provider.resolve(context)
+                    if self.spawn_model_provider is not None
+                    else None
+                )
+                if inspect.isawaitable(selection):
+                    selection = await selection
+                if (
+                    self.cancellation_token is not None
+                    and self.cancellation_token.is_cancelled
+                ):
+                    raise asyncio.CancelledError
+
+                if selection is not None:
+                    selection = _validate_spawn_selection(selection)
+                    decision["status"] = (
+                        "fallback"
+                        if selection.fallback_reason is not None
+                        else "selected"
+                    )
+                    decision["label"] = selection.label
+                    decision["fallback_reason"] = selection.fallback_reason
+                    descriptor = replace(
+                        descriptor,
+                        model=selection.config.model,
+                        model_args=(
+                            dict(selection.config.model_args)
+                            if selection.config.model_args is not None
+                            else None
+                        ),
+                    )
+        except SpawnModelRejected as exc:
+            decision.update(status="rejected", refusal_reason=exc.reason)
+            raise
+        except asyncio.CancelledError:
+            decision["status"] = "cancelled"
+            raise
+        except Exception:
+            decision["status"] = "error"
+            raise
+        finally:
+            # Do not put tasks, request mappings, clients, or exception text in
+            # the decision record, including when application policy fails.
+            if decision["status"] in ("baseline", "selected", "fallback"):
+                assert descriptor.model is not None
+                metadata = descriptor.model.request_metadata(descriptor.model_args)
+                decision.update(
+                    {
+                        key: value
+                        for key, value in metadata.items()
+                        if key in ("model", "requested_effort")
+                    }
+                )
+            with custom_span(
+                "spawn_model_decision",
+                data=decision,
+                parent=parent_span,
+                disabled=self.model.tracing.is_disabled(),
+            ):
+                pass
+
+        return descriptor
 
 
 def _resolved_child_descriptor(
@@ -1446,11 +1654,43 @@ def _parse_delegated_tool_args[ArgsT: BaseModel](
         ) from exc
 
     try:
-        return args_model(**parsed_arguments)
+        return args_model.model_validate(parsed_arguments)
     except ValidationError as exc:
         raise ModelBehaviorError(
             f"Invalid arguments for delegated tool '{tool_call.function.name}': {exc}"
         ) from exc
+
+
+def _validate_spawn_selection(selection: object) -> SpawnModelSelection:
+    """Validate the application return contract without interpreting its policy."""
+    if not isinstance(selection, SpawnModelSelection):
+        raise TypeError("Spawn model provider must return SpawnModelSelection or None.")
+    config = cast(object, selection.config)
+    if not isinstance(config, SpawnModelConfig) or not isinstance(
+        cast(object, config.model), Model
+    ):
+        raise TypeError("SpawnModelSelection requires a SpawnModelConfig with a Model.")
+    model_args = cast(object, config.model_args)
+    if model_args is not None and (
+        not isinstance(model_args, Mapping)
+        or any(
+            not isinstance(key, str)
+            for key in cast(Mapping[object, object], model_args)
+        )
+    ):
+        raise TypeError(
+            "SpawnModelConfig.model_args must be a string-keyed mapping or None."
+        )
+    if any(
+        value is not None and not isinstance(value, str)
+        for value in (
+            cast(object, selection.label),
+            cast(object, selection.fallback_reason),
+        )
+    ):
+        raise TypeError("Spawn selection labels and reasons must be strings or None.")
+
+    return selection
 
 
 def _child_shims(
@@ -1511,7 +1751,7 @@ def _model_args(runner_task: RunnerTask) -> dict[str, object] | None:
 
     # Copy so per-call mutations (e.g. provider-side updates) never leak
     # back into the agent descriptor.
-    return dict(model_args)
+    return snapshot_model_args(model_args)
 
 
 def _limit_tools(

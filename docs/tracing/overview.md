@@ -30,6 +30,21 @@ system over time.
 runs tools. `ModelTracing.ENABLED_WITHOUT_DATA` records function spans with
 the tool name and timing, and leaves their input and output fields empty.
 
+## Spawn decisions
+
+The harness records each child model decision in a `spawn_model_decision`
+custom span under the parent's generation span. It includes the spawn kind,
+tool call ID, child ID, status, and safe selection or refusal labels. See
+[Spawn Model Selection](../harness/runner.md#spawn-model-selection) for the
+provider contract and lifetime rules.
+
+Model adapters can implement `Model.request_metadata(extra_call_args)` to return
+safe `model` and `requested_effort` string values. The default returns no values.
+An adapter must omit credentials, task content, and full request arguments.
+OpenAI Responses and LiteLLM record the effective requested effort after call
+arguments are applied, including changes made by child shims. The configured
+model name can differ from the serving model reported in response metadata.
+
 ## Getting Started
 
 Tracing uses one global

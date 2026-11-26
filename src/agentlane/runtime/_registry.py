@@ -1,6 +1,6 @@
 """Agent factory and instance registry."""
 
-from asyncio import Future, get_running_loop
+from asyncio import CancelledError, Future, get_running_loop
 from collections.abc import Awaitable, Callable
 from threading import RLock
 
@@ -23,6 +23,7 @@ class AgentRegistry:
         """Initialize empty registry state."""
         self._lock = RLock()
         self._factories: dict[AgentType, _ResolvedAgentFactory] = {}
+        self._pending_factories: dict[AgentId, _ResolvedAgentFactory] = {}
         self._instances: dict[AgentId, Agent] = {}
         self._creation_futures: dict[AgentId, Future[Agent]] = {}
 
@@ -55,6 +56,28 @@ class AgentRegistry:
         with self._lock:
             self._instances[agent_id] = bound_instance
 
+    def register_pending_factory(
+        self, agent_id: AgentId, factory: AgentFactory
+    ) -> None:
+        """Bind a one-use factory to an exact id until its first dispatch.
+
+        The caller must discard the pending factory if delivery is aborted.
+        Existing instances and pending creations cannot be replaced this way.
+        """
+        with self._lock:
+            if (
+                agent_id in self._instances
+                or agent_id in self._pending_factories
+                or agent_id in self._creation_futures
+            ):
+                raise ValueError(f"Agent '{agent_id}' is already registered.")
+            self._pending_factories[agent_id] = _normalize_factory(factory)
+
+    def discard_pending_factory(self, agent_id: AgentId) -> None:
+        """Drop an unused factory without changing an active instance."""
+        with self._lock:
+            self._pending_factories.pop(agent_id, None)
+
     def has_instance(self, agent_id: AgentId) -> bool:
         """Return whether an instance is active for the id.
 
@@ -86,25 +109,27 @@ class AgentRegistry:
             if existing_instance is not None:
                 return existing_instance
 
-            factory = self._factories.get(agent_id.type)
-            if factory is None:
-                raise LookupError(
-                    f"No factory registered for agent type '{agent_id.type.value}'."
-                )
-
             # If another caller is already creating this agent, we join that
             # in-flight creation instead of running the factory twice.
             creation_future = self._creation_futures.get(agent_id)
             if creation_future is None:
+                # A child-specific factory takes priority over the shared type.
+                # Remove it at dispatch so it cannot retain an unused descriptor.
+                factory = self._pending_factories.pop(agent_id, None)
+                if factory is None:
+                    factory = self._factories.get(agent_id.type)
+                if factory is None:
+                    raise LookupError(
+                        f"No factory registered for agent type '{agent_id.type.value}'."
+                    )
+
                 creation_future = get_running_loop().create_future()
                 self._creation_futures[agent_id] = creation_future
-                # This caller owns creation and must complete the shared future.
-                should_create = True
             else:
                 # Another caller owns creation; wait for its outcome.
-                should_create = False
+                factory = None
 
-        if not should_create:
+        if factory is None:
             return await creation_future
 
         try:
@@ -115,13 +140,17 @@ class AgentRegistry:
                 agent_id=agent_id,
                 instance=created_instance,
             )
-        except Exception as exc:
+        except BaseException as exc:
             with self._lock:
                 # Publish the same exception to all waiters and clear in-flight state.
                 pending_future = self._creation_futures.pop(agent_id, None)
                 if pending_future is not None and not pending_future.done():
-                    pending_future.set_exception(exc)
-            raise exc
+                    if isinstance(exc, CancelledError):
+                        pending_future.cancel()
+                    else:
+                        pending_future.set_exception(exc)
+                        pending_future.exception()
+            raise
 
         with self._lock:
             self._instances[agent_id] = bound_instance

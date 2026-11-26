@@ -39,6 +39,13 @@ from ._run import (
 )
 from ._runner import Runner
 from ._snapshot import AgentSnapshot
+from ._spawn_model import (
+    SpawnModelConfig,
+    SpawnModelContext,
+    SpawnModelProvider,
+    SpawnModelRejected,
+    SpawnModelSelection,
+)
 from ._state_store import StateStore
 from ._stream import RunStream
 from ._task import Task
@@ -101,6 +108,11 @@ __all__ = [
     "RestrictTools",
     "RestrictToolsBuilder",
     "ShimState",
+    "SpawnModelConfig",
+    "SpawnModelContext",
+    "SpawnModelProvider",
+    "SpawnModelRejected",
+    "SpawnModelSelection",
     "StateStore",
     "RunStream",
     "RunToolApprovalEvent",

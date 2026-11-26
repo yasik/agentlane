@@ -168,6 +168,11 @@ schema mode. Set `strict=False` to preserve optional fields and open objects
 in inferred schemas. An explicit `parameters_schema` is passed through
 unchanged; adapters receive the strictness setting with the tool definition.
 
+`ToolSpec.with_args_model(model)` returns a copy with a new argument parser and
+schema. It keeps the concrete tool kind, name, description, strict setting, and
+other tool configuration. The new model replaces any explicit parameter schema;
+the source tool is unchanged.
+
 `Tool.retry_on_timeout` defaults to `True`. Set it to `False` to disable
 automatic timeout retries in `ToolExecutor`, even when
 `Tools.tool_call_max_retries` allows retries. [MCP tools](../harness/tools/mcp.md)

@@ -644,3 +644,66 @@ def test_litellm_client_stream_response_traces_serialized_events(
     assert generation_spans[0].span_data.events is not None
     assert generation_spans[0].span_data.events[0]["kind"] == "text_delta"
     assert generation_spans[0].span_data.events[-1]["kind"] == "completed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_litellm_trace_records_effective_effort_and_served_model(
+    monkeypatch: pytest.MonkeyPatch, streaming: bool
+) -> None:
+    """Request overrides and response identity stay visible without payload data."""
+    original_provider = get_trace_provider()
+    provider = DefaultTraceProvider()
+    processor = _CollectingTracingProcessor()
+    provider.register_processor(processor)
+    client = Client(
+        Config(
+            api_key="test-key",
+            model="configured-alias",
+            tracing=ModelTracing.ENABLED_WITHOUT_DATA,
+        ),
+        reasoning_effort="low",
+    )
+    stream = _FakeAsyncStream(
+        [_make_stream_chunk(content="done", finish_reason="stop")]
+    )
+    completion = AsyncMock(
+        return_value=stream if streaming else _make_model_response("done")
+    )
+    monkeypatch.setattr(litellm, "acompletion", completion)
+    call_args = {
+        "reasoning_effort": "high",
+        "extra_headers": {"Authorization": "canary-secret"},
+    }
+    assert client.request_metadata() == {
+        "model": "configured-alias",
+        "requested_effort": "low",
+    }
+    assert client.request_metadata(call_args) == {
+        "model": "configured-alias",
+        "requested_effort": "high",
+    }
+
+    set_trace_provider(provider)
+    try:
+        with trace("effective-request-metadata"):
+            messages: list[MessageDict] = [{"role": "user", "content": "task"}]
+            if streaming:
+                async for _ in client.stream_response(
+                    messages, extra_call_args=call_args
+                ):
+                    pass
+            else:
+                await client.get_response(messages, extra_call_args=call_args)
+    finally:
+        set_trace_provider(original_provider)
+
+    assert completion.call_args.kwargs["reasoning_effort"] == "high"
+    generation = next(
+        span for span in processor.spans if span.span_data.type == "generation"
+    )
+    assert generation.span_data.model_config["requested_effort"] == "high"
+    assert generation.span_data.model_config["response_model"] == "gpt-4o"
+    assert "canary-secret" not in json.dumps(generation.export())
+    assert generation.span_data.input is None
+    assert generation.span_data.output is None
