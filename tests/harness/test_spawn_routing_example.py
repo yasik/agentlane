@@ -42,9 +42,9 @@ async def test_routing_example_applies_explicit_settings(
         name: SequenceModel([make_assistant_response("323")])
         for name in ("quick", "reasoning")
     }
-    provider = example["RoutingProvider"](
+    provider = example["ExampleProvider"](
         {name: SpawnModelConfig(client, None) for name, client in children.items()},
-        model_can_choose=model_can_choose,
+        parameters_model=example["SpawnChoice"] if model_can_choose else None,
         mandatory_route=mandatory_route,
         default_route=default_route,
     )

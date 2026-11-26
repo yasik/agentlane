@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from typing import Literal
 
 import structlog
@@ -15,37 +16,29 @@ from agentlane.harness import (
     Runner,
     SpawnModelConfig,
     SpawnModelContext,
+    SpawnModelProvider,
     SpawnModelSelection,
 )
 from agentlane.harness.agents import DefaultAgent
 from agentlane.models import Config, Model, ModelResponse, Tools
 
-type WorkClass = Literal["quick", "reasoning"]
-
 
 class SpawnChoice(BaseModel):
     """Optional parent preference exposed by the spawn tool."""
 
-    work_class: WorkClass | None = Field(
+    work_class: Literal["quick", "reasoning"] | None = Field(
         default=None, description="Suggested work class. Application policy decides."
     )
 
 
-class RoutingProvider:
+@dataclass
+class ExampleProvider:
     """Apply a mandatory route, a parent suggestion, or the default route."""
 
-    def __init__(
-        self,
-        routes: dict[WorkClass, SpawnModelConfig],
-        *,
-        model_can_choose: bool,
-        mandatory_route: WorkClass | None = None,
-        default_route: WorkClass = "quick",
-    ) -> None:
-        self.routes = routes
-        self.parameters_model = SpawnChoice if model_can_choose else None
-        self.mandatory_route: WorkClass | None = mandatory_route
-        self.default_route: WorkClass = default_route
+    routes: dict[str, SpawnModelConfig]
+    parameters_model: type[BaseModel] | None = SpawnChoice
+    mandatory_route: str | None = None
+    default_route: str = "quick"
 
     def resolve(self, context: SpawnModelContext) -> SpawnModelSelection:
         choice = context.spawn_parameters
@@ -58,7 +51,7 @@ class RoutingProvider:
 
 
 def create_agent(
-    model: Model[ModelResponse], provider: RoutingProvider
+    model: Model[ModelResponse], provider: SpawnModelProvider
 ) -> DefaultAgent:
     """Connect application policy to the generic agent tool."""
     return DefaultAgent(
@@ -82,33 +75,30 @@ def create_agent(
     )
 
 
+def openrouter_model(name: str) -> Model[ModelResponse]:
+    """Build each real client with the same connection settings."""
+    return Client(
+        Config(
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            model=f"openrouter/{name.removeprefix('openrouter/')}",
+            timeout=60,
+        )
+    )
+
+
 async def run_demo() -> None:
     """Run one delegation with real OpenRouter clients."""
     logging.basicConfig(level=logging.WARNING)
     structlog.configure(
         wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING)
     )
-    api_key = os.environ["OPENROUTER_API_KEY"]
-    parent_name = os.environ["OPENROUTER_MODEL"].removeprefix("openrouter/")
-    quick_name = os.environ.get(
-        "SPAWN_QUICK_MODEL", "openai/gpt-5.4-mini"
-    ).removeprefix("openrouter/")
-    reasoning_name = os.environ.get("SPAWN_REASONING_MODEL", parent_name).removeprefix(
-        "openrouter/"
-    )
-
-    parent = Client(
-        Config(api_key=api_key, model=f"openrouter/{parent_name}", timeout=60)
-    )
-    quick = Client(
-        Config(api_key=api_key, model=f"openrouter/{quick_name}", timeout=60)
-    )
-    reasoning = Client(
-        Config(api_key=api_key, model=f"openrouter/{reasoning_name}", timeout=60)
-    )
+    parent_name = os.environ["OPENROUTER_MODEL"]
+    parent = openrouter_model(parent_name)
+    quick = openrouter_model(os.environ.get("SPAWN_QUICK_MODEL", "openai/gpt-5.4-mini"))
+    reasoning = openrouter_model(os.environ.get("SPAWN_REASONING_MODEL", parent_name))
 
     # These settings belong to the application. The parent can only suggest.
-    provider = RoutingProvider(
+    provider = ExampleProvider(
         {
             "quick": SpawnModelConfig(
                 quick, {"reasoning_effort": "low", "max_tokens": 1024}
@@ -117,7 +107,7 @@ async def run_demo() -> None:
                 reasoning, {"reasoning_effort": "medium", "max_tokens": 1024}
             ),
         },
-        model_can_choose=True,
+        parameters_model=SpawnChoice,
         mandatory_route=None,
         default_route="quick",
     )

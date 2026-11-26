@@ -141,62 +141,24 @@ or disable suggestions and select the model itself. The provider uses configured
 clients and validates allowed models and supported request settings. Core does
 not interpret application route names or vendor effort levels.
 
+Implement `SpawnModelProvider` with a `parameters_model` attribute and a
+`resolve(context)` method, then pass the instance to the runner:
+
 ```python
-from typing import Literal
-
-from pydantic import BaseModel, Field
-
-from agentlane.harness import (
-    Runner,
-    SpawnModelConfig,
-    SpawnModelContext,
-    SpawnModelSelection,
-)
-
-
-class SpawnChoice(BaseModel):
-    work_class: Literal["quick", "reasoning"] | None = Field(
-        default=None,
-        description="Suggested work class; application policy makes the final choice.",
-    )
-
-
-class RoutingProvider:
-    def __init__(
-        self, routes, *, model_can_choose=True, mandatory_route=None, default_route="quick"
-    ):
-        self.parameters_model = SpawnChoice if model_can_choose else None
-        self.routes = routes
-        self.mandatory_route = mandatory_route
-        self.default_route = default_route
-
-    def resolve(self, context: SpawnModelContext):
-        choice = context.spawn_parameters
-        suggested = choice.work_class if isinstance(choice, SpawnChoice) else None
-        route = self.mandatory_route or suggested or self.default_route
-        return SpawnModelSelection(self.routes[route], label=route)
-
-
-# QUICK_MODEL and REASONING_MODEL are preconfigured application clients.
-provider = RoutingProvider({
-    "quick": SpawnModelConfig(QUICK_MODEL, {"reasoning_effort": "low"}),
-    "reasoning": SpawnModelConfig(REASONING_MODEL, {"reasoning_effort": "high"}),
-})
 runner = Runner(spawn_model_provider=provider)
 ```
 
-`resolve(context)` can be synchronous or asynchronous. An application can keep
-an external router, request context, or tenant policy on the provider instance.
+`resolve(context)` can be synchronous or asynchronous. External router
+integrations implement the same protocol directly and can keep their service
+client, request context, or tenant policy on the provider instance.
 
 ### Example
 
 The [spawn model routing example](../../examples/harness/spawn_model_routing/)
-uses real OpenRouter clients with `DefaultAgent`. Its provider takes explicit
-`model_can_choose`, `mandatory_route`, and `default_route` settings. The rule is
-mandatory route, then parent suggestion, then default route. Each run delegates
-one task and prints the final answer.
-
-The example README lists its environment settings and run command.
+uses real OpenRouter clients with `DefaultAgent`. Its local `ExampleProvider`
+dataclass applies a mandatory route, then a parent suggestion, then a default
+route. `parameters_model=SpawnChoice` enables suggestions; `None` disables them.
+The example README lists its settings and run command.
 
 ### Parameters and task input
 

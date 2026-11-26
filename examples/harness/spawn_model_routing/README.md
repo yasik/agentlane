@@ -6,24 +6,25 @@ and request settings when the helper is created.
 
 ## Policy settings
 
-The application configures `RoutingProvider` in `main.py`:
+The local `ExampleProvider` dataclass implements `SpawnModelProvider`:
 
 ```python
-provider = RoutingProvider(
+provider = ExampleProvider(
     routes,
-    model_can_choose=True,
+    parameters_model=SpawnChoice,
     mandatory_route=None,
     default_route="quick",
 )
 ```
 
-`model_can_choose=True` adds `SpawnChoice` to the tool schema. The parent can
-suggest `quick` or `reasoning`. Set it to `False` to omit those preferences.
+`parameters_model=SpawnChoice` adds preferences to the tool schema. The parent
+can suggest `quick` or `reasoning`. Set it to `None` to omit those preferences.
 `mandatory_route` overrides any suggestion. `default_route` applies when neither
 an override nor a suggestion is present.
 
 The configured routes contain real model clients and their reasoning settings.
-The runner applies the selected configuration to the new child.
+For an external router, implement `SpawnModelProvider` directly. Its `resolve()`
+method can be asynchronous; `create_agent()` accepts either implementation.
 
 ## Run
 
