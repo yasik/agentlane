@@ -2,7 +2,9 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+
+from pydantic import BaseModel, RootModel
 
 from agentlane.models import Model, ModelResponse, ModelStreamEvent, ToolExecutor
 from agentlane.runtime import CancellationToken
@@ -12,6 +14,7 @@ from ._events import RunEventEmitter, RunEventStream, forward_tool_approval_even
 from ._hooks import RunnerHooks, coerce_runner_hooks
 from ._run import RunResult, RunState
 from ._run_loop import AgentDelegationState, RunLoop, RunnerTask
+from ._spawn_model import SpawnModelProvider
 from ._stream import RunStream
 from ._task import Task
 
@@ -34,6 +37,7 @@ class Runner:
         agent_max_depth: int = 4,
         agent_max_threads: int = 16,
         is_retryable: Callable[[BaseException], bool] | None = None,
+        spawn_model_provider: SpawnModelProvider | None = None,
     ) -> None:
         """Initialize retry and loop limits for one reusable runner.
 
@@ -47,6 +51,8 @@ class Runner:
                 spawned ``agent`` tool calls.
             is_retryable: Optional predicate for retry eligibility. Defaults
                 to the standard HTTP-status-code check in ``retry_on_errors``.
+            spawn_model_provider: Optional object that combines the parameter
+                schema and resolver method.
         """
         if max_attempts < 1:
             raise ValueError("Runner.max_attempts must be at least 1.")
@@ -60,6 +66,29 @@ class Runner:
         self._max_attempts = max_attempts
         self._max_turns = max_turns
         self._is_retryable = is_retryable
+        self._spawn_model_provider = spawn_model_provider
+
+        # Snapshot the schema once so all run modes expose the same contract.
+        parameters_model = cast(
+            object,
+            (
+                spawn_model_provider.parameters_model
+                if spawn_model_provider is not None
+                else None
+            ),
+        )
+        if parameters_model is not None and (
+            not isinstance(parameters_model, type)
+            or not issubclass(parameters_model, BaseModel)
+        ):
+            raise TypeError("Spawn parameters must be declared as a Pydantic model.")
+        if parameters_model is not None and issubclass(parameters_model, RootModel):
+            raise TypeError(
+                "Spawn parameters must use a field-based BaseModel; "
+                "RootModel is not supported."
+            )
+
+        self._spawn_parameters_model = parameters_model
 
         # Share execution services and delegation limits across this runner's loops.
         self._tool_executor = ToolExecutor()
@@ -91,6 +120,8 @@ class Runner:
             max_attempts=self._max_attempts,
             max_turns=self._max_turns,
             is_retryable=self._is_retryable,
+            spawn_model_provider=self._spawn_model_provider,
+            spawn_parameters_model=self._spawn_parameters_model,
             agent=agent,
             runner_task=runner_task,
             model=model,
@@ -197,6 +228,8 @@ class Runner:
                 max_attempts=self._max_attempts,
                 max_turns=self._max_turns,
                 is_retryable=self._is_retryable,
+                spawn_model_provider=self._spawn_model_provider,
+                spawn_parameters_model=self._spawn_parameters_model,
                 agent=agent,
                 runner_task=runner_task,
                 model=model,

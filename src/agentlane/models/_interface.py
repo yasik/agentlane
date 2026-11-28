@@ -306,6 +306,18 @@ class Model[TResponse](abc.ABC):
             **kwargs,
         )
 
+    def request_metadata(
+        self, extra_call_args: dict[str, Any] | None = None
+    ) -> dict[str, str]:
+        """Return safe model and requested_effort identifiers, when known.
+
+        Adapters own their request vocabulary. Do not return request mappings,
+        credentials, or live handles. The default leaves both values unknown.
+        Read identifiers without validating arguments or opening resources: child
+        shims can replace these arguments before the first model request.
+        """
+        return {}
+
     @property
     def tracing(self) -> ModelTracing:
         """Tracing mode configured for this model (defaults to ``DISABLED``).

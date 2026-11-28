@@ -1,11 +1,12 @@
 """Create child agents and deliver delegated input through the harness runtime."""
 
+import asyncio
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from agentlane.messaging import AgentId, DeliveryOutcome
 from agentlane.models import ModelStreamEvent, Tools
-from agentlane.runtime import CancellationToken, RuntimeEngine
+from agentlane.runtime import BaseAgent, CancellationToken, Engine, RuntimeEngine
 
 from ._lifecycle import AgentDescriptor, LifecycleRunner
 from ._run import RunInput, RunResult, RunState
@@ -47,21 +48,39 @@ class AgentDelivery:
         run_input: RunInput,
         parent_tools: Tools | None,
     ) -> DeliveryOutcome:
-        """Register the child factory and deliver input through runtime messaging."""
-        self._runtime().register_factory(
-            recipient.type.value,
-            type(self.agent).create_factory(
-                runner=self.runner,
-                descriptor=descriptor,
-                parent_tools=parent_tools,
-            ),
+        """Bind one child configuration until runtime messaging dispatches it."""
+        self._check_cancelled()
+        runtime = self._runtime()
+        delivery_token = self.cancellation_token or CancellationToken()
+        factory = type(self.agent).create_factory(
+            runner=self.runner,
+            descriptor=descriptor,
+            parent_tools=parent_tools,
         )
 
-        return await self.agent.send_message(
-            run_input,
-            recipient=recipient,
-            cancellation_token=self.cancellation_token,
+        def create_child(engine: Engine) -> BaseAgent:
+            if delivery_token.is_cancelled:
+                raise asyncio.CancelledError
+            return factory(engine)
+
+        # Keep construction lazy so an aborted delivery retains no unused child.
+        # The full id prevents simultaneous spawns from sharing a type factory.
+        runtime.register_pending_factory(
+            recipient,
+            create_child,
         )
+
+        try:
+            return await self.agent.send_message(
+                run_input,
+                recipient=recipient,
+                cancellation_token=delivery_token,
+            )
+        except asyncio.CancelledError:
+            delivery_token.cancel()
+            raise
+        finally:
+            runtime.discard_pending_factory(recipient)
 
     async def stream_handoff(
         self,
@@ -74,6 +93,7 @@ class AgentDelivery:
         control_stream: BaseRunStream[Any] | None,
     ) -> RunResult:
         """Transfer the run locally to another agent and stream its events."""
+        self._check_cancelled()
         runtime = self._runtime()
         bound_agent = type(self.agent).bind(
             runtime,
@@ -117,3 +137,8 @@ class AgentDelivery:
             "Harness sub-agent delegation requires an engine that supports "
             "runtime factory registration."
         )
+
+    def _check_cancelled(self) -> None:
+        """Stop cancelled spawns before registration or child construction."""
+        if self.cancellation_token is not None and self.cancellation_token.is_cancelled:
+            raise asyncio.CancelledError

@@ -27,6 +27,8 @@ harness directly.
 20. [mcp_meeting_assistant](./mcp_meeting_assistant/): `DefaultAgent` that uses OpenRouter and MCP tools to search and read local meeting notes.
 21. [openai_steering](./openai_steering/): change an active OpenAI response and verify the applied steering receipt, successor, and committed history.
 22. [openai_async_tools](./openai_async_tools/): native async functions with measured tool overlap, concurrent model text, and verified results.
+23. [spawn_model_routing](./spawn_model_routing/): choose a helper model through explicit application settings and an optional parent suggestion.
+24. [spawn_model_opendecisions](./spawn_model_opendecisions/): ask OpenDecisions to choose a configured child model before the helper starts.
 
 ## Run
 
@@ -35,7 +37,9 @@ Most harness demos require `OPENAI_API_KEY` in the environment:
 The `process_bridge_stdio` and `mounted_filesystem` demos do not call a model
 provider and need no API key. The `claude_agent_sdk_coworker` demo also needs
 `ANTHROPIC_API_KEY` and the `claude-agent-sdk` extra. The MCP meeting assistant
-uses `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` instead.
+and spawn model examples use `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` instead.
+The OpenDecisions example also needs a decision service; its README includes
+the server command.
 The steering and async-tool examples default to `gpt-6-astra` and require
 provider feature access. Set `OPENAI_MODEL` to select another compatible model.
 
@@ -67,4 +71,8 @@ uv run python examples/harness/claude_agent_sdk_coworker/main.py
 (cd examples/harness/process_bridge_stdio && bun install && bun run client.ts)
 uv run --env-file .env.local --extra mcp --extra litellm \
   python examples/harness/mcp_meeting_assistant/main.py
+uv run --env-file .env.local --extra litellm \
+  python examples/harness/spawn_model_routing/main.py
+uv run --env-file .env.local --extra litellm \
+  python examples/harness/spawn_model_opendecisions/main.py
 ```

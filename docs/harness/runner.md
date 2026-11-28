@@ -129,6 +129,136 @@ The canonical request builder is shared with conversation compaction through
 use that helper when estimating or summarizing history so their view of the
 request matches the runner's next model call.
 
+## Spawn Model Selection
+
+Pass `spawn_model_provider=` to `Runner` to select a model when a parent creates
+a child. One provider owns the application parameter schema and selection
+policy. It applies to predefined agent tools, generic helpers, and both handoff
+forms in `run`, `run_stream`, and `run_events`.
+
+The application can accept a parent model's suggestion, replace that suggestion,
+or disable suggestions and select the model itself. The provider uses configured
+clients and validates allowed models and supported request settings. Core does
+not interpret application route names or vendor effort levels.
+
+Implement `SpawnModelProvider` with a `parameters_model` attribute and a
+`resolve(context)` method, then pass the instance to the runner:
+
+```python
+runner = Runner(spawn_model_provider=provider)
+```
+
+`resolve(context)` can be synchronous or asynchronous. External router
+integrations implement the same protocol directly and can keep their service
+client, request context, or tenant policy on the provider instance.
+
+### Examples
+
+The [spawn model routing example](../../examples/harness/spawn_model_routing/)
+uses real OpenRouter clients with `DefaultAgent`. Its local `ExampleProvider`
+dataclass applies a mandatory route, then a parent suggestion, then a default
+route. `parameters_model=SpawnChoice` enables suggestions; `None` disables them.
+The example README lists its settings and run command.
+
+The [OpenDecisions example](../../examples/harness/spawn_model_opendecisions/)
+uses an async provider with `parameters_model=None`. It sends the task to the
+decision service and maps the returned route to a configured child client.
+
+### Parameters and task input
+
+`parameters_model` must be a field-based Pydantic `BaseModel` subclass or `None`.
+`Runner` rejects `RootModel` subclasses with `TypeError` at construction time.
+When a parameters model is set, each spawn tool uses this envelope:
+
+```json
+{
+  "input": {"name": "researcher", "task": "Compare these papers."},
+  "spawn_parameters": {"work_class": "reasoning"}
+}
+```
+
+`input` retains the selected tool's original validation. The envelope and routing
+object reject undeclared fields. The schema and parser come from the same tool
+configuration. Strict tool adapters can require nullable fields to be present;
+use `{"work_class": null}` for no suggestion in the example schema.
+
+When `parameters_model=None`, the tool keeps its existing argument shape and
+`context.spawn_parameters` is `None`. A legitimate task field named
+`spawn_parameters` remains part of the task. The runner takes the provider's
+schema at construction time; create another runner to change that schema.
+
+The provider receives a `SpawnModelContext` with:
+
+- `kind`: `DelegationKind.TOOL` (`"tool"`) for a helper result, or
+  `DelegationKind.HANDOFF` (`"handoff"`) for a conversation transfer. Import
+  `DelegationKind` from `agentlane.harness`. The kind is the same for predefined
+  and generic tools with the same delegation behavior.
+- `parent_id`, `child_id`, `parent_name`, and `child_name`: identities assigned
+  before resolution. The same child ID is used for delivery and tracing.
+- `tool_name` and `tool_call_id`: the parent's spawn call.
+- `task`: a detached copy of the normalized child payload. A predefined agent
+  tool supplies its validated input model. Generic helpers and handoffs supply
+  their task value, including the handoff default when omitted. Changes to this
+  copy do not change the input delivered to the child.
+- `spawn_parameters`: the validated application model, or `None`.
+- `baseline`: the original configured client and detached argument data after
+  descriptor defaults and parent inheritance have been resolved.
+
+The context has no parent transcript. Applications can use its stable IDs to
+obtain request policy from their own context.
+
+### Assignment and failure
+
+Return `None` to keep the resolved baseline. Return
+`SpawnModelSelection(config=SpawnModelConfig(model, model_args))` to replace the
+whole pair. Selected `model_args=None` or `{}` clears inherited request
+arguments. For an effort-only change, reuse `context.baseline.model` and pass
+the complete desired arguments. Argument data, including nested mutable values,
+is copied at the descriptor boundary and before each call. Model clients and
+context-manager resource handles inside argument containers retain their
+identity. This permits a shared native SDK client while keeping timeout objects,
+headers, and other request data separate. Other data must support deep copying.
+
+A selection can supply a safe `label` and a `fallback_reason`. For an expected
+policy refusal, raise `SpawnModelRejected("safe_reason_code")`. Agent-tool paths
+return a typed `ToolFailure` with kind `spawn_model_rejected`. A handoff raises
+through the existing failure path before state or control transfer. Ordinary
+exceptions and cancellation propagate. Core does not select another model after
+a policy failure.
+
+The provider runs once for each new child, after any applicable slot reservation
+and before delivery or opening the selected client's run resources. Later
+messages to the same live `AgentId` retain its configured assignment. Child
+shims can still change arguments for an individual call.
+
+A `spawn_model_decision` trace span records the spawn kind, call and child IDs,
+status, and safe labels or reason codes under the parent's generation span.
+Adapters can report the configured model and requested effort without validating
+the assignment. This optional diagnostic step is skipped when tracing is disabled;
+ordinary diagnostic errors omit the metadata and do not fail the spawn. Child
+shims can still change request arguments before adapter validation. Generation
+traces record request settings, and response metadata identifies the serving
+model reported by the provider. Decision records exclude task content, full
+argument mappings, clients, and raw exceptions. A model behind an automatic
+router can be known only at invocation.
+
+### History and client lifetime
+
+Routing preferences are separate from the child task. A handoff preserves the
+original parent tool call and its acknowledgement, including their IDs, in the
+transferred history. That original call can contain routing preferences. Treat
+model-visible routing choices as non-secret.
+
+A live child retains its configured client, but a router-backed client can route
+each request to a different downstream model. To pin a concrete model, the
+application must select an explicit permitted model at spawn time.
+
+`RunState` stores conversation state. It does not store a live model client or a
+durable model assignment. Restoring a bare `RunState` does not restore the
+assignment. Restart support needs an application-owned model reference. Provider
+sessions and prefix or KV caches remain adapter-owned; changing clients can
+require history normalization and can miss the cache.
+
 ## Streaming
 
 The runner also owns live model streaming for one run.
@@ -500,6 +630,9 @@ preserve legacy override behavior.
 `agent_max_depth` is inclusive for generic spawned agents. A direct child has
 depth 1, so `Runner(agent_max_depth=4)` allows delegated agents through depth
 4 and rejects the next nested spawn attempt.
+
+For model selection on each new child, see
+[Spawn Model Selection](#spawn-model-selection).
 
 ## Handoffs
 

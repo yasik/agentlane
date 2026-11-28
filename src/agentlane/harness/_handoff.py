@@ -22,7 +22,7 @@ from ._run import RunResult
 
 
 class DelegationKind(LowercaseStrEnum):
-    """Child agent families used in delegated runtime addresses."""
+    """Delegation behavior used by child policies and runtime addresses."""
 
     HANDOFF = "handoff"
     """Used in child addresses when delegation transfers control of the conversation."""

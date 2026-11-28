@@ -1,5 +1,6 @@
 """Task dispatcher that invokes agent handlers."""
 
+import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -46,6 +47,10 @@ class Dispatcher:
         Returns:
             DeliveryOutcome: Terminal dispatch outcome for this task.
         """
+        # Cancel queued work before constructing or retaining its agent instance.
+        if task.cancellation_token.is_cancelled:
+            raise asyncio.CancelledError
+
         try:
             agent = await self._registry.get_or_create(
                 task.recipient,
@@ -54,6 +59,15 @@ class Dispatcher:
         except LookupError as exc:
             return DeliveryOutcome.failed(
                 status=DeliveryStatus.UNDELIVERABLE,
+                message_id=task.envelope.message_id,
+                correlation_id=task.envelope.correlation_id,
+                message=str(exc),
+                retryable=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Construction failures must settle delivery without stopping a worker.
+            return DeliveryOutcome.failed(
+                status=DeliveryStatus.HANDLER_ERROR,
                 message_id=task.envelope.message_id,
                 correlation_id=task.envelope.correlation_id,
                 message=str(exc),

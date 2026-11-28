@@ -7,6 +7,7 @@ stay centralized.
 """
 
 import asyncio
+from collections.abc import Awaitable
 from typing import cast
 
 from grpc import aio as grpc_aio
@@ -39,6 +40,7 @@ from ._distributed_wire import (
     serialize_agent_types,
     serialize_subscriptions,
 )
+from ._engine import Engine
 from ._message_helpers import payload_from_value
 from ._network import resolve_bound_address
 from ._protocol import Agent
@@ -88,7 +90,6 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
         self._host_client: HostServiceStub | None = None
         self._server: grpc_aio.Server | None = None
         self._worker_id: str | None = None
-        self._advertised_agent_types: set[AgentType] = set()
         self._catalog_dirty = False
         self._catalog_sync_task: asyncio.Task[None] | None = None
 
@@ -109,16 +110,36 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
     ) -> AgentType:
         """Register one agent factory and advertise the new type to the host."""
         resolved_type = super().register_factory(agent_type, factory)
-        self._advertised_agent_types.add(resolved_type)
         self._schedule_catalog_sync()
         return resolved_type
 
     def register_instance(self, agent_id: AgentId, instance: Agent) -> AgentId:
         """Register one bound agent instance and advertise its type to the host."""
         registered_id = super().register_instance(agent_id, instance)
-        self._advertised_agent_types.add(agent_id.type)
         self._schedule_catalog_sync()
         return registered_id
+
+    def register_pending_factory(
+        self, agent_id: AgentId, factory: AgentFactory
+    ) -> None:
+        """Register an exact-id factory and advertise its type to the host."""
+
+        async def create_agent(engine: Engine) -> Agent:
+            try:
+                created = factory(engine)
+                return await created if isinstance(created, Awaitable) else created
+            finally:
+                # The registry completes its transition before the queued sync
+                # runs, including failures after a caller discarded the factory.
+                self._schedule_catalog_sync()
+
+        super().register_pending_factory(agent_id, create_agent)
+        self._schedule_catalog_sync()
+
+    def discard_pending_factory(self, agent_id: AgentId) -> None:
+        """Drop unused registration and refresh the host's ownership snapshot."""
+        super().discard_pending_factory(agent_id)
+        self._schedule_catalog_sync()
 
     def add_subscription(self, subscription: Subscription) -> str:
         """Add one subscription locally and push the updated snapshot to the host."""
@@ -445,7 +466,7 @@ class WorkerAgentRuntime(SingleThreadedRuntimeEngine):
         response = await self._host_client.sync_catalog(
             {
                 "worker_id": self._worker_id,
-                "agent_types": serialize_agent_types(self._advertised_agent_types),
+                "agent_types": serialize_agent_types(self._registry.list_agent_types()),
                 "subscriptions": serialize_subscriptions(self.list_subscriptions()),
             }
         )
