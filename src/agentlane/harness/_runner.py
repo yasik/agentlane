@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import TYPE_CHECKING, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from agentlane.models import Model, ModelResponse, ModelStreamEvent, ToolExecutor
 from agentlane.runtime import CancellationToken
@@ -82,6 +82,11 @@ class Runner:
             or not issubclass(parameters_model, BaseModel)
         ):
             raise TypeError("Spawn parameters must be declared as a Pydantic model.")
+        if parameters_model is not None and issubclass(parameters_model, RootModel):
+            raise TypeError(
+                "Spawn parameters must use a field-based BaseModel; "
+                "RootModel is not supported."
+            )
 
         self._spawn_parameters_model = parameters_model
 

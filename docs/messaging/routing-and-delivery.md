@@ -67,15 +67,21 @@ terminal states:
 
 - `DELIVERED` — handler completed successfully.
 - `DROPPED` — message was intentionally discarded by runtime policy.
-- `UNDELIVERABLE` — recipient could not be resolved/created, so dispatch never
-  reached a handler.
+- `UNDELIVERABLE` — recipient routing failed, or instance resolution or creation
+  raised `LookupError`.
 - `TIMEOUT` — delivery exceeded the configured processing deadline.
 - `CANCELED` — delivery was canceled (for example during shutdown or cooperative
   cancellation).
-- `HANDLER_ERROR` — handler resolution or execution raised an exception.
+- `HANDLER_ERROR` — agent construction, handler resolution, or execution raised
+  an exception.
 - `SERIALIZATION_ERROR` — payload serialization/deserialization failed before
   the handler ran.
 - `POLICY_REJECTED` — runtime policy rejected dispatch before execution.
+
+For synchronous and asynchronous factories, `LookupError` produces
+`UNDELIVERABLE`; other `Exception` failures produce `HANDLER_ERROR`. These
+outcomes have `retryable=False`, and the runtime worker remains available for
+later deliveries. Cancellation produces `CANCELED`.
 
 ## Publish
 

@@ -64,6 +64,15 @@ class Dispatcher:
                 message=str(exc),
                 retryable=False,
             )
+        except Exception as exc:  # noqa: BLE001
+            # Construction failures must settle delivery without stopping a worker.
+            return DeliveryOutcome.failed(
+                status=DeliveryStatus.HANDLER_ERROR,
+                message_id=task.envelope.message_id,
+                correlation_id=task.envelope.correlation_id,
+                message=str(exc),
+                retryable=False,
+            )
 
         context = MessageContext(
             recipient=task.recipient,

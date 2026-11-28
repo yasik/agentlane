@@ -86,7 +86,8 @@ class SpawnModelProvider(Protocol):
     def parameters_model(self) -> type[BaseModel] | None:
         """Return the suggestion schema, or None for application-only routing.
 
-        Runner snapshots this schema at construction time.
+        Use a field-based BaseModel. Runner snapshots this schema at
+        construction time and rejects RootModel subclasses with TypeError.
         """
         ...
 

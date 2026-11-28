@@ -166,7 +166,9 @@ decision service and maps the returned route to a configured child client.
 
 ### Parameters and task input
 
-When `parameters_model` is a Pydantic model, each spawn tool uses this envelope:
+`parameters_model` must be a field-based Pydantic `BaseModel` subclass or `None`.
+`Runner` rejects `RootModel` subclasses with `TypeError` at construction time.
+When a parameters model is set, each spawn tool uses this envelope:
 
 ```json
 {

@@ -8,7 +8,7 @@ from copy import deepcopy
 from typing import Any, Literal, Self
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 from agentlane.harness import (
     Agent,
@@ -130,6 +130,18 @@ class _Provider:
         if self.error is not None:
             raise self.error
         return self.selection
+
+
+@pytest.mark.parametrize(
+    "parameters_model", [RootModel[str], RootModel[dict[str, str]]]
+)
+def test_runner_rejects_root_spawn_parameters_at_construction(
+    parameters_model: type[BaseModel],
+) -> None:
+    provider = _Provider(None, parameters_model=parameters_model)
+
+    with pytest.raises(TypeError, match="RootModel is not supported"):
+        Runner(spawn_model_provider=provider)
 
 
 class _ToolHooks(RunnerHooks):

@@ -64,6 +64,51 @@ async def test_pending_factories_keep_same_type_instances_and_later_messages() -
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("pending", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_factory_error_settles_delivery_and_preserves_worker(
+    pending: bool, asynchronous: bool
+) -> None:
+    runtime = SingleThreadedRuntimeEngine(worker_count=1)
+    child_id = AgentId.from_values("child", "failed")
+
+    def fail(engine: Engine) -> _ConfiguredAgent:
+        del engine
+        raise RuntimeError("Child construction failed")
+
+    async def fail_async(engine: Engine) -> _ConfiguredAgent:
+        await asyncio.sleep(0)
+        return fail(engine)
+
+    factory = fail_async if asynchronous else fail
+    if pending:
+        runtime.register_pending_factory(child_id, factory)
+    else:
+        runtime.register_factory(child_id.type, factory)
+
+    try:
+        outcome = await asyncio.wait_for(
+            runtime.send_message("start", child_id), timeout=2
+        )
+        assert outcome.status is DeliveryStatus.HANDLER_ERROR
+        assert outcome.error is not None
+        assert outcome.error.message == "Child construction failed"
+        assert not outcome.error.retryable
+
+        # The same identity can be created again and the only worker stays usable.
+        runtime.register_pending_factory(
+            child_id, lambda engine: _ConfiguredAgent(engine, "recovered")
+        )
+        later = await asyncio.wait_for(
+            runtime.send_message("retry", child_id), timeout=2
+        )
+        assert later.status is DeliveryStatus.DELIVERED
+        assert later.response_payload == {"label": "recovered", "count": 1}
+    finally:
+        await runtime.stop_when_idle()
+
+
+@pytest.mark.asyncio
 async def test_pending_factory_abort_does_not_construct_or_retain_child() -> None:
     registry = AgentRegistry()
     runtime = SingleThreadedRuntimeEngine(registry=registry)
@@ -208,7 +253,9 @@ async def test_worker_routes_pending_exact_id_factory_through_host() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["before_start", "pending", "failed", "cancelled"])
+@pytest.mark.parametrize(
+    "phase", ["before_start", "pending", "failed", "error", "cancelled"]
+)
 async def test_worker_releases_discarded_pending_type(phase: str) -> None:
     host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
     await host.start()
@@ -219,6 +266,8 @@ async def test_worker_releases_discarded_pending_type(phase: str) -> None:
     def factory(engine: Engine) -> _ConfiguredAgent:
         if phase == "failed":
             raise LookupError("Child construction failed")
+        if phase == "error":
+            raise RuntimeError("Child construction failed")
         if phase == "cancelled":
             raise asyncio.CancelledError
         return _ConfiguredAgent(engine, "unused")
@@ -227,12 +276,17 @@ async def test_worker_releases_discarded_pending_type(phase: str) -> None:
         first.register_pending_factory(child_id, factory)
         if phase != "before_start":
             await first.start()
-        if phase in ("failed", "cancelled"):
-            outcome = await first.send_message("start", child_id)
-            assert outcome.status is (
-                DeliveryStatus.CANCELED
-                if phase == "cancelled"
-                else DeliveryStatus.UNDELIVERABLE
+        if phase in ("failed", "error", "cancelled"):
+            outcome = await asyncio.wait_for(
+                first.send_message("start", child_id), timeout=5
+            )
+            assert (
+                outcome.status
+                is {
+                    "failed": DeliveryStatus.UNDELIVERABLE,
+                    "error": DeliveryStatus.HANDLER_ERROR,
+                    "cancelled": DeliveryStatus.CANCELED,
+                }[phase]
             )
         first.discard_pending_factory(child_id)
         if phase == "before_start":
@@ -317,9 +371,17 @@ async def test_worker_discard_preserves_type_with_other_registrations(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (LookupError, DeliveryStatus.UNDELIVERABLE),
+        (RuntimeError, DeliveryStatus.HANDLER_ERROR),
+        (asyncio.CancelledError, DeliveryStatus.CANCELED),
+    ],
+)
 async def test_worker_releases_type_when_discarded_inflight_factory_fails(
-    cancelled: bool,
+    error: type[BaseException],
+    expected_status: DeliveryStatus,
 ) -> None:
     host = WorkerAgentRuntimeHost(address="127.0.0.1:0")
     await host.start()
@@ -334,9 +396,7 @@ async def test_worker_releases_type_when_discarded_inflight_factory_fails(
         del engine
         started.set()
         await release.wait()
-        if cancelled:
-            raise asyncio.CancelledError
-        raise LookupError("Child construction failed")
+        raise error("Child construction failed")
 
     try:
         first.register_pending_factory(child_id, factory)
@@ -346,9 +406,9 @@ async def test_worker_releases_type_when_discarded_inflight_factory_fails(
         first.discard_pending_factory(child_id)
         await first.send_message("sync", AgentId.from_values("unregistered", "unused"))
         release.set()
-        assert (await pending_delivery).status is (
-            DeliveryStatus.CANCELED if cancelled else DeliveryStatus.UNDELIVERABLE
-        )
+        assert (
+            await asyncio.wait_for(pending_delivery, timeout=5)
+        ).status is expected_status
         # There is no second discard: completion must refresh the catalog itself.
         await first.send_message("sync", AgentId.from_values("unregistered", "unused"))
         second.register_pending_factory(
